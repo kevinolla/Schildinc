@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Schild Prospect Engine</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="control-panel">
+        <div class="brand-row">
+          <div class="mark">S</div>
+          <div>
+            <h1>Schild Prospect Engine</h1>
+            <p>Maps discovery, website research, fit scoring, and outreach drafts.</p>
+          </div>
+        </div>
+
+        <form id="run-form" class="stack">
+          <label>
+            <span>Search Google Maps for</span>
+            <input id="searchQuery" name="searchQuery" required value="industrial automation companies" autocomplete="off">
+          </label>
+
+          <label>
+            <span>Location</span>
+            <input id="location" name="location" value="Chicago IL" autocomplete="off">
+          </label>
+
+          <div class="split">
+            <label>
+              <span>Max leads</span>
+              <input id="maxResults" name="maxResults" type="number" min="1" max="25" value="10">
+            </label>
+            <label>
+              <span>Minimum fit</span>
+              <select id="fitFilter">
+                <option value="0">All</option>
+                <option value="52">52+</option>
+                <option value="72">72+</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <span>Schild Inc fit criteria</span>
+            <textarea id="schildProfile" name="schildProfile" rows="8">Schild Inc helps B2B companies improve revenue operations, lead generation, data enrichment, automation, and outbound sales workflows.
+
+Best fit customers are B2B service providers, manufacturers, logistics companies, SaaS companies, agencies, and industrial firms that sell to other businesses.
+
+Poor fits include consumer-only retail, restaurants, personal services, and companies with no visible commercial website.</textarea>
+          </label>
+
+          <button class="primary-action" type="submit">
+            <span class="icon">▶</span>
+            Run prospecting
+          </button>
+        </form>
+
+        <div class="side-actions">
+          <a class="secondary-action" href="/api/export.csv">Export CSV</a>
+          <button id="syncSheets" class="secondary-action" type="button">Sync Sheets</button>
+          <button id="clearLeads" class="danger-action" type="button">Clear</button>
+        </div>
+
+        <div id="status" class="status" role="status">Ready. Add a Google Places API key for live Maps results.</div>
+      </aside>
+
+      <section class="workspace">
+        <header class="toolbar">
+          <div>
+            <p class="eyebrow">Review queue</p>
+            <h2 id="leadCount">0 leads</h2>
+          </div>
+          <div class="toolbar-controls">
+            <input id="tableSearch" placeholder="Filter leads" autocomplete="off">
+            <button id="refresh" class="icon-button" type="button" title="Refresh">↻</button>
+          </div>
+        </header>
+
+        <div class="content-grid">
+          <section class="table-panel" aria-label="Lead table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>Industry</th>
+                  <th>Phone</th>
+                  <th>Fit</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody id="leadRows">
+                <tr>
+                  <td colspan="5" class="empty-state">Run a search to create your first review queue.</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <aside id="detailPanel" class="detail-panel">
+            <div class="empty-detail">
+              <p class="eyebrow">Lead detail</p>
+              <h3>Select a company</h3>
+              <p>Research summary, fit reasons, and the outreach draft will appear here.</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
