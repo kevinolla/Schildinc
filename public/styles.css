@@ -452,6 +452,18 @@ tbody tr.active {
   font-size: 13px;
 }
 
+.draft-field {
+  display: grid;
+  gap: 6px;
+}
+
+.draft-field span {
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;
@@ -465,6 +477,11 @@ tbody tr.active {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: #243042;
+  line-height: 1.5;
+}
+
+.draft-editor {
+  min-height: 280px;
   line-height: 1.5;
 }
 

@@ -13,6 +13,8 @@ const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
 const GOOGLE_SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL || "";
 const EMAIL_SEND_WEBHOOK_URL = process.env.EMAIL_SEND_WEBHOOK_URL || "";
 const EMAIL_SEND_WEBHOOK_SECRET = process.env.EMAIL_SEND_WEBHOOK_SECRET || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
 const TRENGO_API_TOKEN = process.env.TRENGO_API_TOKEN || "";
 const TRENGO_EMAIL_CHANNEL_ID = process.env.TRENGO_EMAIL_CHANNEL_ID || "";
 const TRENGO_APP_URL = process.env.TRENGO_APP_URL || "https://app.trengo.com";
@@ -35,10 +37,10 @@ const MIME_TYPES = {
 };
 
 const FALLBACK_PROFILE = [
-  "Schild Inc is a good fit for companies that already look like real businesses online, have a clear offer, and could use better lead generation, automation, follow-up, or sales process support.",
-  "Strong fit examples: B2B service companies, manufacturers, logistics companies, agencies, software firms, distributors, and multi-location businesses with a real website and visible growth goals.",
-  "Review fit examples: specialty retail or bike stores with e-commerce, repairs, service booking, or multiple locations.",
-  "Low fit examples: hobby projects, personal-service businesses with no real lead flow, restaurants, salons, clinics, and companies with no useful website."
+  "Schild Inc mainly offers premium metal branding labels, refreshed branded labels for stores whose current presentation feels dated, and wholesale white-label bike accessories that shops can personalize and resell.",
+  "Strong fit examples: bike shops, cycling stores, accessory resellers, service-focused bike retailers, e-commerce bike brands, and specialty stores that sell products under their own store name.",
+  "Review fit examples: other specialty retail businesses that could use premium physical branding or private-label accessory stock.",
+  "Low fit examples: businesses with no physical products, no store brand, no bike or retail angle, or no useful website."
 ].join(" ");
 
 const DEMO_PLACES = [
@@ -178,6 +180,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/leads/send-email") {
       const body = await readBody(req);
       const result = await sendLeadEmail(body);
+      return sendJson(res, result);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/leads/save-draft") {
+      const body = await readBody(req);
+      const result = await saveLeadDraft(body);
+      return sendJson(res, result);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/leads/regenerate-draft") {
+      const body = await readBody(req);
+      const result = await regenerateLeadDraft(body);
       return sendJson(res, result);
     }
 
@@ -494,22 +508,22 @@ function scoreFit({ company, websiteResearch, schildProfile, searchQuery }) {
     searchQuery
   ].join(" ").toLowerCase();
 
-  let score = company.website ? 38 : 18;
+  let score = company.website ? 34 : 14;
   const positives = [];
   const concerns = [];
 
   const positiveRules = [
-    { pattern: /\b(b2b|enterprise|commercial|wholesale|distributor|supplier)\b/, points: 14, reason: "Looks like a business that sells commercially, not just casual walk-in traffic." },
-    { pattern: /\b(manufactur|industrial|automation|engineering|logistics|freight|warehouse|operations)\b/, points: 12, reason: "The company works in an industry where process, pipeline, and automation usually matter." },
-    { pattern: /\b(quote|demo|consultation|proposal|contact our team|sales)\b/, points: 9, reason: "The website shows a clear buying or sales conversation path." },
-    { pattern: /\b(shop online|pickup|shipping|service department|repair|tune-up)\b/, points: 7, reason: "There is a repeatable service or e-commerce workflow that can support better outreach or retention." },
-    { pattern: /\b(multi-location|multiple facilities|expansion|scale|hiring|new markets)\b/, points: 8, reason: "The company shows growth signals, which usually makes prospecting support more relevant." }
+    { pattern: /\b(bike|bicycle|cycling|road bike|gravel|commuter|mtb)\b/, points: 18, reason: "The business is directly in the bike market that Schild wants to sell into." },
+    { pattern: /\b(accessories|helmets|bags|lights|components|gear|apparel)\b/, points: 11, reason: "The store sells products that match white-label resale opportunities." },
+    { pattern: /\b(shop online|pickup|shipping|service department|repair|tune-up|book a service)\b/, points: 9, reason: "The shop already has real retail and service workflows that could support branded product offers." },
+    { pattern: /\b(store brand|our brand|private label|wholesale|dealer|reseller|fleet)\b/, points: 12, reason: "There are signs the business can benefit from custom labels or white-label products." },
+    { pattern: /\b(multi-location|multiple locations|expansion|new store|hiring)\b/, points: 8, reason: "Growth signals make stronger in-store branding and branded accessory stock more relevant." }
   ];
 
   const negativeRules = [
-    { pattern: /\b(restaurant|cafe|salon|spa)\b/, points: -18, reason: "This looks more like a local walk-in business than a prospecting-heavy sales model." },
-    { pattern: /\b(dentist|dental|clinic|medical|hospital)\b/, points: -16, reason: "This is more healthcare/provider style outreach than Schild's typical use case." },
-    { pattern: /\b(hobby|personal service|walk-ins only)\b/, points: -12, reason: "The business looks too small or too local to clearly benefit from this workflow." }
+    { pattern: /\b(restaurant|cafe|salon|spa)\b/, points: -18, reason: "This does not look like a retail brand that matches Schild's bike-oriented offer." },
+    { pattern: /\b(dentist|dental|clinic|medical|hospital)\b/, points: -16, reason: "This business is outside Schild's labels and bike accessory focus." },
+    { pattern: /\b(hobby|personal service|walk-ins only)\b/, points: -12, reason: "The business looks too small or too unrelated to support a strong retail-brand offer." }
   ];
 
   for (const rule of positiveRules) {
@@ -553,10 +567,10 @@ function scoreFit({ company, websiteResearch, schildProfile, searchQuery }) {
   score = clamp(score, 0, 100);
   const label = score >= 72 ? "Strong fit" : score >= 52 ? "Review fit" : "Low fit";
   const meaning = label === "Strong fit"
-    ? "Easy read: this company looks reachable, credible, and likely to benefit from better lead generation or sales process support."
+    ? "Easy read: this shop looks like a real candidate for premium metal labels, refreshed branding, or white-label bike accessories."
     : label === "Review fit"
-      ? "Easy read: there are some good signals here, but a person should review whether Schild is the right match."
-      : "Easy read: this probably is not a strong Schild prospect unless you have a very specific campaign angle.";
+      ? "Easy read: there are some useful retail signals here, but a person should confirm whether Schild's offer really fits."
+      : "Easy read: this probably is not a strong match for Schild's labels and bike accessory offer.";
 
   const reasons = [...positives.slice(0, 3), ...concerns.slice(0, 2)];
   if (!reasons.length) reasons.push("There is not enough public information yet, so this lead needs manual review.");
@@ -567,30 +581,30 @@ function scoreFit({ company, websiteResearch, schildProfile, searchQuery }) {
 function draftOutreach({ company, websiteResearch, fit, searchQuery }) {
   const hook = websiteResearch.personalization[0]
     || websiteResearch.summary
-    || `your work in ${company.industry.toLowerCase()}`;
+    || `your store's current offer in ${company.industry.toLowerCase()}`;
   const secondHook = websiteResearch.personalization[1] || "";
-  const contactReference = websiteResearch.bestEmail
-    ? `I also found ${websiteResearch.bestEmail} listed publicly on your site, which made me confident I had the right team.`
-    : "";
-  const subjectLead = fit.label === "Strong fit"
-    ? `Idea for ${company.name}`
-    : `Quick question for ${company.name}`;
-  const subject = `${subjectLead} re: ${company.companyType || searchQuery}`;
+  const productAngle = /\b(accessories|helmets|bags|lights|components|gear|apparel)\b/i.test(`${websiteResearch.summary} ${websiteResearch.text}`)
+    ? "wholesale white-label bike accessories your store can personalize and resell"
+    : "premium metal branding labels and refreshed branded labels for bike shops";
+  const subject = `${company.name} x Schild labels / bike accessories`;
 
   const body = [
     `Hi ${company.name} team,`,
     "",
-    `I was researching ${searchQuery || company.industry.toLowerCase()} businesses and noticed ${lowerFirst(hook)}${secondHook ? ` I also saw ${lowerFirst(secondHook)}` : ""}.`,
+    `I came across your store while researching ${searchQuery || "bike retailers"} and noticed ${lowerFirst(hook)}${secondHook ? ` I also saw ${lowerFirst(secondHook)}` : ""}.`,
     "",
-    `Schild Inc helps companies improve lead generation, outreach personalization, and follow-up workflows so more of the right prospects actually turn into conversations.`,
+    `Schild Inc focuses on premium metal branding labels, refreshed branding labels for stores that want a more modern look, and ${productAngle}.`,
+    "",
+    "A few angles that may be relevant:",
+    "- upgraded premium labels for products, packaging, displays, or store presentation",
+    "- a branding refresh if you are modernizing how your logo appears in-store",
+    "- ready-to-sell white-label bike accessories under your own store branding",
     "",
     fit.label === "Strong fit"
-      ? "From the public signals on your site, it looks like there may be room to turn your existing traffic, service demand, or sales process into more consistent pipeline."
-      : "You may or may not be the right fit, but there looked to be enough signal that I thought a short note was worth trying.",
+      ? "From what is visible on your site, this looks like the kind of store where cleaner branded presentation and store-ready accessory stock could fit well."
+      : "You may or may not be the right fit, but there looked to be enough retail signal that a short note was worth trying.",
     "",
-    contactReference,
-    contactReference ? "" : null,
-    "Would it be useful to compare your current outreach or lead flow against a few practical ideas Schild could test?",
+    "If useful, I can share a few ideas around premium labels or private-label accessory options that would match your store style.",
     "",
     "Best,",
     "Schild Inc"
@@ -680,6 +694,50 @@ async function sendLeadEmail(input) {
   };
 }
 
+async function saveLeadDraft(input) {
+  const leads = readLeads();
+  const lead = leads.find((item) => item.id === input.leadId);
+  if (!lead) throw new Error("Lead not found.");
+
+  const updatedLead = {
+    ...lead,
+    outreachSubject: sanitizeText(input.subject || lead.outreachSubject || ""),
+    outreachBody: String(input.body || lead.outreachBody || "").trim()
+  };
+  updatedLead.outreachDraft = `${updatedLead.outreachSubject}\n\n${updatedLead.outreachBody}`;
+  writeLeads(leads.map((item) => item.id === lead.id ? updatedLead : item));
+
+  return { ok: true, message: "Draft saved.", lead: updatedLead };
+}
+
+async function regenerateLeadDraft(input) {
+  const leads = readLeads();
+  const lead = leads.find((item) => item.id === input.leadId);
+  if (!lead) throw new Error("Lead not found.");
+
+  const command = sanitizeText(input.command || "");
+  const draft = OPENAI_API_KEY
+    ? await generateDraftWithOpenAI(lead, command)
+    : generateDraftHeuristic(lead, command);
+
+  const updatedLead = {
+    ...lead,
+    outreachSubject: draft.subject,
+    outreachBody: draft.body,
+    outreachDraft: `${draft.subject}\n\n${draft.body}`,
+    lastDraftCommand: command || null
+  };
+  writeLeads(leads.map((item) => item.id === lead.id ? updatedLead : item));
+
+  return {
+    ok: true,
+    message: OPENAI_API_KEY
+      ? "Draft regenerated with OpenAI."
+      : "Draft regenerated with the built-in template. Add OPENAI_API_KEY for smarter rewrites.",
+    lead: updatedLead
+  };
+}
+
 async function sendViaTrengo({ lead, to, subject, body }) {
   const channelId = Number(TRENGO_EMAIL_CHANNEL_ID);
   if (!Number.isFinite(channelId) || channelId <= 0) {
@@ -707,7 +765,7 @@ async function sendViaTrengo({ lead, to, subject, body }) {
     })
   });
 
-  await trengoRequest(`/tickets/${ticket.id}/messages`, {
+  const message = await trengoRequest(`/tickets/${ticket.id}/messages`, {
     method: "POST",
     body: JSON.stringify({
       message: body,
@@ -728,10 +786,12 @@ async function sendViaTrengo({ lead, to, subject, body }) {
 
   return {
     ok: true,
-    message: `Message created in Trengo for ${to}.`,
+    message: `Message created in Trengo for ${to} on ticket #${ticket.id}.`,
     lead: updatedLead,
     provider: "trengo",
-    openUrl: TRENGO_APP_URL
+    trengoTicketId: ticket.id,
+    trengoMessageId: message.id || null,
+    openUrl: buildTrengoTicketUrl(ticket.id)
   };
 }
 
@@ -769,6 +829,110 @@ async function trengoRequest(pathname, init = {}) {
   }
 
   return data;
+}
+
+async function generateDraftWithOpenAI(lead, command) {
+  const instructions = [
+    "You write concise outbound emails for Schild Inc.",
+    "Schild Inc offers premium metal branding labels, refreshed branded labels when a store wants a more modern presentation, and wholesale white-label bike accessories that stores can personalize and resell.",
+    "Do not talk about lead generation, automation, or generic outbound services.",
+    "Use the website summary and personalization hooks only when they are actually relevant.",
+    "Do not state as a fact that their logo is outdated. Frame modernization as an option if they are refreshing branding.",
+    "Return strict JSON with keys subject and body."
+  ].join(" ");
+
+  const prompt = {
+    lead: {
+      name: lead.name,
+      companyType: lead.companyType,
+      industry: lead.industry,
+      website: lead.website,
+      bestEmail: lead.bestEmail,
+      summary: lead.websiteSummary,
+      personalization: lead.personalization,
+      fitMeaning: lead.fitMeaning,
+      fitReasons: lead.fitReasons
+    },
+    command: command || "Write a short, natural first email focused on premium metal labels, branding refresh options, and white-label bike accessories."
+  };
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      instructions,
+      input: JSON.stringify(prompt),
+      text: {
+        format: {
+          type: "json_schema",
+          name: "email_draft",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              subject: { type: "string" },
+              body: { type: "string" }
+            },
+            required: ["subject", "body"]
+          }
+        }
+      }
+    })
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`OpenAI draft generation failed: ${response.status} ${raw}`);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("OpenAI returned unreadable JSON.");
+  }
+
+  const content = extractOpenAIText(parsed);
+  let draft;
+  try {
+    draft = JSON.parse(content);
+  } catch {
+    throw new Error("OpenAI returned draft text in an unexpected format.");
+  }
+
+  return {
+    subject: sanitizeText(draft.subject || `${lead.name} x Schild Inc`),
+    body: String(draft.body || "").trim()
+  };
+}
+
+function generateDraftHeuristic(lead, command) {
+  const body = [
+    `Hi ${lead.name} team,`,
+    "",
+    `I was looking at your store and noticed ${lowerFirst((lead.personalization || [])[0] || lead.websiteSummary || "your current offer online")}.`,
+    "",
+    "Schild Inc focuses on premium metal branding labels, refreshed branded labels for shops that want a more modern presentation, and wholesale white-label bike accessories that stores can brand and sell as their own.",
+    "",
+    "A few angles that may be relevant:",
+    "- premium labels for products, packaging, displays, or store branding",
+    "- a brand refresh if you are updating how your logo appears in-store",
+    "- ready-to-sell bike accessories under your own store branding",
+    "",
+    command ? `You mentioned: ${command}. I can tailor ideas around that angle too.` : "If useful, I can share a few product or branding directions that would fit your store style.",
+    "",
+    "Best,",
+    "Schild Inc"
+  ].join("\n");
+
+  return {
+    subject: sanitizeText(`${lead.name} x Schild premium labels / bike accessories`),
+    body
+  };
 }
 
 function inferIndustry(text) {
@@ -1093,6 +1257,11 @@ function pickBestContact(contacts) {
   return contacts[0] || { email: "" };
 }
 
+function buildTrengoTicketUrl(ticketId) {
+  if (!ticketId) return TRENGO_APP_URL;
+  return `${TRENGO_APP_URL.replace(/\/$/, "")}/tickets/${ticketId}`;
+}
+
 function buildPersonalization(pages, company, searchQuery) {
   const candidates = [];
   const queryTokens = tokenize(searchQuery);
@@ -1157,4 +1326,22 @@ function isLikelyEmail(value) {
   if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(value)) return false;
   if (/\.(png|jpg|jpeg|gif|svg)$/i.test(value)) return false;
   return true;
+}
+
+function extractOpenAIText(response) {
+  if (typeof response.output_text === "string" && response.output_text.trim()) {
+    return response.output_text;
+  }
+
+  const outputs = Array.isArray(response.output) ? response.output : [];
+  for (const item of outputs) {
+    const content = Array.isArray(item.content) ? item.content : [];
+    for (const part of content) {
+      if (typeof part.text === "string" && part.text.trim()) {
+        return part.text;
+      }
+    }
+  }
+
+  throw new Error("OpenAI response did not contain text output.");
 }

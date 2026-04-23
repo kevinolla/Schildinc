@@ -90,6 +90,7 @@ els.detailPanel.addEventListener("click", async (event) => {
   if (!sendButton) return;
   const lead = state.leads.find((item) => item.id === state.selectedId);
   if (!lead) return;
+  const draft = currentDraftValues();
 
   sendButton.disabled = true;
   setStatus(`Sending draft to ${lead.bestEmail || "selected contact"}...`);
@@ -97,8 +98,8 @@ els.detailPanel.addEventListener("click", async (event) => {
     const result = await postJson("/api/leads/send-email", {
       leadId: lead.id,
       to: lead.bestEmail,
-      subject: lead.outreachSubject,
-      body: lead.outreachBody
+      subject: draft.subject,
+      body: draft.body
     });
     replaceLead(result.lead);
     render();
@@ -110,6 +111,55 @@ els.detailPanel.addEventListener("click", async (event) => {
     setStatus(error.message, true);
   } finally {
     sendButton.disabled = false;
+  }
+});
+
+els.detailPanel.addEventListener("click", async (event) => {
+  const saveButton = event.target.closest("[data-action='save-draft']");
+  if (!saveButton) return;
+  const lead = state.leads.find((item) => item.id === state.selectedId);
+  if (!lead) return;
+  const draft = currentDraftValues();
+
+  saveButton.disabled = true;
+  try {
+    const result = await postJson("/api/leads/save-draft", {
+      leadId: lead.id,
+      subject: draft.subject,
+      body: draft.body
+    });
+    replaceLead(result.lead);
+    render();
+    setStatus(result.message || "Draft saved.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    saveButton.disabled = false;
+  }
+});
+
+els.detailPanel.addEventListener("click", async (event) => {
+  const regenButton = event.target.closest("[data-action='regenerate-draft']");
+  if (!regenButton) return;
+  const lead = state.leads.find((item) => item.id === state.selectedId);
+  if (!lead) return;
+  const commandEl = document.querySelector("#draftCommand");
+  const command = commandEl ? commandEl.value : "";
+
+  regenButton.disabled = true;
+  setStatus("Regenerating the draft...");
+  try {
+    const result = await postJson("/api/leads/regenerate-draft", {
+      leadId: lead.id,
+      command
+    });
+    replaceLead(result.lead);
+    render();
+    setStatus(result.message || "Draft regenerated.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    regenButton.disabled = false;
   }
 });
 
@@ -243,14 +293,23 @@ function renderDetail(lead) {
       <div class="section-block">
         <h4>Email draft</h4>
         <div class="draft-meta">
-          <span><strong>Subject:</strong> ${escapeHtml(lead.outreachSubject || "")}</span>
+          <label class="draft-field">
+            <span>Subject</span>
+            <input id="draftSubject" value="${escapeAttribute(lead.outreachSubject || "")}">
+          </label>
           ${lead.lastEmailSentAt ? `<span><strong>Last sent:</strong> ${escapeHtml(formatDate(lead.lastEmailSentAt))}</span>` : ""}
         </div>
+        <label class="draft-field">
+          <span>Generate again with command</span>
+          <input id="draftCommand" placeholder="Example: make it shorter, sound more premium, focus on white-label bike accessories">
+        </label>
         <div class="action-row">
+          <button class="secondary-action" type="button" data-action="save-draft">Save draft</button>
+          <button class="secondary-action" type="button" data-action="regenerate-draft">Generate again</button>
           ${lead.bestEmail ? `<a class="secondary-action" href="${escapeAttribute(buildMailto(lead))}">Open in email app</a>` : `<span class="secondary-action disabled-action">No email found</span>`}
           <button class="primary-action" type="button" data-action="send-email" ${lead.bestEmail ? "" : "disabled"}>Send via Trengo / integration</button>
         </div>
-        <div class="draft">${escapeHtml(lead.outreachBody || "")}</div>
+        <textarea id="draftBody" class="draft-editor" rows="14">${escapeHtml(lead.outreachBody || "")}</textarea>
       </div>
     </div>
   `;
@@ -316,10 +375,18 @@ function shortUrl(url) {
 }
 
 function buildMailto(lead) {
+  const draft = currentDraftValues();
   const to = lead.bestEmail || "";
-  const subject = encodeURIComponent(lead.outreachSubject || "");
-  const body = encodeURIComponent(lead.outreachBody || "");
+  const subject = encodeURIComponent(draft.subject || "");
+  const body = encodeURIComponent(draft.body || "");
   return `mailto:${to}?subject=${subject}&body=${body}`;
+}
+
+function currentDraftValues() {
+  return {
+    subject: (document.querySelector("#draftSubject") || {}).value || "",
+    body: (document.querySelector("#draftBody") || {}).value || ""
+  };
 }
 
 function formatDate(value) {

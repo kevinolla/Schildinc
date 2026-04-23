@@ -9,6 +9,7 @@ A local web application for discovering companies from Google Maps-style search,
 - Extracts readable business text, public email addresses, and personalization hooks from the website.
 - Scores fit against editable Schild Inc criteria with easier-to-read fit explanations.
 - Writes a more personalized first-touch outreach draft with separate subject and body.
+- Lets you edit the draft, save it, and regenerate it from a custom command.
 - Saves everything in `data/leads.json`.
 - Exports review data to CSV for Google Sheets.
 - Optionally posts leads to a Google Sheets webhook.
@@ -127,7 +128,7 @@ With those set, the app will:
 1. find or create a Trengo contact for the lead email
 2. create a ticket in your Trengo email channel
 3. send the drafted message into that ticket
-4. open Trengo in a new tab after the button click
+4. open the Trengo ticket after the button click
 
 This uses Trengo's official API endpoints for:
 
@@ -168,6 +169,18 @@ That webhook can connect to Google Apps Script, Gmail, Outlook, Resend, Mailgun,
 For a ready-made Google Apps Script version, use:
 
 [`integrations/google-apps-script/email-webhook`](./integrations/google-apps-script/email-webhook)
+
+## OpenAI draft regeneration
+
+If you want the "Generate again" button to rewrite drafts from a custom instruction, set:
+
+```bash
+export OPENAI_API_KEY="your_openai_api_key"
+export OPENAI_MODEL="gpt-5"
+npm start
+```
+
+The app uses the OpenAI Responses API to regenerate JSON drafts from the current lead context and your command.
 
 ## Notes
 
