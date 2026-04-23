@@ -103,6 +103,9 @@ els.detailPanel.addEventListener("click", async (event) => {
     replaceLead(result.lead);
     render();
     setStatus(result.message || "Email sent.");
+    if (result.provider === "trengo" && result.openUrl) {
+      window.open(result.openUrl, "_blank", "noopener,noreferrer");
+    }
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -245,7 +248,7 @@ function renderDetail(lead) {
         </div>
         <div class="action-row">
           ${lead.bestEmail ? `<a class="secondary-action" href="${escapeAttribute(buildMailto(lead))}">Open in email app</a>` : `<span class="secondary-action disabled-action">No email found</span>`}
-          <button class="primary-action" type="button" data-action="send-email" ${lead.bestEmail ? "" : "disabled"}>Send with integration</button>
+          <button class="primary-action" type="button" data-action="send-email" ${lead.bestEmail ? "" : "disabled"}>Send via Trengo / integration</button>
         </div>
         <div class="draft">${escapeHtml(lead.outreachBody || "")}</div>
       </div>

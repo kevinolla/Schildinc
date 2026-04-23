@@ -109,14 +109,41 @@ Expected webhook payload:
 }
 ```
 
-## Email sending integration
+## Trengo integration
 
-The app can also send outreach drafts through a generic webhook.
+The cleanest way to send from the dashboard into Trengo is to use Trengo's API.
+
+Set:
+
+```bash
+export TRENGO_API_TOKEN="your_personal_access_token"
+export TRENGO_EMAIL_CHANNEL_ID="your_email_channel_id"
+export TRENGO_APP_URL="https://app.trengo.com"
+npm start
+```
+
+With those set, the app will:
+
+1. find or create a Trengo contact for the lead email
+2. create a ticket in your Trengo email channel
+3. send the drafted message into that ticket
+4. open Trengo in a new tab after the button click
+
+This uses Trengo's official API endpoints for:
+
+- creating contacts
+- creating tickets
+- sending ticket messages
+
+## Generic email webhook
+
+The app can also send outreach drafts through a generic webhook if you do not want Trengo.
 
 Set:
 
 ```bash
 export EMAIL_SEND_WEBHOOK_URL="https://your-automation-endpoint.example/send"
+export EMAIL_SEND_WEBHOOK_SECRET="shared-secret"
 npm start
 ```
 
@@ -124,6 +151,7 @@ Expected payload:
 
 ```json
 {
+  "secret": "shared-secret",
   "to": "shop@example.com",
   "subject": "Idea for Bike Store",
   "body": "Hi team, ...",
@@ -135,7 +163,11 @@ Expected payload:
 }
 ```
 
-That webhook can connect to Gmail, Outlook, Resend, Mailgun, Make, Zapier, or a custom mail service.
+That webhook can connect to Google Apps Script, Gmail, Outlook, Resend, Mailgun, Make, Zapier, or a custom mail service.
+
+For a ready-made Google Apps Script version, use:
+
+[`integrations/google-apps-script/email-webhook`](./integrations/google-apps-script/email-webhook)
 
 ## Notes
 

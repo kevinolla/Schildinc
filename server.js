@@ -12,6 +12,10 @@ const DB_PATH = path.join(DATA_DIR, "leads.json");
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
 const GOOGLE_SHEETS_WEBHOOK_URL = process.env.GOOGLE_SHEETS_WEBHOOK_URL || "";
 const EMAIL_SEND_WEBHOOK_URL = process.env.EMAIL_SEND_WEBHOOK_URL || "";
+const EMAIL_SEND_WEBHOOK_SECRET = process.env.EMAIL_SEND_WEBHOOK_SECRET || "";
+const TRENGO_API_TOKEN = process.env.TRENGO_API_TOKEN || "";
+const TRENGO_EMAIL_CHANNEL_ID = process.env.TRENGO_EMAIL_CHANNEL_ID || "";
+const TRENGO_APP_URL = process.env.TRENGO_APP_URL || "https://app.trengo.com";
 const APP_USERNAME = process.env.APP_USERNAME || "schild";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
 
@@ -637,14 +641,19 @@ async function sendLeadEmail(input) {
     throw new Error("Email body is empty.");
   }
 
+  if (TRENGO_API_TOKEN && TRENGO_EMAIL_CHANNEL_ID) {
+    return await sendViaTrengo({ lead, to, subject, body });
+  }
+
   if (!EMAIL_SEND_WEBHOOK_URL) {
-    throw new Error("EMAIL_SEND_WEBHOOK_URL is not configured. Add a webhook to enable sending from the app.");
+    throw new Error("No send integration is configured. Add Trengo credentials or EMAIL_SEND_WEBHOOK_URL.");
   }
 
   const response = await fetch(EMAIL_SEND_WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      secret: EMAIL_SEND_WEBHOOK_SECRET || undefined,
       to,
       subject,
       body,
@@ -669,6 +678,97 @@ async function sendLeadEmail(input) {
     message: `Email sent to ${to}.`,
     lead: updatedLead
   };
+}
+
+async function sendViaTrengo({ lead, to, subject, body }) {
+  const channelId = Number(TRENGO_EMAIL_CHANNEL_ID);
+  if (!Number.isFinite(channelId) || channelId <= 0) {
+    throw new Error("TRENGO_EMAIL_CHANNEL_ID is invalid.");
+  }
+
+  let contact = await findTrengoContactByEmail(to);
+  if (!contact) {
+    contact = await trengoRequest(`/channels/${channelId}/contacts`, {
+      method: "POST",
+      body: JSON.stringify({
+        identifier: to,
+        channel_id: channelId,
+        name: lead.name
+      })
+    });
+  }
+
+  const ticket = await trengoRequest("/tickets", {
+    method: "POST",
+    body: JSON.stringify({
+      channel_id: channelId,
+      contact_id: String(contact.id),
+      subject
+    })
+  });
+
+  await trengoRequest(`/tickets/${ticket.id}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      message: body,
+      subject,
+      internal_note: false
+    })
+  });
+
+  const leads = readLeads();
+  const updatedLead = {
+    ...lead,
+    lastEmailSentAt: new Date().toISOString(),
+    lastEmailRecipient: to,
+    trengoContactId: contact.id,
+    trengoTicketId: ticket.id
+  };
+  writeLeads(leads.map((item) => item.id === lead.id ? updatedLead : item));
+
+  return {
+    ok: true,
+    message: `Message created in Trengo for ${to}.`,
+    lead: updatedLead,
+    provider: "trengo",
+    openUrl: TRENGO_APP_URL
+  };
+}
+
+async function findTrengoContactByEmail(email) {
+  const response = await trengoRequest(`/contacts?term=${encodeURIComponent(email)}`);
+  const list = Array.isArray(response.data) ? response.data : Array.isArray(response) ? response : [];
+  return list.find((contact) => {
+    return String(contact.email || "").toLowerCase() === String(email).toLowerCase()
+      || String(contact.identifier || "").toLowerCase() === String(email).toLowerCase();
+  }) || null;
+}
+
+async function trengoRequest(pathname, init = {}) {
+  const response = await fetch(`https://app.trengo.com/api/v2${pathname}`, {
+    method: init.method || "GET",
+    headers: {
+      "Authorization": `Bearer ${TRENGO_API_TOKEN}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      ...(init.headers || {})
+    },
+    body: init.body
+  });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(`Trengo API failed: ${response.status} ${text || response.statusText}`);
+  }
+
+  return data;
 }
 
 function inferIndustry(text) {
