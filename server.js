@@ -923,7 +923,12 @@ function mergeLeads(existing, incoming) {
 
 function readLeads() {
   ensureDataStore();
-  return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+  const raw = JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+  const normalized = raw.map(normalizeLeadRecord);
+  if (JSON.stringify(raw) !== JSON.stringify(normalized)) {
+    fs.writeFileSync(DB_PATH, JSON.stringify(normalized, null, 2));
+  }
+  return normalized;
 }
 
 function writeLeads(leads) {
@@ -1301,15 +1306,89 @@ function buildPersonalization(pages, company, searchQuery) {
 
 function buildProductInsights(pages, company) {
   const text = pages.map((page) => `${page.title} ${page.description} ${page.headings.join(" ")} ${page.text}`).join(" ");
-  const lower = text.toLowerCase();
+  return deriveProductInsightsFromText(text, company.name);
+}
+
+function normalizeLeadRecord(lead) {
+  const normalized = { ...lead };
+  const standardDraft = buildStandardDraft(lead.name, lead.website || lead.googleMapsUrl || "jullie website");
+  const storedText = [
+    lead.websiteSummary || "",
+    ...(Array.isArray(lead.personalization) ? lead.personalization : []),
+    lead.companyType || "",
+    lead.industry || ""
+  ].join(" ");
+  const derivedInsights = deriveProductInsightsFromText(storedText, lead.name || "Deze winkel");
+
+  if (shouldRefreshLeadInsights(lead, derivedInsights)) {
+    normalized.personalization = derivedInsights.highlights;
+    normalized.websiteSummary = derivedInsights.summary || lead.websiteSummary || "";
+    normalized.avgPriceText = derivedInsights.avgPriceText || lead.avgPriceText || "";
+    normalized.pricePoints = derivedInsights.pricePoints.length ? derivedInsights.pricePoints : (lead.pricePoints || []);
+  }
+
+  const fit = scoreFit({
+    company: {
+      name: lead.name || "Unknown company",
+      companyType: lead.companyType || "",
+      industry: lead.industry || "",
+      placeTypes: Array.isArray(lead.placeTypes) ? lead.placeTypes : [],
+      website: lead.website || "",
+      phone: lead.phone || "",
+      googleMapsUrl: lead.googleMapsUrl || ""
+    },
+    websiteResearch: {
+      summary: normalized.websiteSummary || "",
+      signals: Array.isArray(lead.websiteSignals) && lead.websiteSignals.length ? lead.websiteSignals : extractSignals(storedText),
+      contacts: Array.isArray(lead.contacts) ? lead.contacts : []
+    },
+    schildProfile: FALLBACK_PROFILE,
+    searchQuery: lead.searchQuery || ""
+  });
+  normalized.fitScore = fit.score;
+  normalized.fitLabel = fit.label;
+  normalized.fitMeaning = fit.meaning;
+  normalized.fitReasons = fit.reasons;
+
+  if (looksLegacyDraft(lead)) {
+    normalized.outreachSubject = standardDraft.subject;
+    normalized.outreachBody = standardDraft.body;
+    normalized.outreachDraft = `${standardDraft.subject}\n\n${standardDraft.body}`;
+  }
+
+  return normalized;
+}
+
+function shouldRefreshLeadInsights(lead, derivedInsights) {
+  const currentHighlights = Array.isArray(lead.personalization) ? lead.personalization : [];
+  const noisyHighlights = currentHighlights.some((item) => sanitizeText(item).length > 140 || /\b(shop now|shipping|returns|warranty|la marmotte|are you ready)\b/i.test(item));
+  const legacySummary = /\b(premium cycling apparel & community|shop now|shipping, returns|skip to content|what customers say)\b/i.test(lead.websiteSummary || "");
+  const missingStructuredSummary = !currentHighlights.length || !currentHighlights.some((item) => /^(Hoofdaanbod|Zichtbare prijzen|Extra winkelinformatie):/.test(item));
+  return Boolean(derivedInsights.summary) && (noisyHighlights || legacySummary || missingStructuredSummary);
+}
+
+function looksLegacyDraft(lead) {
+  const subject = sanitizeText(lead.outreachSubject || "");
+  const body = String(lead.outreachBody || "");
+  return /^(Idea for|Maats Cycling Culture|.*re:)/i.test(subject)
+    || /\bI was researching bike shops businesses\b/i.test(body)
+    || /\bSchild Inc helps companies improve lead generation\b/i.test(body)
+    || /\bWould it be useful to compare your current outreach\b/i.test(body)
+    || /\bBest,\s*[\r\n]+\s*Schild Inc\b/i.test(body);
+}
+
+function deriveProductInsightsFromText(text, companyName) {
+  const clean = sanitizeText(text);
+  const lower = clean.toLowerCase();
   const productRules = [
     ["e-bikes", /\b(e-bike|ebike|electric bike)\b/i],
-    ["stadsfietsen", /\b(stadsfiets|city bike)\b/i],
+    ["stadsfietsen", /\b(stadsfiets|city bike|commuter bike)\b/i],
     ["nieuwe fietsen", /\b(nieuwe fietsen|new bikes|new bicycle)\b/i],
     ["tweedehands fietsen", /\b(tweedehands|used bikes|pre-owned)\b/i],
-    ["fietsreparatie", /\b(reparatie|repair|fietsenmaker|service)\b/i],
+    ["fietsreparatie", /\b(reparatie|repair|fietsenmaker|workshop service)\b/i],
     ["fietsverhuur", /\b(verhuur|rental|rent a bike|fietsverhuur)\b/i],
-    ["bike accessoires", /\b(accessoires|accessories|helmets|lights|bags|locks)\b/i]
+    ["cycling apparel", /\b(apparel|clothing|jersey|bib|bibs|jacket|gilet|base layer|socks)\b/i],
+    ["fietsaccessoires", /\b(accessoires|accessories|helmets|helmet|lights|bags|locks|eyewear|gloves|shoes)\b/i]
   ];
 
   const mainProducts = productRules
@@ -1317,7 +1396,7 @@ function buildProductInsights(pages, company) {
     .map(([label]) => label)
     .slice(0, 4);
 
-  const priceMatches = [...text.matchAll(/(?:€|EUR\s?)(\d{1,4}(?:[.,]\d{1,2})?)/gi)]
+  const priceMatches = [...clean.matchAll(/(?:€|EUR\s?)(\d{1,4}(?:[.,]\d{1,2})?)/gi)]
     .map((match) => ({
       raw: match[0].replace(/\s+/g, " ").trim(),
       value: Number(match[1].replace(",", "."))
@@ -1336,8 +1415,9 @@ function buildProductInsights(pages, company) {
     ? Math.round(uniquePrices.reduce((sum, item) => sum + item.value, 0) / uniquePrices.length)
     : null;
 
-  const locationsMatch = lower.match(/\b(twee locaties|2 locaties|two locations|two stores|2 stores)\b/i);
-  const openMatch = lower.match(/\b(open 7 dagen|7 dagen per week|open seven days|7 days per week)\b/i);
+  const locationsMatch = /\b(twee locaties|2 locaties|two locations|two stores|2 stores)\b/i.test(lower);
+  const openMatch = /\b(open 7 dagen|7 dagen per week|open seven days|7 days per week)\b/i.test(lower);
+  const premiumMatch = /\b(premium|high-end)\b/i.test(lower);
 
   const highlights = [];
   if (mainProducts.length) {
@@ -1348,22 +1428,26 @@ function buildProductInsights(pages, company) {
     const avgText = avgPrice ? ` Gemiddeld zichtbaar prijsniveau: €${avgPrice}.` : "";
     highlights.push(`Zichtbare prijzen: ${samplePrices}.${avgText}`);
   }
-  if (locationsMatch || openMatch) {
+  if (locationsMatch || openMatch || premiumMatch) {
     const parts = [];
+    if (premiumMatch) parts.push("premium positionering");
     if (locationsMatch) parts.push("meerdere locaties");
     if (openMatch) parts.push("ruime openingstijden");
-    highlights.push(`Extra winkelinformatie: ${parts.join(" en ")}.`);
+    highlights.push(`Extra winkelinformatie: ${parts.join(", ")}.`);
   }
 
   const summaryParts = [];
-  if (mainProducts.length) summaryParts.push(`${company.name} lijkt vooral ${mainProducts.join(", ")} aan te bieden.`);
+  if (mainProducts.length) summaryParts.push(`${companyName} lijkt vooral ${mainProducts.join(", ")} te verkopen.`);
+  if (premiumMatch) summaryParts.push("De website presenteert de winkel als een premium fietsretailer.");
   if (uniquePrices.length) summaryParts.push(`Zichtbare prijzen op de website zijn ${uniquePrices.slice(0, 2).map((item) => item.raw).join(" en ")}${avgPrice ? `, gemiddeld ongeveer €${avgPrice}` : ""}.`);
-  if (locationsMatch || openMatch) summaryParts.push(`De website noemt ${[locationsMatch ? "meerdere locaties" : "", openMatch ? "ruime openingstijden" : ""].filter(Boolean).join(" en ")}.`);
+  if (locationsMatch || openMatch) {
+    summaryParts.push(`De website noemt ${[locationsMatch ? "meerdere locaties" : "", openMatch ? "ruime openingstijden" : ""].filter(Boolean).join(" en ")}.`);
+  }
 
   return {
     summary: summaryParts.join(" ") || "",
     highlights: highlights.slice(0, 3),
-    avgPriceText: avgPrice ? `EUR${avgPrice}` : "",
+    avgPriceText: avgPrice ? `€${avgPrice}` : "",
     pricePoints: uniquePrices.slice(0, 5).map((item) => item.raw)
   };
 }
