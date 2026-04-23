@@ -27,7 +27,7 @@ els.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = els.form.querySelector("button[type='submit']");
   button.disabled = true;
-  setStatus("Running Maps discovery, crawling sites for emails, scoring fit, and drafting outreach...");
+  setStatus("Running Maps discovery, crawling sites for emails, extracting main products and prices, and preparing your Schild draft...");
 
   try {
     const payload = {
@@ -42,7 +42,7 @@ els.form.addEventListener("submit", async (event) => {
     render();
     setStatus(result.usedDemoData
       ? `Created ${result.count} demo lead(s). Add GOOGLE_PLACES_API_KEY for live Google Maps data.`
-      : `Created ${result.count} live lead(s) with contact emails and personalization data.`);
+      : `Created ${result.count} live lead(s) with contact emails, product highlights, and your Schild draft template.`);
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -93,7 +93,7 @@ els.detailPanel.addEventListener("click", async (event) => {
   const draft = currentDraftValues();
 
   sendButton.disabled = true;
-  setStatus(`Creating a Trengo review draft for ${lead.bestEmail || "selected contact"}...`);
+  setStatus(`Creating a Trengo review draft for ${lead.bestEmail || "selected contact"}... nothing will be sent automatically.`);
   try {
     const result = await postJson("/api/leads/send-email", {
       leadId: lead.id,
@@ -147,7 +147,7 @@ els.detailPanel.addEventListener("click", async (event) => {
   const command = commandEl ? commandEl.value : "";
 
   regenButton.disabled = true;
-  setStatus("Regenerating the draft...");
+  setStatus("Regenerating the draft with your Schild template...");
   try {
     const result = await postJson("/api/leads/regenerate-draft", {
       leadId: lead.id,
@@ -173,7 +173,7 @@ async function loadLeads() {
     render();
     setStatus(leads.length
       ? `Loaded ${leads.length} saved lead(s).`
-      : "Ready. The crawler will search websites for emails, contact pages, and personalization hooks.");
+      : "Ready. The crawler will search websites for emails, main products, and visible prices.");
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -220,7 +220,7 @@ function renderDetail(lead) {
       <div class="empty-detail">
         <p class="eyebrow">Lead detail</p>
         <h3>Select a company</h3>
-        <p>Emails, website hooks, fit notes, and the outreach draft will appear here.</p>
+        <p>Emails, product highlights, fit notes, and the outreach draft will appear here.</p>
       </div>
     `;
     return;
@@ -237,7 +237,7 @@ function renderDetail(lead) {
 
   const hooks = (lead.personalization || []).length
     ? (lead.personalization || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")
-    : `<li>No strong personalization hooks were found.</li>`;
+    : `<li>No clear product highlights were found.</li>`;
 
   const pages = (lead.pagesScanned || []).length
     ? (lead.pagesScanned || []).map((page) => `<li><a href="${escapeAttribute(page)}" target="_blank" rel="noreferrer">${escapeHtml(shortUrl(page))}</a></li>`).join("")
@@ -255,6 +255,7 @@ function renderDetail(lead) {
         <div class="metric"><span>Fit score</span><strong>${lead.fitScore}/100</strong></div>
         <div class="metric"><span>Status</span><strong>${escapeHtml(lead.fitLabel)}</strong></div>
         <div class="metric"><span>Best email</span><strong>${escapeHtml(lead.bestEmail || "Not found")}</strong></div>
+        <div class="metric"><span>Avg visible price</span><strong>${escapeHtml(lead.avgPriceText || "Not found")}</strong></div>
         <div class="metric"><span>Phone</span><strong>${escapeHtml(lead.phone || "Not found")}</strong></div>
       </div>
 
@@ -276,12 +277,12 @@ function renderDetail(lead) {
       </div>
 
       <div class="section-block">
-        <h4>Personalization hooks</h4>
+        <h4>Main products & prices</h4>
         <ul>${hooks}</ul>
       </div>
 
       <div class="section-block">
-        <h4>What the company appears to do</h4>
+        <h4>Easy company summary</h4>
         <p>${escapeHtml(lead.websiteSummary || "No website summary available.")}</p>
       </div>
 
@@ -297,11 +298,12 @@ function renderDetail(lead) {
             <span>Subject</span>
             <input id="draftSubject" value="${escapeAttribute(lead.outreachSubject || "")}">
           </label>
+          ${lead.lastTrengoDraftAt ? `<span><strong>Last Trengo draft:</strong> ${escapeHtml(formatDate(lead.lastTrengoDraftAt))}</span>` : ""}
           ${lead.lastEmailSentAt ? `<span><strong>Last sent:</strong> ${escapeHtml(formatDate(lead.lastEmailSentAt))}</span>` : ""}
         </div>
-        <label class="draft-field">
-          <span>Generate again with command</span>
-          <input id="draftCommand" placeholder="Example: make it shorter, sound more premium, focus on white-label bike accessories">
+          <label class="draft-field">
+            <span>Generate again with command</span>
+          <input id="draftCommand" placeholder="Example: maak het korter, formeler, of iets directer">
         </label>
         <div class="action-row">
           <button class="secondary-action" type="button" data-action="save-draft">Save draft</button>

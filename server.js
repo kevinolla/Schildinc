@@ -241,6 +241,8 @@ async function runProspecting(input) {
       emailSourcePages: [...new Set(websiteResearch.contacts.map((contact) => contact.sourcePage).filter(Boolean))],
       pagesScanned: websiteResearch.pagesScanned,
       personalization: websiteResearch.personalization,
+      avgPriceText: websiteResearch.avgPriceText || "",
+      pricePoints: websiteResearch.pricePoints || [],
       websiteSummary: websiteResearch.summary,
       websiteSignals: websiteResearch.signals,
       fitScore: fit.score,
@@ -349,7 +351,7 @@ async function researchWebsite(company, searchQuery) {
       contacts: demo.contacts.slice(),
       bestEmail: pickBestContact(demo.contacts, company).email,
       personalization: demo.personalization.slice(),
-      pagesScanned: demo.pagesScanned.slice()
+      pagesScanned: [...new Set(demo.pagesScanned.slice())]
     };
   }
 
@@ -372,19 +374,22 @@ async function researchWebsite(company, searchQuery) {
       .slice(0, 12000);
 
     const summary = summarizeWebsite(combinedText);
+    const insights = buildProductInsights(pages, company);
     const contacts = rankContacts(
       dedupeContacts(pages.flatMap((page) => page.contacts)),
       company
     );
 
     return {
-      summary: summary.summary,
+      summary: insights.summary || summary.summary,
       signals: summary.signals,
       text: summary.text,
       contacts,
       bestEmail: pickBestContact(contacts, company).email,
-      personalization: buildPersonalization(pages, company, searchQuery),
-      pagesScanned: pages.map((page) => page.url)
+      personalization: insights.highlights.length ? insights.highlights : buildPersonalization(pages, company, searchQuery),
+      avgPriceText: insights.avgPriceText,
+      pricePoints: insights.pricePoints,
+      pagesScanned: [...new Set(pages.map((page) => page.url))]
     };
   } catch (error) {
     return {
@@ -394,6 +399,8 @@ async function researchWebsite(company, searchQuery) {
       contacts: [],
       bestEmail: "",
       personalization: [],
+      avgPriceText: "",
+      pricePoints: [],
       pagesScanned: []
     };
   }
@@ -579,45 +586,7 @@ function scoreFit({ company, websiteResearch, schildProfile, searchQuery }) {
 }
 
 function draftOutreach({ company, websiteResearch, fit, searchQuery }) {
-  const website = company.website || company.googleMapsUrl || "your website";
-  const subject = `A more premium look for ${company.name}`;
-  const body = [
-    `Dear ${company.name} Team,`,
-    "",
-    `I came across ${website} and thought Our Product & Service at Schild Inc could be relevant for your business.`,
-    "",
-    "Are you already Know about Schild Inc? We help bike stores improve their branding with personalized premium metal labels and custom branded bike accessories.",
-    "",
-    "These labels help give bikes and the overall presentation a more professional and premium look. Our solutions are already used by 500+ bike stores, including BikeTotaal, Azor, VMG, Gazelle, and many others.",
-    "",
-    "To make it easy to explore, we can create a free label design with your current logo first, so you can immediately see how your branding could look on your bikes.",
-    "",
-    "And if your current logo feels a bit outdated, we also offer a logo redesign service for EUR89.95 to help make it look more modern and premium.",
-    "",
-    "Besides labels, we also offer white-label bike accessories with your logo. These can be:",
-    "",
-    "resold in-store",
-    "used as giveaways with bike sales",
-    "used to improve customer satisfaction",
-    "used as mobile branding when customers use them outside on the street",
-    "",
-    "So the goal is not only to sell a product, but to help your bike store build a stronger and more visible brand.",
-    "",
-    "If helpful, I can send you:",
-    "",
-    "a few project examples",
-    "our catalog",
-    "or a free first label design idea for your store",
-    "",
-    "Would you be open to that?",
-    "",
-    "Best regards,",
-    "",
-    "",
-    "Schild Inc Team"
-  ].join("\n");
-
-  return { subject, body };
+  return buildStandardDraft(company.name, company.website || company.googleMapsUrl || "jullie website");
 }
 
 async function syncSheets(leads) {
@@ -784,8 +753,8 @@ async function sendViaTrengo({ lead, to, subject, body }) {
   const leads = readLeads();
   const updatedLead = {
     ...lead,
-    lastEmailSentAt: new Date().toISOString(),
-    lastEmailRecipient: to,
+    lastTrengoDraftAt: new Date().toISOString(),
+    lastDraftRecipient: to,
     trengoContactId: contact.id,
     trengoTicketId: ticket.id
   };
@@ -839,13 +808,16 @@ async function trengoRequest(pathname, init = {}) {
 }
 
 async function generateDraftWithOpenAI(lead, command) {
+  const defaultDraft = buildStandardDraft(lead.name, lead.website || lead.googleMapsUrl || "jullie website");
   const instructions = [
-    "You write concise outbound emails for Schild Inc.",
+    "You write Dutch outbound emails for Schild Inc.",
     "Schild Inc offers premium metal branding labels, refreshed branded labels when a store wants a more modern presentation, and wholesale white-label bike accessories that stores can personalize and resell.",
-    "Use the provided default template structure and keep the message focused on Schild's offer.",
+    "Use the provided default template wording as the baseline and keep the message focused on Schild's offer.",
     "Only personalize the bike store name and bike store website unless the user's command explicitly asks for a different change.",
-    "Do not talk about lead generation, automation, or generic outbound services.",
+    "Do not add personalization hooks, website observations, or a summary of what the company appears to do.",
+    "Do not talk about lead generation, automation, outreach systems, or generic outbound services.",
     "Do not state as a fact that their logo is outdated. Frame modernization as an option.",
+    "Keep the email in Dutch unless the command explicitly asks for another language.",
     "Return strict JSON with keys subject and body."
   ].join(" ");
 
@@ -856,10 +828,10 @@ async function generateDraftWithOpenAI(lead, command) {
       companyType: lead.companyType
     },
     defaultTemplate: {
-      subject: `A more premium look for ${lead.name}`,
-      website: lead.website || lead.googleMapsUrl || "your website"
+      subject: defaultDraft.subject,
+      body: defaultDraft.body
     },
-    command: command || "Keep the default template, only personalize the bike store name and website, and keep the tone natural and professional."
+    command: command || "Gebruik exact het standaardtemplate, personaliseer alleen de winkelnaam en website, en wijzig verder niets."
   };
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -911,53 +883,13 @@ async function generateDraftWithOpenAI(lead, command) {
   }
 
   return {
-    subject: sanitizeText(draft.subject || `${lead.name} x Schild Inc`),
+    subject: sanitizeText(draft.subject || defaultDraft.subject),
     body: String(draft.body || "").trim()
   };
 }
 
 function generateDraftHeuristic(lead, command) {
-  const website = lead.website || lead.googleMapsUrl || "your website";
-  const body = [
-    `Dear ${lead.name} Team,`,
-    "",
-    `I came across ${website} and thought Our Product & Service at Schild Inc could be relevant for your business.`,
-    "",
-    "Are you already Know about Schild Inc? We help bike stores improve their branding with personalized premium metal labels and custom branded bike accessories.",
-    "",
-    "These labels help give bikes and the overall presentation a more professional and premium look. Our solutions are already used by 500+ bike stores, including BikeTotaal, Azor, VMG, Gazelle, and many others.",
-    "",
-    "To make it easy to explore, we can create a free label design with your current logo first, so you can immediately see how your branding could look on your bikes.",
-    "",
-    "And if your current logo feels a bit outdated, we also offer a logo redesign service for EUR89.95 to help make it look more modern and premium.",
-    "",
-    "Besides labels, we also offer white-label bike accessories with your logo. These can be:",
-    "",
-    "resold in-store",
-    "used as giveaways with bike sales",
-    "used to improve customer satisfaction",
-    "used as mobile branding when customers use them outside on the street",
-    "",
-    "So the goal is not only to sell a product, but to help your bike store build a stronger and more visible brand.",
-    "",
-    "If helpful, I can send you:",
-    "",
-    "a few project examples",
-    "our catalog",
-    "or a free first label design idea for your store",
-    "",
-    command ? `Extra instruction noted: ${command}` : "Would you be open to that?",
-    "",
-    "Best regards,",
-    "",
-    "",
-    "Schild Inc Team"
-  ].join("\n");
-
-  return {
-    subject: sanitizeText(`A more premium look for ${lead.name}`),
-    body
-  };
+  return buildStandardDraft(lead.name, lead.website || lead.googleMapsUrl || "jullie website");
 }
 
 function inferIndustry(text) {
@@ -1287,6 +1219,50 @@ function buildTrengoTicketUrl(ticketId) {
   return `${TRENGO_APP_URL.replace(/\/$/, "")}/tickets/${ticketId}`;
 }
 
+function buildStandardDraft(storeName, website) {
+  const cleanName = sanitizeText(storeName || "Bike Store");
+  const cleanWebsite = sanitizeText(website || "jullie website");
+
+  return {
+    subject: `A more premium look for ${cleanName}`,
+    body: [
+      `Beste ${cleanName} Team,`,
+      "",
+      `Ik kwam ${cleanWebsite} tegen en dacht dat onze producten en diensten van Schild Inc relevant kunnen zijn voor jullie bedrijf.`,
+      "",
+      "Ken je Schild Inc al? Wij helpen fietsenwinkels hun branding te versterken met gepersonaliseerde premium metalen labels en custom bike accessoires met eigen logo.",
+      "",
+      "Deze labels geven fietsen en de totale presentatie een professionelere en meer premium uitstraling. Onze oplossingen worden al gebruikt door meer dan 500 fietsenwinkels, waaronder BikeTotaal, Azor, VMG, Gazelle en nog veel meer.",
+      "",
+      "Om het makkelijk te maken, kunnen we eerst gratis een labelontwerp maken met jullie huidige logo. Zo kun je direct zien hoe jullie branding eruit kan zien op jullie fietsen.",
+      "",
+      "En als jullie huidige logo wat verouderd aanvoelt, bieden we ook een logo redesign service aan voor €89,95 om het moderner en meer premium te maken.",
+      "",
+      "Naast labels bieden we ook white-label bike accessoires met jullie logo aan. Deze kunnen:",
+      "",
+      "* in de winkel worden doorverkocht",
+      "* als giveaway worden meegegeven bij fietsverkopen",
+      "* helpen om de klanttevredenheid te verhogen",
+      "* extra zichtbaarheid voor jullie merk geven wanneer klanten ze buiten gebruiken",
+      "",
+      "Het doel is dus niet alleen om een product te verkopen, maar om jullie fietsenwinkel te helpen een sterker en zichtbaarder merk op te bouwen.",
+      "",
+      "Als je wilt, kan ik je sturen:",
+      "",
+      "* een paar projectvoorbeelden",
+      "* onze catalogus",
+      "* of een eerste gratis labelontwerpidee voor jullie winkel",
+      "",
+      "Sta je daarvoor open?",
+      "",
+      "Met vriendelijke groet,",
+      "",
+      "",
+      "Schild Inc Team"
+    ].join("\n")
+  };
+}
+
 function buildPersonalization(pages, company, searchQuery) {
   const candidates = [];
   const queryTokens = tokenize(searchQuery);
@@ -1321,6 +1297,75 @@ function buildPersonalization(pages, company, searchQuery) {
   }
 
   return unique;
+}
+
+function buildProductInsights(pages, company) {
+  const text = pages.map((page) => `${page.title} ${page.description} ${page.headings.join(" ")} ${page.text}`).join(" ");
+  const lower = text.toLowerCase();
+  const productRules = [
+    ["e-bikes", /\b(e-bike|ebike|electric bike)\b/i],
+    ["stadsfietsen", /\b(stadsfiets|city bike)\b/i],
+    ["nieuwe fietsen", /\b(nieuwe fietsen|new bikes|new bicycle)\b/i],
+    ["tweedehands fietsen", /\b(tweedehands|used bikes|pre-owned)\b/i],
+    ["fietsreparatie", /\b(reparatie|repair|fietsenmaker|service)\b/i],
+    ["fietsverhuur", /\b(verhuur|rental|rent a bike|fietsverhuur)\b/i],
+    ["bike accessoires", /\b(accessoires|accessories|helmets|lights|bags|locks)\b/i]
+  ];
+
+  const mainProducts = productRules
+    .filter(([, pattern]) => pattern.test(lower))
+    .map(([label]) => label)
+    .slice(0, 4);
+
+  const priceMatches = [...text.matchAll(/(?:€|EUR\s?)(\d{1,4}(?:[.,]\d{1,2})?)/gi)]
+    .map((match) => ({
+      raw: match[0].replace(/\s+/g, " ").trim(),
+      value: Number(match[1].replace(",", "."))
+    }))
+    .filter((item) => Number.isFinite(item.value) && item.value > 0 && item.value < 10000);
+
+  const uniquePrices = [];
+  const seen = new Set();
+  for (const item of priceMatches) {
+    if (seen.has(item.raw)) continue;
+    seen.add(item.raw);
+    uniquePrices.push(item);
+  }
+
+  const avgPrice = uniquePrices.length
+    ? Math.round(uniquePrices.reduce((sum, item) => sum + item.value, 0) / uniquePrices.length)
+    : null;
+
+  const locationsMatch = lower.match(/\b(twee locaties|2 locaties|two locations|two stores|2 stores)\b/i);
+  const openMatch = lower.match(/\b(open 7 dagen|7 dagen per week|open seven days|7 days per week)\b/i);
+
+  const highlights = [];
+  if (mainProducts.length) {
+    highlights.push(`Hoofdaanbod: ${mainProducts.join(", ")}.`);
+  }
+  if (uniquePrices.length) {
+    const samplePrices = uniquePrices.slice(0, 3).map((item) => item.raw).join(", ");
+    const avgText = avgPrice ? ` Gemiddeld zichtbaar prijsniveau: €${avgPrice}.` : "";
+    highlights.push(`Zichtbare prijzen: ${samplePrices}.${avgText}`);
+  }
+  if (locationsMatch || openMatch) {
+    const parts = [];
+    if (locationsMatch) parts.push("meerdere locaties");
+    if (openMatch) parts.push("ruime openingstijden");
+    highlights.push(`Extra winkelinformatie: ${parts.join(" en ")}.`);
+  }
+
+  const summaryParts = [];
+  if (mainProducts.length) summaryParts.push(`${company.name} lijkt vooral ${mainProducts.join(", ")} aan te bieden.`);
+  if (uniquePrices.length) summaryParts.push(`Zichtbare prijzen op de website zijn ${uniquePrices.slice(0, 2).map((item) => item.raw).join(" en ")}${avgPrice ? `, gemiddeld ongeveer €${avgPrice}` : ""}.`);
+  if (locationsMatch || openMatch) summaryParts.push(`De website noemt ${[locationsMatch ? "meerdere locaties" : "", openMatch ? "ruime openingstijden" : ""].filter(Boolean).join(" en ")}.`);
+
+  return {
+    summary: summaryParts.join(" ") || "",
+    highlights: highlights.slice(0, 3),
+    avgPriceText: avgPrice ? `EUR${avgPrice}` : "",
+    pricePoints: uniquePrices.slice(0, 5).map((item) => item.raw)
+  };
 }
 
 function extractInterestingSentences(text) {
