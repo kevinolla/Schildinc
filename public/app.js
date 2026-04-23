@@ -93,7 +93,7 @@ els.detailPanel.addEventListener("click", async (event) => {
   const draft = currentDraftValues();
 
   sendButton.disabled = true;
-  setStatus(`Sending draft to ${lead.bestEmail || "selected contact"}...`);
+  setStatus(`Creating a Trengo review draft for ${lead.bestEmail || "selected contact"}...`);
   try {
     const result = await postJson("/api/leads/send-email", {
       leadId: lead.id,
@@ -103,7 +103,7 @@ els.detailPanel.addEventListener("click", async (event) => {
     });
     replaceLead(result.lead);
     render();
-    setStatus(result.message || "Email sent.");
+    setStatus(result.message || "Draft created.");
     if (result.provider === "trengo" && result.openUrl) {
       window.open(result.openUrl, "_blank", "noopener,noreferrer");
     }
@@ -307,7 +307,7 @@ function renderDetail(lead) {
           <button class="secondary-action" type="button" data-action="save-draft">Save draft</button>
           <button class="secondary-action" type="button" data-action="regenerate-draft">Generate again</button>
           ${lead.bestEmail ? `<a class="secondary-action" href="${escapeAttribute(buildMailto(lead))}">Open in email app</a>` : `<span class="secondary-action disabled-action">No email found</span>`}
-          <button class="primary-action" type="button" data-action="send-email" ${lead.bestEmail ? "" : "disabled"}>Send via Trengo / integration</button>
+          <button class="primary-action" type="button" data-action="send-email" ${lead.bestEmail ? "" : "disabled"}>Create Trengo review draft</button>
         </div>
         <textarea id="draftBody" class="draft-editor" rows="14">${escapeHtml(lead.outreachBody || "")}</textarea>
       </div>

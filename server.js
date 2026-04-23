@@ -579,36 +579,43 @@ function scoreFit({ company, websiteResearch, schildProfile, searchQuery }) {
 }
 
 function draftOutreach({ company, websiteResearch, fit, searchQuery }) {
-  const hook = websiteResearch.personalization[0]
-    || websiteResearch.summary
-    || `your store's current offer in ${company.industry.toLowerCase()}`;
-  const secondHook = websiteResearch.personalization[1] || "";
-  const productAngle = /\b(accessories|helmets|bags|lights|components|gear|apparel)\b/i.test(`${websiteResearch.summary} ${websiteResearch.text}`)
-    ? "wholesale white-label bike accessories your store can personalize and resell"
-    : "premium metal branding labels and refreshed branded labels for bike shops";
-  const subject = `${company.name} x Schild labels / bike accessories`;
-
+  const website = company.website || company.googleMapsUrl || "your website";
+  const subject = `A more premium look for ${company.name}`;
   const body = [
-    `Hi ${company.name} team,`,
+    `Dear ${company.name} Team,`,
     "",
-    `I came across your store while researching ${searchQuery || "bike retailers"} and noticed ${lowerFirst(hook)}${secondHook ? ` I also saw ${lowerFirst(secondHook)}` : ""}.`,
+    `I came across ${website} and thought Our Product & Service at Schild Inc could be relevant for your business.`,
     "",
-    `Schild Inc focuses on premium metal branding labels, refreshed branding labels for stores that want a more modern look, and ${productAngle}.`,
+    "Are you already Know about Schild Inc? We help bike stores improve their branding with personalized premium metal labels and custom branded bike accessories.",
     "",
-    "A few angles that may be relevant:",
-    "- upgraded premium labels for products, packaging, displays, or store presentation",
-    "- a branding refresh if you are modernizing how your logo appears in-store",
-    "- ready-to-sell white-label bike accessories under your own store branding",
+    "These labels help give bikes and the overall presentation a more professional and premium look. Our solutions are already used by 500+ bike stores, including BikeTotaal, Azor, VMG, Gazelle, and many others.",
     "",
-    fit.label === "Strong fit"
-      ? "From what is visible on your site, this looks like the kind of store where cleaner branded presentation and store-ready accessory stock could fit well."
-      : "You may or may not be the right fit, but there looked to be enough retail signal that a short note was worth trying.",
+    "To make it easy to explore, we can create a free label design with your current logo first, so you can immediately see how your branding could look on your bikes.",
     "",
-    "If useful, I can share a few ideas around premium labels or private-label accessory options that would match your store style.",
+    "And if your current logo feels a bit outdated, we also offer a logo redesign service for EUR89.95 to help make it look more modern and premium.",
     "",
-    "Best,",
-    "Schild Inc"
-  ].filter(Boolean).join("\n");
+    "Besides labels, we also offer white-label bike accessories with your logo. These can be:",
+    "",
+    "resold in-store",
+    "used as giveaways with bike sales",
+    "used to improve customer satisfaction",
+    "used as mobile branding when customers use them outside on the street",
+    "",
+    "So the goal is not only to sell a product, but to help your bike store build a stronger and more visible brand.",
+    "",
+    "If helpful, I can send you:",
+    "",
+    "a few project examples",
+    "our catalog",
+    "or a free first label design idea for your store",
+    "",
+    "Would you be open to that?",
+    "",
+    "Best regards,",
+    "",
+    "",
+    "Schild Inc Team"
+  ].join("\n");
 
   return { subject, body };
 }
@@ -770,7 +777,7 @@ async function sendViaTrengo({ lead, to, subject, body }) {
     body: JSON.stringify({
       message: body,
       subject,
-      internal_note: false
+      internal_note: true
     })
   });
 
@@ -786,7 +793,7 @@ async function sendViaTrengo({ lead, to, subject, body }) {
 
   return {
     ok: true,
-    message: `Message created in Trengo for ${to} on ticket #${ticket.id}.`,
+    message: `Draft note created in Trengo for review on ticket #${ticket.id}. Nothing was sent to ${to}.`,
     lead: updatedLead,
     provider: "trengo",
     trengoTicketId: ticket.id,
@@ -835,25 +842,24 @@ async function generateDraftWithOpenAI(lead, command) {
   const instructions = [
     "You write concise outbound emails for Schild Inc.",
     "Schild Inc offers premium metal branding labels, refreshed branded labels when a store wants a more modern presentation, and wholesale white-label bike accessories that stores can personalize and resell.",
+    "Use the provided default template structure and keep the message focused on Schild's offer.",
+    "Only personalize the bike store name and bike store website unless the user's command explicitly asks for a different change.",
     "Do not talk about lead generation, automation, or generic outbound services.",
-    "Use the website summary and personalization hooks only when they are actually relevant.",
-    "Do not state as a fact that their logo is outdated. Frame modernization as an option if they are refreshing branding.",
+    "Do not state as a fact that their logo is outdated. Frame modernization as an option.",
     "Return strict JSON with keys subject and body."
   ].join(" ");
 
   const prompt = {
     lead: {
       name: lead.name,
-      companyType: lead.companyType,
-      industry: lead.industry,
       website: lead.website,
-      bestEmail: lead.bestEmail,
-      summary: lead.websiteSummary,
-      personalization: lead.personalization,
-      fitMeaning: lead.fitMeaning,
-      fitReasons: lead.fitReasons
+      companyType: lead.companyType
     },
-    command: command || "Write a short, natural first email focused on premium metal labels, branding refresh options, and white-label bike accessories."
+    defaultTemplate: {
+      subject: `A more premium look for ${lead.name}`,
+      website: lead.website || lead.googleMapsUrl || "your website"
+    },
+    command: command || "Keep the default template, only personalize the bike store name and website, and keep the tone natural and professional."
   };
 
   const response = await fetch("https://api.openai.com/v1/responses", {
@@ -911,26 +917,45 @@ async function generateDraftWithOpenAI(lead, command) {
 }
 
 function generateDraftHeuristic(lead, command) {
+  const website = lead.website || lead.googleMapsUrl || "your website";
   const body = [
-    `Hi ${lead.name} team,`,
+    `Dear ${lead.name} Team,`,
     "",
-    `I was looking at your store and noticed ${lowerFirst((lead.personalization || [])[0] || lead.websiteSummary || "your current offer online")}.`,
+    `I came across ${website} and thought Our Product & Service at Schild Inc could be relevant for your business.`,
     "",
-    "Schild Inc focuses on premium metal branding labels, refreshed branded labels for shops that want a more modern presentation, and wholesale white-label bike accessories that stores can brand and sell as their own.",
+    "Are you already Know about Schild Inc? We help bike stores improve their branding with personalized premium metal labels and custom branded bike accessories.",
     "",
-    "A few angles that may be relevant:",
-    "- premium labels for products, packaging, displays, or store branding",
-    "- a brand refresh if you are updating how your logo appears in-store",
-    "- ready-to-sell bike accessories under your own store branding",
+    "These labels help give bikes and the overall presentation a more professional and premium look. Our solutions are already used by 500+ bike stores, including BikeTotaal, Azor, VMG, Gazelle, and many others.",
     "",
-    command ? `You mentioned: ${command}. I can tailor ideas around that angle too.` : "If useful, I can share a few product or branding directions that would fit your store style.",
+    "To make it easy to explore, we can create a free label design with your current logo first, so you can immediately see how your branding could look on your bikes.",
     "",
-    "Best,",
-    "Schild Inc"
+    "And if your current logo feels a bit outdated, we also offer a logo redesign service for EUR89.95 to help make it look more modern and premium.",
+    "",
+    "Besides labels, we also offer white-label bike accessories with your logo. These can be:",
+    "",
+    "resold in-store",
+    "used as giveaways with bike sales",
+    "used to improve customer satisfaction",
+    "used as mobile branding when customers use them outside on the street",
+    "",
+    "So the goal is not only to sell a product, but to help your bike store build a stronger and more visible brand.",
+    "",
+    "If helpful, I can send you:",
+    "",
+    "a few project examples",
+    "our catalog",
+    "or a free first label design idea for your store",
+    "",
+    command ? `Extra instruction noted: ${command}` : "Would you be open to that?",
+    "",
+    "Best regards,",
+    "",
+    "",
+    "Schild Inc Team"
   ].join("\n");
 
   return {
-    subject: sanitizeText(`${lead.name} x Schild premium labels / bike accessories`),
+    subject: sanitizeText(`A more premium look for ${lead.name}`),
     body
   };
 }
