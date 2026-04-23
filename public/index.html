@@ -13,19 +13,38 @@
           <div class="mark">S</div>
           <div>
             <h1>Schild Prospect Engine</h1>
-            <p>Maps discovery, website research, fit scoring, and outreach drafts.</p>
+            <p>Find companies, crawl their websites, score fit, and prepare outreach.</p>
           </div>
         </div>
+
+        <section class="helper-block">
+          <h3>Easy fit guide</h3>
+          <ul class="plain-list">
+            <li><strong>Strong fit:</strong> real business, clear website, visible services, growth or sales intent.</li>
+            <li><strong>Review fit:</strong> niche retail like bike stores when they also offer service, ecommerce, or multi-location operations.</li>
+            <li><strong>Low fit:</strong> tiny walk-in businesses with little website content or no clear lead flow.</li>
+          </ul>
+        </section>
+
+        <section class="helper-block">
+          <h3>Query examples</h3>
+          <div class="chip-group">
+            <button class="chip" type="button" data-query="industrial automation companies" data-location="Chicago IL">Industrial automation</button>
+            <button class="chip" type="button" data-query="logistics companies" data-location="Dallas TX">Logistics</button>
+            <button class="chip" type="button" data-query="bike stores with repair service" data-location="Denver CO">Bike stores + repair</button>
+            <button class="chip" type="button" data-query="multi location bike shops" data-location="California">Bike shops + multi-location</button>
+          </div>
+        </section>
 
         <form id="run-form" class="stack">
           <label>
             <span>Search Google Maps for</span>
-            <input id="searchQuery" name="searchQuery" required value="industrial automation companies" autocomplete="off">
+            <input id="searchQuery" name="searchQuery" required value="bike stores with repair service" autocomplete="off">
           </label>
 
           <label>
             <span>Location</span>
-            <input id="location" name="location" value="Chicago IL" autocomplete="off">
+            <input id="location" name="location" value="Denver CO" autocomplete="off">
           </label>
 
           <div class="split">
@@ -45,11 +64,13 @@
 
           <label>
             <span>Schild Inc fit criteria</span>
-            <textarea id="schildProfile" name="schildProfile" rows="8">Schild Inc helps B2B companies improve revenue operations, lead generation, data enrichment, automation, and outbound sales workflows.
+            <textarea id="schildProfile" name="schildProfile" rows="8">Schild Inc is a good fit for companies that already look like real businesses online, have a clear offer, and could use better lead generation, automation, follow-up, or sales process support.
 
-Best fit customers are B2B service providers, manufacturers, logistics companies, SaaS companies, agencies, and industrial firms that sell to other businesses.
+Strong fit examples: B2B service companies, manufacturers, logistics companies, agencies, software firms, distributors, and multi-location businesses with a real website and visible growth goals.
 
-Poor fits include consumer-only retail, restaurants, personal services, and companies with no visible commercial website.</textarea>
+Review fit examples: specialty retail or bike stores with e-commerce, repairs, service booking, or multiple locations.
+
+Low fit examples: hobby projects, personal-service businesses with no real lead flow, restaurants, salons, clinics, and companies with no useful website.</textarea>
           </label>
 
           <button class="primary-action" type="submit">
@@ -64,7 +85,7 @@ Poor fits include consumer-only retail, restaurants, personal services, and comp
           <button id="clearLeads" class="danger-action" type="button">Clear</button>
         </div>
 
-        <div id="status" class="status" role="status">Ready. Add a Google Places API key for live Maps results.</div>
+        <div id="status" class="status" role="status">Ready. The crawler will search websites for emails, contact pages, and personalization hooks.</div>
       </aside>
 
       <section class="workspace">
@@ -85,8 +106,8 @@ Poor fits include consumer-only retail, restaurants, personal services, and comp
               <thead>
                 <tr>
                   <th>Company</th>
+                  <th>Best email</th>
                   <th>Industry</th>
-                  <th>Phone</th>
                   <th>Fit</th>
                   <th>Source</th>
                 </tr>
@@ -103,7 +124,7 @@ Poor fits include consumer-only retail, restaurants, personal services, and comp
             <div class="empty-detail">
               <p class="eyebrow">Lead detail</p>
               <h3>Select a company</h3>
-              <p>Research summary, fit reasons, and the outreach draft will appear here.</p>
+              <p>Emails, website hooks, fit notes, and the outreach draft will appear here.</p>
             </div>
           </aside>
         </div>

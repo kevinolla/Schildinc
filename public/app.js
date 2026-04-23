@@ -19,14 +19,15 @@ const els = {
   status: document.querySelector("#status"),
   refresh: document.querySelector("#refresh"),
   syncSheets: document.querySelector("#syncSheets"),
-  clearLeads: document.querySelector("#clearLeads")
+  clearLeads: document.querySelector("#clearLeads"),
+  chips: [...document.querySelectorAll(".chip")]
 };
 
 els.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = els.form.querySelector("button[type='submit']");
   button.disabled = true;
-  setStatus("Running Maps discovery, website research, fit scoring, and outreach drafting...");
+  setStatus("Running Maps discovery, crawling sites for emails, scoring fit, and drafting outreach...");
 
   try {
     const payload = {
@@ -41,7 +42,7 @@ els.form.addEventListener("submit", async (event) => {
     render();
     setStatus(result.usedDemoData
       ? `Created ${result.count} demo lead(s). Add GOOGLE_PLACES_API_KEY for live Google Maps data.`
-      : `Created ${result.count} live lead(s) and saved them locally.`);
+      : `Created ${result.count} live lead(s) with contact emails and personalization data.`);
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -76,6 +77,39 @@ els.clearLeads.addEventListener("click", async () => {
   setStatus("Local review queue cleared.");
 });
 
+els.chips.forEach((chip) => {
+  chip.addEventListener("click", () => {
+    els.searchQuery.value = chip.dataset.query || "";
+    els.location.value = chip.dataset.location || "";
+    setStatus(`Loaded example query: ${chip.dataset.query}`);
+  });
+});
+
+els.detailPanel.addEventListener("click", async (event) => {
+  const sendButton = event.target.closest("[data-action='send-email']");
+  if (!sendButton) return;
+  const lead = state.leads.find((item) => item.id === state.selectedId);
+  if (!lead) return;
+
+  sendButton.disabled = true;
+  setStatus(`Sending draft to ${lead.bestEmail || "selected contact"}...`);
+  try {
+    const result = await postJson("/api/leads/send-email", {
+      leadId: lead.id,
+      to: lead.bestEmail,
+      subject: lead.outreachSubject,
+      body: lead.outreachBody
+    });
+    replaceLead(result.lead);
+    render();
+    setStatus(result.message || "Email sent.");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    sendButton.disabled = false;
+  }
+});
+
 loadLeads();
 
 async function loadLeads() {
@@ -84,7 +118,9 @@ async function loadLeads() {
     state.leads = leads;
     if (!state.selectedId && leads[0]) state.selectedId = leads[0].id;
     render();
-    setStatus(leads.length ? `Loaded ${leads.length} saved lead(s).` : "Ready. Add a Google Places API key for live Maps results.");
+    setStatus(leads.length
+      ? `Loaded ${leads.length} saved lead(s).`
+      : "Ready. The crawler will search websites for emails, contact pages, and personalization hooks.");
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -106,8 +142,8 @@ function render() {
             <span class="muted">${escapeHtml(lead.address || "")}</span>
           </div>
         </td>
+        <td>${lead.bestEmail ? `<a href="mailto:${escapeAttribute(lead.bestEmail)}">${escapeHtml(lead.bestEmail)}</a>` : `<span class="muted">Not found</span>`}</td>
         <td>${escapeHtml(lead.industry || "Other")}<br><span class="muted">${escapeHtml(lead.companyType || "")}</span></td>
-        <td>${escapeHtml(lead.phone || "Not found")}</td>
         <td><span class="pill ${fitClass(lead.fitScore)}">${escapeHtml(lead.fitLabel)} · ${lead.fitScore}</span></td>
         <td><span class="muted">${escapeHtml(lead.source || "Local")}</span></td>
       </tr>
@@ -131,11 +167,28 @@ function renderDetail(lead) {
       <div class="empty-detail">
         <p class="eyebrow">Lead detail</p>
         <h3>Select a company</h3>
-        <p>Research summary, fit reasons, and the outreach draft will appear here.</p>
+        <p>Emails, website hooks, fit notes, and the outreach draft will appear here.</p>
       </div>
     `;
     return;
   }
+
+  const emails = (lead.contacts || []).length
+    ? (lead.contacts || []).map((contact) => `
+      <li>
+        <a href="mailto:${escapeAttribute(contact.email)}">${escapeHtml(contact.email)}</a>
+        <span class="muted">${escapeHtml(shortUrl(contact.sourcePage || ""))}</span>
+      </li>
+    `).join("")
+    : `<li>No email found from the website crawl.</li>`;
+
+  const hooks = (lead.personalization || []).length
+    ? (lead.personalization || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+    : `<li>No strong personalization hooks were found.</li>`;
+
+  const pages = (lead.pagesScanned || []).length
+    ? (lead.pagesScanned || []).map((page) => `<li><a href="${escapeAttribute(page)}" target="_blank" rel="noreferrer">${escapeHtml(shortUrl(page))}</a></li>`).join("")
+    : `<li>No pages were scanned.</li>`;
 
   els.detailPanel.innerHTML = `
     <div class="detail-inner">
@@ -148,8 +201,14 @@ function renderDetail(lead) {
       <div class="metrics">
         <div class="metric"><span>Fit score</span><strong>${lead.fitScore}/100</strong></div>
         <div class="metric"><span>Status</span><strong>${escapeHtml(lead.fitLabel)}</strong></div>
+        <div class="metric"><span>Best email</span><strong>${escapeHtml(lead.bestEmail || "Not found")}</strong></div>
         <div class="metric"><span>Phone</span><strong>${escapeHtml(lead.phone || "Not found")}</strong></div>
-        <div class="metric"><span>Type</span><strong>${escapeHtml(lead.companyType || "Unknown")}</strong></div>
+      </div>
+
+      <div class="section-block">
+        <h4>Easy fit meaning</h4>
+        <p>${escapeHtml(lead.fitMeaning || "No fit explanation available.")}</p>
+        <ul>${(lead.fitReasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
       </div>
 
       <div class="section-block">
@@ -159,18 +218,36 @@ function renderDetail(lead) {
       </div>
 
       <div class="section-block">
-        <h4>What the company does</h4>
+        <h4>Emails found on site</h4>
+        <ul>${emails}</ul>
+      </div>
+
+      <div class="section-block">
+        <h4>Personalization hooks</h4>
+        <ul>${hooks}</ul>
+      </div>
+
+      <div class="section-block">
+        <h4>What the company appears to do</h4>
         <p>${escapeHtml(lead.websiteSummary || "No website summary available.")}</p>
       </div>
 
       <div class="section-block">
-        <h4>Fit reasons</h4>
-        <ul>${(lead.fitReasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+        <h4>Pages scanned</h4>
+        <ul>${pages}</ul>
       </div>
 
       <div class="section-block">
-        <h4>Outreach draft</h4>
-        <div class="draft">${escapeHtml(lead.outreachDraft || "")}</div>
+        <h4>Email draft</h4>
+        <div class="draft-meta">
+          <span><strong>Subject:</strong> ${escapeHtml(lead.outreachSubject || "")}</span>
+          ${lead.lastEmailSentAt ? `<span><strong>Last sent:</strong> ${escapeHtml(formatDate(lead.lastEmailSentAt))}</span>` : ""}
+        </div>
+        <div class="action-row">
+          ${lead.bestEmail ? `<a class="secondary-action" href="${escapeAttribute(buildMailto(lead))}">Open in email app</a>` : `<span class="secondary-action disabled-action">No email found</span>`}
+          <button class="primary-action" type="button" data-action="send-email" ${lead.bestEmail ? "" : "disabled"}>Send with integration</button>
+        </div>
+        <div class="draft">${escapeHtml(lead.outreachBody || "")}</div>
       </div>
     </div>
   `;
@@ -178,11 +255,22 @@ function renderDetail(lead) {
 
 function filteredLeads() {
   return state.leads.filter((lead) => {
-    const haystack = [lead.name, lead.industry, lead.companyType, lead.phone, lead.website, lead.websiteSummary]
-      .join(" ")
-      .toLowerCase();
+    const haystack = [
+      lead.name,
+      lead.industry,
+      lead.companyType,
+      lead.phone,
+      lead.website,
+      lead.websiteSummary,
+      lead.bestEmail,
+      ...(lead.emails || [])
+    ].join(" ").toLowerCase();
     return haystack.includes(state.filter) && Number(lead.fitScore || 0) >= state.minFit;
   });
+}
+
+function replaceLead(updatedLead) {
+  state.leads = state.leads.map((lead) => lead.id === updatedLead.id ? updatedLead : lead);
 }
 
 async function fetchJson(url) {
@@ -217,9 +305,25 @@ function fitClass(score) {
 
 function shortUrl(url) {
   try {
-    return new URL(url).hostname.replace(/^www\./, "");
+    const parsed = new URL(url);
+    return `${parsed.hostname.replace(/^www\./, "")}${parsed.pathname === "/" ? "" : parsed.pathname}`;
   } catch {
     return url;
+  }
+}
+
+function buildMailto(lead) {
+  const to = lead.bestEmail || "";
+  const subject = encodeURIComponent(lead.outreachSubject || "");
+  const body = encodeURIComponent(lead.outreachBody || "");
+  return `mailto:${to}?subject=${subject}&body=${body}`;
+}
+
+function formatDate(value) {
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
   }
 }
 

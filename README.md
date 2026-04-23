@@ -5,12 +5,14 @@ A local web application for discovering companies from Google Maps-style search,
 ## What it does
 
 - Searches Google Places API for company name, website, phone number, business type, industry, address, and Maps link.
-- Opens each company website and extracts readable business text from metadata, headings, and paragraphs.
-- Scores fit against editable Schild Inc criteria.
-- Writes a personalized first-touch outreach draft.
+- Opens each company website and crawls the homepage plus important internal pages like contact/about/services.
+- Extracts readable business text, public email addresses, and personalization hooks from the website.
+- Scores fit against editable Schild Inc criteria with easier-to-read fit explanations.
+- Writes a more personalized first-touch outreach draft with separate subject and body.
 - Saves everything in `data/leads.json`.
 - Exports review data to CSV for Google Sheets.
 - Optionally posts leads to a Google Sheets webhook.
+- Optionally sends outreach emails through a webhook integration.
 
 This implementation uses Google Places API rather than scraping Google Maps pages. It is more stable, easier to operate, and aligned with Google's API model. Google's current Places Text Search requires a `textQuery` and response field mask, and Place Details/Text Search data fields are controlled through field masks.
 
@@ -106,6 +108,34 @@ Expected webhook payload:
   ]
 }
 ```
+
+## Email sending integration
+
+The app can also send outreach drafts through a generic webhook.
+
+Set:
+
+```bash
+export EMAIL_SEND_WEBHOOK_URL="https://your-automation-endpoint.example/send"
+npm start
+```
+
+Expected payload:
+
+```json
+{
+  "to": "shop@example.com",
+  "subject": "Idea for Bike Store",
+  "body": "Hi team, ...",
+  "lead": {
+    "name": "Bike Store",
+    "website": "https://example.com",
+    "bestEmail": "shop@example.com"
+  }
+}
+```
+
+That webhook can connect to Gmail, Outlook, Resend, Mailgun, Make, Zapier, or a custom mail service.
 
 ## Notes
 
