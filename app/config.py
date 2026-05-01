@@ -10,12 +10,20 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_database_url(value: str) -> str:
+    if value.startswith("postgresql://"):
+        return value.replace("postgresql://", "postgresql+psycopg://", 1)
+    if value.startswith("postgres://"):
+        return value.replace("postgres://", "postgresql+psycopg://", 1)
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     app_name: str = os.getenv("APP_NAME", "Schild Inc CRM MVP")
     app_base_url: str = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./schildinc.db")
+    database_url: str = _normalize_database_url(os.getenv("DATABASE_URL", "sqlite:///./schildinc.db"))
     admin_username: str = os.getenv("ADMIN_USERNAME", "schild")
     admin_password: str = os.getenv("ADMIN_PASSWORD", "")
     google_places_api_key: str = os.getenv("GOOGLE_PLACES_API_KEY", "")
