@@ -36,7 +36,11 @@ def require_admin(credentials: HTTPBasicCredentials | None = Depends(security)) 
         return credentials.username if credentials else "local-dev"
 
     if credentials is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": 'Basic realm="Schild Inc CRM MVP"'},
+        )
 
     expected_user = settings.admin_username.encode("utf-8")
     expected_pass = settings.admin_password.encode("utf-8")
@@ -46,7 +50,11 @@ def require_admin(credentials: HTTPBasicCredentials | None = Depends(security)) 
         not secrets.compare_digest(expected_user, provided_user)
         or not secrets.compare_digest(expected_pass, provided_pass)
     ):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": 'Basic realm="Schild Inc CRM MVP"'},
+        )
     return credentials.username
 
 
