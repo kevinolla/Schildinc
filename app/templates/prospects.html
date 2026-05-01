@@ -23,7 +23,12 @@
 </section>
 
 <section class="card">
-  <h3>Filters</h3>
+  <div class="section-head">
+    <div>
+      <h3>Prospect filters</h3>
+      <p class="muted">Keep this page simple: find contacts, check fit, approve the good ones, and open details only when needed.</p>
+    </div>
+  </div>
   <form method="get" action="/prospects" class="grid-form">
     <input name="search" value="{{ search }}" placeholder="Search company, website, city, or email">
     <select name="match_filter">
@@ -53,124 +58,112 @@
   </form>
 </section>
 
-<section class="card table-card">
-  <div class="section-head">
-    <div>
-      <h2>Prospects</h2>
-      <p class="muted">Public email discovery only. No hidden scraping, no auto social messages, and existing customers stay blocked from outreach.</p>
-    </div>
-    <div class="button-row">
-      <a class="button-link" href="/prospects">Reset</a>
-    </div>
-  </div>
+<section class="card">
   <form method="post" action="/admin/prospects/discover-emails">
-    <div class="button-row section-actions">
-      <button type="submit">Discover Emails for Selected Prospects</button>
+    <div class="section-head">
+      <div>
+        <h2>Prospects</h2>
+        <p class="muted">The crawler looks for public business email, Instagram, and LinkedIn. No hidden scraping, no auto social messaging, and existing customers stay blocked from outreach.</p>
+      </div>
+      <div class="button-row">
+        <button type="submit">Find contacts for selected</button>
+        <a class="button-link button-link-muted" href="/prospects">Reset</a>
+      </div>
     </div>
-    <table>
-      <thead>
-        <tr>
-          <th class="checkbox-col"></th>
-          <th>Company</th>
-          <th>Email</th>
-          <th>Discovery</th>
-          <th>Socials</th>
-          <th>Matching</th>
-          <th>Tier</th>
-          <th>Review</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for prospect in prospects %}
-        <tr>
-          <td class="checkbox-col">
-            <input type="checkbox" name="selected_ids" value="{{ prospect.id }}">
-          </td>
-          <td>
-            <a class="table-title" href="/prospects/{{ prospect.id }}">{{ prospect.company_name }}</a>
-            <div class="muted">{{ prospect.city or "-" }}, {{ prospect.country_code or "-" }}</div>
-            <div class="muted">{{ prospect.website_domain or prospect.website or "-" }}</div>
-          </td>
-          <td>
-            <div>{{ prospect.email or "-" }}</div>
-            {% if prospect.email_source_page %}
-            <div class="muted">Source: {{ prospect.email_source_page }}</div>
-            {% endif %}
-            {% if prospect.phone %}
-            <div class="muted">{{ prospect.phone }}</div>
-            {% endif %}
-          </td>
-          <td>
-            <span class="badge badge-discovery-{{ prospect.email_discovery_status|replace('_', '-') }}">{{ prospect.email_discovery_status.replace("_", " ") }}</span>
-            <div class="muted">Confidence: {{ prospect.email_confidence or 0 }}/100</div>
-            {% if prospect.email_discovered_at %}
-            <div class="muted">{{ prospect.email_discovered_at }}</div>
-            {% endif %}
-          </td>
-          <td>
-            {% if prospect.linkedin_url %}
-            <div><a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">LinkedIn</a></div>
-            {% endif %}
-            {% if prospect.instagram_url %}
-            <div><a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Instagram</a></div>
-            {% endif %}
-            {% if not prospect.linkedin_url and not prospect.instagram_url %}
-            <span class="muted">Not found</span>
-            {% endif %}
-          </td>
-          <td>
-            <span class="badge badge-match-{{ prospect.match_status.value }}">{{ prospect.match_status.value.replace("_", " ") }}</span>
-            <div class="muted">{{ prospect.match_method or "not matched" }}</div>
-            {% if prospect.matched_customer %}
-            <div class="muted">Matched: {{ prospect.matched_customer.canonical_company_name }}</div>
-            {% endif %}
-          </td>
-          <td>
-            <span class="badge badge-tier-{{ prospect.bike_shop_tier|lower|replace(' ', '-') }}">{{ prospect.bike_shop_tier }}</span>
-            <div class="muted">{{ prospect.outreach_priority }}</div>
-            {% if prospect.headquarters_required %}
-            <div class="muted">HQ required</div>
-            {% endif %}
-          </td>
-          <td>
-            <span class="badge review-{{ prospect.review_status.value }}">{{ prospect.review_status.value }}</span>
-            {% if prospect.approved_for_outreach %}
-            <div class="muted">Ready for queue</div>
-            {% endif %}
-          </td>
-          <td>
-            <div class="action-stack">
-              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/discover-email">Discover</button>
-              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/match">Re-match</button>
-              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/review" name="action" value="approve" {% if prospect.match_status.value != "new_prospect" %}disabled{% endif %}>Approve</button>
-              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/review" name="action" value="reject">Reject</button>
-              <a class="button-link" href="/prospects/{{ prospect.id }}">Open</a>
+
+    <div class="prospect-list">
+      {% for prospect in prospects %}
+      <article class="prospect-card">
+        <div class="prospect-select">
+          <input type="checkbox" name="selected_ids" value="{{ prospect.id }}" aria-label="Select {{ prospect.company_name }}">
+        </div>
+
+        <div class="prospect-main">
+          <div class="prospect-head">
+            <div>
+              <a class="table-title prospect-name" href="/prospects/{{ prospect.id }}">{{ prospect.company_name }}</a>
+              <div class="muted">{{ prospect.city or "-" }}, {{ prospect.country_code or "-" }}</div>
+              <div class="muted">{{ prospect.website_domain or prospect.website or "-" }}</div>
             </div>
-          </td>
-        </tr>
-        <tr class="detail-row">
-          <td></td>
-          <td colspan="8">
-            <div class="detail-grid">
-              <div>
-                <div class="mini-title">Tier reason</div>
-                <div>{{ prospect.tier_reason or "No tier explanation yet." }}</div>
-              </div>
-              <div>
-                <div class="mini-title">Sales angle</div>
-                <div>{{ prospect.recommended_sales_angle or "Manual review" }}</div>
-              </div>
-              <div>
-                <div class="mini-title">Summary</div>
-                <div>{{ prospect.website_summary or "No website summary yet." }}</div>
+            <div class="prospect-badges">
+              <span class="badge badge-match-{{ prospect.match_status.value }}">{{ prospect.match_status.value.replace("_", " ") }}</span>
+              <span class="badge badge-tier-{{ prospect.bike_shop_tier|lower|replace(' ', '-') }}">{{ prospect.bike_shop_tier }}</span>
+              <span class="badge review-{{ prospect.review_status.value }}">{{ prospect.review_status.value }}</span>
+            </div>
+          </div>
+
+          <div class="prospect-info-grid">
+            <div class="info-box">
+              <div class="mini-title">Best contact</div>
+              <div class="info-value">{{ prospect.email or "No email yet" }}</div>
+              {% if prospect.phone %}
+              <div class="muted">{{ prospect.phone }}</div>
+              {% endif %}
+              {% if prospect.email_source_page %}
+              <div class="muted">Found on {{ prospect.email_source_page }}</div>
+              {% endif %}
+            </div>
+
+            <div class="info-box">
+              <div class="mini-title">Discovery</div>
+              <div class="info-value">{{ prospect.email_discovery_status.replace("_", " ") }}</div>
+              <div class="muted">Confidence {{ prospect.email_confidence or 0 }}/100</div>
+              {% if prospect.email_discovered_at %}
+              <div class="muted">{{ prospect.email_discovered_at }}</div>
+              {% endif %}
+            </div>
+
+            <div class="info-box">
+              <div class="mini-title">Socials</div>
+              <div class="social-links-inline">
+                {% if prospect.linkedin_url %}
+                <a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">LinkedIn</a>
+                {% endif %}
+                {% if prospect.instagram_url %}
+                <a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Instagram</a>
+                {% endif %}
+                {% if not prospect.linkedin_url and not prospect.instagram_url %}
+                <span class="muted">Not found yet</span>
+                {% endif %}
               </div>
             </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+
+            <div class="info-box">
+              <div class="mini-title">Sales view</div>
+              <div class="info-value">{{ prospect.outreach_priority }}</div>
+              <div class="muted">{{ prospect.recommended_contact_type or "Manual review" }}</div>
+              {% if prospect.headquarters_required %}
+              <div class="muted">Head office route needed</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="prospect-summary-row">
+            <div>
+              <div class="mini-title">Why this tier</div>
+              <div>{{ prospect.tier_reason or "No tier explanation yet." }}</div>
+            </div>
+            <div>
+              <div class="mini-title">What to say</div>
+              <div>{{ prospect.recommended_sales_angle or "Open the detail page for a closer review." }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prospect-actions">
+          <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/discover-email">Find contacts</button>
+          <button
+            type="submit"
+            formaction="/admin/prospects/{{ prospect.id }}/review"
+            name="action"
+            value="approve"
+            {% if prospect.match_status.value != "new_prospect" %}disabled{% endif %}
+          >Approve</button>
+          <a class="button-link button-link-muted" href="/prospects/{{ prospect.id }}">Details</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
   </form>
 </section>
 {% endblock %}

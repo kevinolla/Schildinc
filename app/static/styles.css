@@ -171,6 +171,12 @@ button,
   border-radius: 6px;
 }
 
+.button-link-muted {
+  background: #eef3f9;
+  color: #184b7b;
+  border: 1px solid #c9d7e8;
+}
+
 button[disabled] {
   opacity: 0.45;
   cursor: not-allowed;
@@ -278,8 +284,97 @@ button[disabled] {
   font-weight: 700;
 }
 
+.prospect-name {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
 .checkbox-col {
   width: 32px;
+}
+
+.prospect-list {
+  display: grid;
+  gap: 14px;
+}
+
+.prospect-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 180px;
+  gap: 16px;
+  border: 1px solid #e4ebf5;
+  border-radius: 10px;
+  padding: 16px;
+  background: #fbfcff;
+}
+
+.prospect-select {
+  padding-top: 8px;
+}
+
+.prospect-main {
+  min-width: 0;
+}
+
+.prospect-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.prospect-badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prospect-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.info-box {
+  border: 1px solid #e7edf6;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+  min-height: 88px;
+}
+
+.info-value {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.social-links-inline {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.social-links-inline a {
+  font-weight: 600;
+}
+
+.prospect-summary-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #e7edf6;
+}
+
+.prospect-actions {
+  display: grid;
+  gap: 10px;
+  align-content: start;
 }
 
 .detail-row td {
@@ -395,5 +490,21 @@ pre {
 
   .page-shell {
     padding: 16px 16px 32px;
+  }
+
+  .prospect-card {
+    grid-template-columns: 1fr;
+  }
+
+  .prospect-select {
+    padding-top: 0;
+  }
+
+  .prospect-head {
+    flex-direction: column;
+  }
+
+  .prospect-badges {
+    justify-content: flex-start;
   }
 }

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
+import json
 from dataclasses import dataclass
 from datetime import datetime
-import re
 from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import Error as PlaywrightError
@@ -16,7 +17,20 @@ from app.models import Prospect, ProspectActivityLog
 from app.tiering import apply_bike_tier
 from app.utils import email_domain, normalize_domain, normalize_email, normalize_text
 
-LIKELY_PATH_KEYWORDS = ["contact", "about", "about-us", "contact-us", "impressum", "legal", "privacy", "terms"]
+LIKELY_PATH_KEYWORDS = [
+    "contact",
+    "about",
+    "about-us",
+    "contact-us",
+    "impressum",
+    "legal",
+    "privacy",
+    "terms",
+    "faq",
+    "support",
+    "service",
+    "customer-service",
+]
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
@@ -153,19 +167,28 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
 def _extract_visible_page_info(page, current_url: str) -> dict:
     links = page.locator("a").evaluate_all(
         """els => els
-            .filter(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length))
-            .map(el => ({href: el.href || '', text: (el.innerText || '').trim()}))"""
+            .map(el => ({
+              href: el.href || '',
+              text: (el.innerText || '').trim(),
+              label: (el.getAttribute('aria-label') || '').trim(),
+              title: (el.getAttribute('title') || '').trim()
+            }))"""
     )
     try:
         body_text = page.locator("body").inner_text()
     except PlaywrightError:
         body_text = ""
     headings = page.locator("h1, h2, h3").all_inner_texts()
-    visible_text = " ".join([body_text, *headings])
+    footer_bits = _collect_visible_section_text(page, "footer, [class*='footer'], [id*='footer']")
+    contact_bits = _collect_visible_section_text(page, "[class*='contact'], [id*='contact'], [class*='about'], [id*='about']")
+    meta_text = _read_meta_description(page)
+    structured_data = _extract_structured_data(page)
+    visible_text = " ".join([body_text, *headings, *footer_bits, *contact_bits, meta_text])
     emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(visible_text)}
+    emails.update(structured_data["emails"])
     for item in links:
         href = item.get("href", "") or ""
-        text = item.get("text", "") or ""
+        text = " ".join([item.get("text", "") or "", item.get("label", "") or "", item.get("title", "") or ""]).strip()
         if href.startswith("mailto:"):
             emails.add(normalize_email(href.replace("mailto:", "").split("?")[0]))
         if text and EMAIL_PATTERN.search(text):
@@ -176,15 +199,21 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
     social_instagram = []
     for item in links:
         href = item.get("href", "") or ""
-        if "linkedin.com" in href.lower():
+        label_text = " ".join([item.get("text", "") or "", item.get("label", "") or "", item.get("title", "") or ""]).lower()
+        if "linkedin.com" in href.lower() or "linkedin" in label_text:
             social_linkedin.append(href)
-        elif "instagram.com" in href.lower():
+        elif "instagram.com" in href.lower() or "instagram" in label_text:
             social_instagram.append(href)
         elif _is_likely_internal_follow_link(href, current_url):
             internal_links.append(href)
+    social_linkedin.extend(structured_data["linkedin"])
+    social_instagram.extend(structured_data["instagram"])
 
     snippets = [clean_snippet(text) for text in headings if clean_snippet(text)]
     snippets.extend(clean_snippet(line) for line in body_text.split("\n")[:8] if clean_snippet(line))
+    snippets.extend(clean_snippet(line) for line in footer_bits[:3] if clean_snippet(line))
+    if meta_text:
+        snippets.append(clean_snippet(meta_text))
 
     return {
         "emails": sorted(emails),
@@ -263,6 +292,89 @@ def _pick_social_link(links: list[str]) -> str:
         if "/company/" in link or "/business/" in link:
             return link
     return links[0] if links else ""
+
+
+def _collect_visible_section_text(page, selector: str) -> list[str]:
+    try:
+        return page.locator(selector).evaluate_all(
+            """els => els
+                .filter(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length))
+                .map(el => (el.innerText || '').trim())
+                .filter(Boolean)
+                .slice(0, 8)"""
+        )
+    except PlaywrightError:
+        return []
+
+
+def _read_meta_description(page) -> str:
+    try:
+        value = page.locator("meta[name='description']").first.get_attribute("content")
+        return (value or "").strip()
+    except PlaywrightError:
+        return ""
+
+
+def _extract_structured_data(page) -> dict[str, list[str]]:
+    try:
+        raw_scripts = page.locator("script[type='application/ld+json']").evaluate_all(
+            """els => els.map(el => el.textContent || '').filter(Boolean)"""
+        )
+    except PlaywrightError:
+        raw_scripts = []
+
+    emails: list[str] = []
+    linkedin_links: list[str] = []
+    instagram_links: list[str] = []
+    for raw in raw_scripts:
+        for payload in _iter_json_ld_payloads(raw):
+            _walk_schema_value(payload, emails, linkedin_links, instagram_links)
+    return {
+        "emails": _dedupe([normalize_email(item) for item in emails if item]),
+        "linkedin": _dedupe(linkedin_links),
+        "instagram": _dedupe(instagram_links),
+    }
+
+
+def _iter_json_ld_payloads(raw: str) -> list[object]:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, list):
+        return parsed
+    return [parsed]
+
+
+def _walk_schema_value(value: object, emails: list[str], linkedin_links: list[str], instagram_links: list[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_name = str(key).lower()
+            if key_name == "email" and isinstance(item, str):
+                emails.append(item.replace("mailto:", "").strip())
+            elif key_name == "sameas":
+                if isinstance(item, list):
+                    for link in item:
+                        _collect_social_from_string(link, linkedin_links, instagram_links)
+                elif isinstance(item, str):
+                    _collect_social_from_string(item, linkedin_links, instagram_links)
+            else:
+                _walk_schema_value(item, emails, linkedin_links, instagram_links)
+    elif isinstance(value, list):
+        for item in value:
+            _walk_schema_value(item, emails, linkedin_links, instagram_links)
+
+
+def _collect_social_from_string(value: object, linkedin_links: list[str], instagram_links: list[str]) -> None:
+    link = str(value or "").strip()
+    lower = link.lower()
+    if "linkedin.com" in lower:
+        linkedin_links.append(link)
+    elif "instagram.com" in lower:
+        instagram_links.append(link)
 
 
 def _summarize_snippets(snippets: list[str]) -> str:
