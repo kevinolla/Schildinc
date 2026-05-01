@@ -32,15 +32,22 @@ def read_csv_upload(contents: bytes) -> pd.DataFrame:
 
 def upsert_customers_from_dataframe(session: Session, df: pd.DataFrame) -> ImportSummary:
     summary = ImportSummary()
+    entity_ids = [str(item).strip() for item in df.get("customer_entity_id", []) if str(item).strip()]
+    existing = {
+        customer.customer_entity_id: customer
+        for customer in session.scalars(select(Customer).where(Customer.customer_entity_id.in_(entity_ids))).all()
+    } if entity_ids else {}
+
     for record in df.to_dict(orient="records"):
         entity_id = str(record.get("customer_entity_id", "")).strip()
         if not entity_id:
             continue
 
-        customer = session.scalar(select(Customer).where(Customer.customer_entity_id == entity_id))
+        customer = existing.get(entity_id)
         if customer is None:
             customer = Customer(customer_entity_id=entity_id)
             session.add(customer)
+            existing[entity_id] = customer
             summary.inserted += 1
         else:
             summary.updated += 1
@@ -86,15 +93,27 @@ def upsert_customers_from_dataframe(session: Session, df: pd.DataFrame) -> Impor
 
 def upsert_invoices_from_dataframe(session: Session, df: pd.DataFrame) -> ImportSummary:
     summary = ImportSummary()
+    invoice_ids = [str(item).strip() for item in df.get("invoice_id", []) if str(item).strip()]
+    customer_entity_ids = [str(item).strip() for item in df.get("customer_entity_id", []) if str(item).strip()]
+    existing_invoices = {
+        invoice.invoice_id: invoice
+        for invoice in session.scalars(select(Invoice).where(Invoice.invoice_id.in_(invoice_ids))).all()
+    } if invoice_ids else {}
+    customers = {
+        customer.customer_entity_id: customer
+        for customer in session.scalars(select(Customer).where(Customer.customer_entity_id.in_(customer_entity_ids))).all()
+    } if customer_entity_ids else {}
+
     for record in df.to_dict(orient="records"):
         invoice_pk = str(record.get("invoice_id", "")).strip()
         if not invoice_pk:
             continue
 
-        invoice = session.scalar(select(Invoice).where(Invoice.invoice_id == invoice_pk))
+        invoice = existing_invoices.get(invoice_pk)
         if invoice is None:
             invoice = Invoice(invoice_id=invoice_pk)
             session.add(invoice)
+            existing_invoices[invoice_pk] = invoice
             summary.inserted += 1
         else:
             summary.updated += 1
@@ -125,7 +144,7 @@ def upsert_invoices_from_dataframe(session: Session, df: pd.DataFrame) -> Import
         invoice.discount_amount = float(record.get("discount_amount", 0) or 0)
         invoice.already_client_flag = parse_bool(record.get("already_client_flag"))
 
-        customer = session.scalar(select(Customer).where(Customer.customer_entity_id == invoice.customer_entity_id))
+        customer = customers.get(invoice.customer_entity_id)
         if customer:
             invoice.customer = customer
     return summary
