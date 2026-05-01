@@ -7,6 +7,7 @@ Create Date: 2026-05-01 00:00:00
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "0001_initial_schema"
@@ -16,9 +17,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    prospect_state = sa.Enum("pending", "approved", "rejected", name="prospectstate")
-    match_status = sa.Enum("existing_customer", "possible_match", "new_prospect", name="matchstatus")
-    queue_state = sa.Enum("queued", "ready", "sent", "skipped", "suppressed", name="queuestate")
+    prospect_state = postgresql.ENUM("pending", "approved", "rejected", name="prospectstate", create_type=False)
+    match_status = postgresql.ENUM("existing_customer", "possible_match", "new_prospect", name="matchstatus", create_type=False)
+    queue_state = postgresql.ENUM("queued", "ready", "sent", "skipped", "suppressed", name="queuestate", create_type=False)
 
     prospect_state.create(op.get_bind(), checkfirst=True)
     match_status.create(op.get_bind(), checkfirst=True)
