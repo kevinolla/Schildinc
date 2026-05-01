@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h3>Build daily queue</h3>
+  <form method="post" action="/admin/queue/build" class="inline-form">
+    <input type="date" name="queue_date" value="{{ today.isoformat() }}">
+    <input type="number" name="limit" value="25" min="1" max="100">
+    <button type="submit">Build queue</button>
+  </form>
+</section>
+
+<section class="card table-card">
+  <h2>Outreach queue</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Prospect</th>
+        <th>Subject</th>
+        <th>State</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td>{{ item.queue_date }}</td>
+        <td>{{ item.prospect.company_name }}<br><span class="muted">{{ item.prospect.email }}</span></td>
+        <td>{{ item.subject }}</td>
+        <td><span class="badge {{ item.state.value }}">{{ item.state.value }}</span></td>
+        <td>
+          <form method="post" action="/admin/queue/{{ item.id }}/send" class="inline-form">
+            <button type="submit" {% if item.state.value not in ["queued", "ready"] %}disabled{% endif %}>Send</button>
+          </form>
+          <form method="post" action="/admin/queue/{{ item.id }}/skip" class="inline-form">
+            <button type="submit">Skip</button>
+          </form>
+        </td>
+      </tr>
+      <tr class="detail-row">
+        <td colspan="5"><pre>{{ item.body }}</pre></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

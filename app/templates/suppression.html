@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h3>Add suppression</h3>
+  <form method="post" action="/admin/suppression" class="grid-form">
+    <input name="email" placeholder="email@example.com">
+    <input name="domain" placeholder="domain.com">
+    <input name="company_name" placeholder="Company">
+    <input name="reason" placeholder="Reason">
+    <button type="submit">Add suppression</button>
+  </form>
+</section>
+
+<section class="card table-card">
+  <h2>Suppression list</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Email</th>
+        <th>Domain</th>
+        <th>Company</th>
+        <th>Reason</th>
+        <th>Source</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in entries %}
+      <tr>
+        <td>{{ entry.email }}</td>
+        <td>{{ entry.domain }}</td>
+        <td>{{ entry.company_name }}</td>
+        <td>{{ entry.reason }}</td>
+        <td>{{ entry.source }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

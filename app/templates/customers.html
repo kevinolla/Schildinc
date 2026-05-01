@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card table-card">
+  <h2>Customers</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Company</th>
+        <th>Primary email</th>
+        <th>Domain</th>
+        <th>City</th>
+        <th>Country</th>
+        <th>Invoices</th>
+        <th>Lifetime paid</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for customer in customers %}
+      <tr>
+        <td>{{ customer.canonical_company_name }}</td>
+        <td>{{ customer.customer_email_primary }}</td>
+        <td>{{ customer.website_domain_candidate or customer.match_key_domain }}</td>
+        <td>{{ customer.city }}</td>
+        <td>{{ customer.country_code }}</td>
+        <td>{{ customer.invoice_count }}</td>
+        <td>{{ customer.lifetime_amount_paid }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

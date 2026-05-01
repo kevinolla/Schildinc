@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="two-col">
+  <div class="card">
+    <h3>Import prospect CSV</h3>
+    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".csv" required>
+      <button type="submit">Upload Google Maps prospect list</button>
+    </form>
+  </div>
+  <div class="card">
+    <h3>Search Google Maps</h3>
+    <form method="post" action="/admin/google-places-search">
+      <input name="query" placeholder="bike stores with repair service" required>
+      <input name="location" placeholder="Netherlands">
+      <input type="number" name="limit" value="10" min="1" max="25">
+      <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search and import</button>
+    </form>
+    {% if not google_places_enabled %}
+    <p class="muted">Set GOOGLE_PLACES_API_KEY to enable live Google Maps import.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card table-card">
+  <h2>Prospects</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Company</th>
+        <th>Email</th>
+        <th>Website</th>
+        <th>Match result</th>
+        <th>Review</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for prospect in prospects %}
+      <tr>
+        <td>
+          <strong>{{ prospect.company_name }}</strong><br>
+          <span class="muted">{{ prospect.city }}, {{ prospect.country_code }}</span>
+        </td>
+        <td>{{ prospect.email or "-" }}</td>
+        <td>{{ prospect.website_domain or "-" }}</td>
+        <td>
+          <span class="badge {{ prospect.match_status.value }}">{{ prospect.match_status.value.replace("_", " ") }}</span><br>
+          <span class="muted">{{ prospect.match_method or "not matched" }}</span>
+          {% if prospect.matched_customer %}
+          <div class="muted">Matched: {{ prospect.matched_customer.canonical_company_name }}</div>
+          {% endif %}
+        </td>
+        <td>
+          <span class="badge review-{{ prospect.review_status.value }}">{{ prospect.review_status.value }}</span>
+          {% if prospect.approved_for_outreach %}
+          <div class="muted">Approved for queue</div>
+          {% endif %}
+        </td>
+        <td>
+          <form method="post" action="/admin/prospects/{{ prospect.id }}/match" class="inline-form">
+            <button type="submit">Re-match</button>
+          </form>
+          <form method="post" action="/admin/prospects/{{ prospect.id }}/review" class="inline-form">
+            <input type="hidden" name="action" value="approve">
+            <button type="submit" {% if prospect.match_status.value != "new_prospect" %}disabled{% endif %}>Approve</button>
+          </form>
+          <form method="post" action="/admin/prospects/{{ prospect.id }}/review" class="inline-form">
+            <input type="hidden" name="action" value="reject">
+            <button type="submit">Reject</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

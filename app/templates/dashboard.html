@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="stats-grid">
+  <div class="card"><span>Customers</span><strong>{{ stats.customer_count }}</strong></div>
+  <div class="card"><span>Prospects</span><strong>{{ stats.prospect_count }}</strong></div>
+  <div class="card"><span>Existing matches</span><strong>{{ stats.existing_match_count }}</strong></div>
+  <div class="card"><span>New prospects</span><strong>{{ stats.new_prospect_count }}</strong></div>
+  <div class="card"><span>Pending review</span><strong>{{ stats.pending_review_count }}</strong></div>
+  <div class="card"><span>Queued today</span><strong>{{ stats.queued_today_count }}</strong></div>
+  <div class="card"><span>Sent today</span><strong>{{ stats.sent_today_count }}/{{ stats.daily_send_limit }}</strong></div>
+  <div class="card"><span>Suppressed</span><strong>{{ stats.suppression_count }}</strong></div>
+</section>
+
+<section class="two-col">
+  <div class="card">
+    <h3>Import customer master</h3>
+    <form method="post" action="/admin/import/customers" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".csv" required>
+      <button type="submit">Upload normalized_customer_master.csv</button>
+    </form>
+  </div>
+  <div class="card">
+    <h3>Import invoice history</h3>
+    <form method="post" action="/admin/import/invoices" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".csv" required>
+      <button type="submit">Upload normalized_invoice_history.csv</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

@@ -1,190 +1,256 @@
-# Schild Prospect Engine
+# Schild Inc CRM MVP
 
-A local web application for discovering companies from Google Maps-style search, researching their websites, deciding whether they fit Schild Inc, drafting personalized outreach, and saving the review queue.
+Railway-ready FastAPI + Postgres MVP for:
 
-## What it does
+- importing the existing Schild customer database from normalized CSVs
+- keeping recent Stripe customers synced through webhooks
+- importing or searching Google Maps prospects
+- matching prospects against existing customers
+- reviewing only true non-customers for outreach
+- maintaining a controlled daily send queue with suppression and unsubscribe support
 
-- Searches Google Places API for company name, website, phone number, business type, industry, address, and Maps link.
-- Opens each company website and crawls the homepage plus important internal pages like contact/about/services.
-- Extracts readable business text, public email addresses, and personalization hooks from the website.
-- Scores fit against editable Schild Inc criteria with easier-to-read fit explanations.
-- Writes a more personalized first-touch outreach draft with separate subject and body.
-- Lets you edit the draft, save it, and regenerate it from a custom command.
-- Saves everything in `data/leads.json`.
-- Exports review data to CSV for Google Sheets.
-- Optionally posts leads to a Google Sheets webhook.
-- Optionally sends outreach emails through a webhook integration.
+## Stack
 
-This implementation uses Google Places API rather than scraping Google Maps pages. It is more stable, easier to operate, and aligned with Google's API model. Google's current Places Text Search requires a `textQuery` and response field mask, and Place Details/Text Search data fields are controlled through field masks.
+- FastAPI
+- SQLAlchemy
+- Alembic
+- PostgreSQL
+- pandas
+- rapidfuzz
+- Stripe SDK
+- Resend or SMTP abstraction
+- Jinja admin UI
 
-Sources:
-- [Google Places Text Search](https://developers.google.com/maps/documentation/places/web-service/text-search)
-- [Google Places Data Fields](https://developers.google.com/maps/documentation/places/web-service/data-fields)
-- [Google Place Details](https://developers.google.com/maps/documentation/places/web-service/place-details)
+## Core workflow
 
-## Run locally
+1. Import `normalized_customer_master.csv`
+2. Import `normalized_invoice_history.csv`
+3. Stripe webhooks keep customers/invoices fresh in near real time
+4. Import prospects from Google Maps CSV or live Places API search
+5. Matching engine classifies each prospect as:
+   - `existing_customer`
+   - `possible_match`
+   - `new_prospect`
+6. Team reviews prospects and approves only true non-customers
+7. Daily outreach queue is generated for approved non-customers only
+8. Emails always use `Reply-To: sales@schildinc.com`
+9. Suppression list, unsubscribe link, logs, and send limits stay in control
+
+## Matching logic
+
+Prospects are checked in this order:
+
+1. exact website domain
+2. exact email
+3. canonical company name + city + country
+4. fuzzy company name match with `rapidfuzz`
+
+This keeps already-known customers out of outreach while still surfacing edge cases for review.
+
+## Project layout
+
+```text
+app/
+  config.py
+  db.py
+  models.py
+  matching.py
+  importers.py
+  google_places.py
+  stripe_sync.py
+  emailing.py
+  jobs.py
+  main.py
+  templates/
+  static/
+alembic/
+scripts/
+```
+
+## Local setup
+
+1. Create a virtualenv and install dependencies:
 
 ```bash
-npm start
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2. Copy env file:
+
+```bash
+cp .env.example .env
+```
+
+3. Set a Postgres database in `DATABASE_URL`
+
+4. Run migrations:
+
+```bash
+alembic upgrade head
+```
+
+5. Import your customer data:
+
+```bash
+python scripts/import_seed_data.py \
+  --customers /Users/kevinolla/Downloads/normalized_customer_master.csv \
+  --invoices /Users/kevinolla/Downloads/normalized_invoice_history.csv
+```
+
+6. Start the app:
+
+```bash
+uvicorn app.main:app --reload
 ```
 
 Open:
 
 ```text
-http://localhost:3000
+http://localhost:8000
 ```
 
-Without environment variables, the app runs with demo leads so the workflow can be reviewed immediately.
+## Admin UI pages
 
-## Deploy on Railway
+- `/` dashboard
+- `/customers` imported + Stripe-synced customer records
+- `/prospects` Google Maps prospects and matching status
+- `/queue` daily outreach queue
+- `/suppression` suppression and unsubscribe records
+- `/logs` email + webhook logs
 
-1. Create a Railway account and connect the GitHub repo that contains this project.
-2. Create a new Railway service from the repo.
-3. Add a Railway volume and mount it to:
+## Prospect sources
+
+### Option 1: upload a Google Maps prospect CSV
+
+Upload any CSV containing columns like:
+
+- `company_name` or `name`
+- `website`
+- `email`
+- `city`
+- `state`
+- `country_code`
+- `google_maps_url`
+
+### Option 2: live Google Places search
+
+Set `GOOGLE_PLACES_API_KEY` and use the form on `/prospects`.
+
+The app uses:
 
 ```text
-/app/data
+POST https://places.googleapis.com/v1/places:searchText
 ```
 
-4. Add these Railway variables:
+## Stripe webhook
+
+Endpoint:
 
 ```text
-DATA_DIR=/app/data
-GOOGLE_PLACES_API_KEY=your_google_places_api_key
-APP_USERNAME=schild
-APP_PASSWORD=a-long-shared-team-password
+POST /webhooks/stripe
 ```
 
-5. Deploy. Railway will use `railway.json` and run `npm start`.
-
-The app exposes `/health` for Railway health checks. The review queue is stored at `DATA_DIR/leads.json`, so the volume keeps leads across deploys and restarts.
-
-## Live Google Maps data
-
-Set a Places API key before starting the server:
-
-```bash
-export GOOGLE_PLACES_API_KEY="your_google_places_api_key"
-npm start
-```
-
-The server calls:
+Set `STRIPE_WEBHOOK_SECRET` and point Stripe to:
 
 ```text
-https://places.googleapis.com/v1/places:searchText
+https://your-app.up.railway.app/webhooks/stripe
 ```
 
-Requested fields:
+Useful events:
+
+- `customer.created`
+- `customer.updated`
+- `invoice.created`
+- `invoice.paid`
+- `invoice.updated`
+
+## Outreach queue
+
+Daily queue items are created only for:
+
+- `review_status = approved`
+- `match_status = new_prospect`
+- not suppressed
+- with an email present
+
+Build the queue from UI or CLI:
+
+```bash
+python scripts/build_daily_queue.py --date 2026-05-01 --limit 25
+```
+
+## Sending
+
+Supported providers:
+
+- `MAIL_PROVIDER=console`
+- `MAIL_PROVIDER=resend`
+- `MAIL_PROVIDER=smtp`
+
+All emails use:
 
 ```text
-places.id, places.displayName, places.formattedAddress, places.websiteUri,
-places.nationalPhoneNumber, places.internationalPhoneNumber, places.types,
-places.primaryTypeDisplayName, places.businessStatus, places.googleMapsUri
+Reply-To: sales@schildinc.com
 ```
 
-## Google Sheets sync
+Each sent email gets an unsubscribe link tied to the recipient email. Clicking it creates a suppression entry automatically.
 
-The simplest production path is a Google Apps Script web app that accepts JSON and appends rows to a Sheet. Deploy the script, then set:
+## Railway deployment
+
+### Required env vars
+
+```text
+DATABASE_URL=postgresql+psycopg://...
+ADMIN_USERNAME=schild
+ADMIN_PASSWORD=...
+REPLY_TO_EMAIL=sales@schildinc.com
+MAIL_PROVIDER=console|resend|smtp
+MAIL_FROM=noreply@schildinc.com
+UNSUBSCRIBE_SECRET=...
+DAILY_SEND_LIMIT=25
+DEFAULT_QUEUE_SIZE=25
+```
+
+### Optional env vars
+
+```text
+GOOGLE_PLACES_API_KEY=...
+STRIPE_API_KEY=...
+STRIPE_WEBHOOK_SECRET=...
+RESEND_API_KEY=...
+SMTP_HOST=...
+SMTP_PORT=587
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+SMTP_USE_TLS=true
+APP_BASE_URL=https://your-app.up.railway.app
+```
+
+### Deploy flow
+
+1. Create a Railway Postgres database
+2. Attach the `DATABASE_URL` to the app service
+3. Set the env vars above
+4. Deploy the repo
+5. Run migrations:
 
 ```bash
-export GOOGLE_SHEETS_WEBHOOK_URL="https://script.google.com/macros/s/..."
-npm start
+alembic upgrade head
 ```
 
-Expected webhook payload:
-
-```json
-{
-  "leads": [
-    {
-      "name": "Company",
-      "website": "https://example.com",
-      "phone": "555-0100",
-      "companyType": "Industrial automation",
-      "industry": "Manufacturing",
-      "fitScore": 82,
-      "fitLabel": "Strong fit",
-      "outreachDraft": "Subject: Quick idea..."
-    }
-  ]
-}
-```
-
-## Trengo integration
-
-The cleanest way to send from the dashboard into Trengo is to use Trengo's API.
-
-Set:
+6. Import the seed CSVs once
+7. Add Stripe webhook URL
+8. Optional: create a Railway cron or scheduled job to run:
 
 ```bash
-export TRENGO_API_TOKEN="your_personal_access_token"
-export TRENGO_EMAIL_CHANNEL_ID="your_email_channel_id"
-export TRENGO_APP_URL="https://app.trengo.com"
-npm start
+python scripts/build_daily_queue.py
 ```
-
-With those set, the app will:
-
-1. find or create a Trengo contact for the lead email
-2. create a ticket in your Trengo email channel
-3. send the drafted message into that ticket
-4. open the Trengo ticket after the button click
-
-This uses Trengo's official API endpoints for:
-
-- creating contacts
-- creating tickets
-- sending ticket messages
-
-## Generic email webhook
-
-The app can also send outreach drafts through a generic webhook if you do not want Trengo.
-
-Set:
-
-```bash
-export EMAIL_SEND_WEBHOOK_URL="https://your-automation-endpoint.example/send"
-export EMAIL_SEND_WEBHOOK_SECRET="shared-secret"
-npm start
-```
-
-Expected payload:
-
-```json
-{
-  "secret": "shared-secret",
-  "to": "shop@example.com",
-  "subject": "Idea for Bike Store",
-  "body": "Hi team, ...",
-  "lead": {
-    "name": "Bike Store",
-    "website": "https://example.com",
-    "bestEmail": "shop@example.com"
-  }
-}
-```
-
-That webhook can connect to Google Apps Script, Gmail, Outlook, Resend, Mailgun, Make, Zapier, or a custom mail service.
-
-For a ready-made Google Apps Script version, use:
-
-[`integrations/google-apps-script/email-webhook`](./integrations/google-apps-script/email-webhook)
-
-## OpenAI draft regeneration
-
-If you want the "Generate again" button to rewrite drafts from a custom instruction, set:
-
-```bash
-export OPENAI_API_KEY="your_openai_api_key"
-export OPENAI_MODEL="gpt-5"
-npm start
-```
-
-The app uses the OpenAI Responses API to regenerate JSON drafts from the current lead context and your command.
 
 ## Notes
 
-- The local database file is created automatically at `data/leads.json`.
-- CSV export is available at `/api/export.csv`.
-- Website research observes normal fetch behavior and will fail gracefully when a site blocks bots, returns non-HTML content, or times out.
-- Fit scoring is transparent and rule based, so the criteria can be tuned directly in the app before each run.
+- The current UI is intentionally simple and admin-focused.
+- Matching is deterministic first, fuzzy second, so the review queue stays understandable.
+- Queue sending is controlled; nothing auto-sends just because a prospect exists.
+- Existing legacy Node files from earlier work are not used by this MVP runtime.

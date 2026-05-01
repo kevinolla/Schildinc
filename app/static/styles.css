@@ -1,0 +1,171 @@
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+  background: #f5f7fb;
+  color: #17202a;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  padding: 24px 32px;
+  background: #ffffff;
+  border-bottom: 1px solid #dfe5ef;
+}
+
+.topbar h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+}
+
+.topbar p {
+  margin: 0;
+  color: #4f5b6a;
+}
+
+.topbar nav {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.topbar a {
+  color: #0f4c81;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.page-shell {
+  padding: 24px 32px 40px;
+}
+
+.stats-grid,
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #dfe5ef;
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.card strong {
+  display: block;
+  font-size: 28px;
+  margin-top: 8px;
+}
+
+.table-card {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 10px 8px;
+  border-bottom: 1px solid #edf1f7;
+  font-size: 14px;
+}
+
+input, button {
+  font: inherit;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #c8d3e1;
+}
+
+button {
+  background: #0f4c81;
+  color: #ffffff;
+  border-color: #0f4c81;
+  cursor: pointer;
+}
+
+button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.inline-form,
+.grid-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #e7eef8;
+}
+
+.existing_customer {
+  background: #fde9c6;
+}
+
+.possible_match {
+  background: #fff1b8;
+}
+
+.new_prospect,
+.ready,
+.queued {
+  background: #d9f0dd;
+}
+
+.sent {
+  background: #d7ebff;
+}
+
+.skipped,
+.suppressed,
+.rejected {
+  background: #f4d7d7;
+}
+
+.review-approved {
+  background: #d9f0dd;
+}
+
+.review-pending {
+  background: #fff1b8;
+}
+
+.review-rejected {
+  background: #f4d7d7;
+}
+
+.muted {
+  color: #66758a;
+  font-size: 12px;
+}
+
+pre {
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.detail-row td {
+  background: #fbfcfe;
+}

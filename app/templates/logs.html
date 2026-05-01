@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="two-col">
+  <div class="card table-card">
+    <h2>Email logs</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>To</th>
+          <th>Status</th>
+          <th>Provider</th>
+          <th>Reply-to</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in emails %}
+        <tr>
+          <td>{{ log.created_at }}</td>
+          <td>{{ log.to_email }}</td>
+          <td>{{ log.status }}</td>
+          <td>{{ log.provider }}</td>
+          <td>{{ log.reply_to }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card table-card">
+    <h2>Webhook logs</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Received</th>
+          <th>Provider</th>
+          <th>Type</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in webhooks %}
+        <tr>
+          <td>{{ log.received_at }}</td>
+          <td>{{ log.provider }}</td>
+          <td>{{ log.event_type }}</td>
+          <td>{{ log.status }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
