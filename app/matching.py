@@ -28,6 +28,8 @@ def apply_matching(session: Session, prospect: Prospect) -> MatchResult:
     prospect.match_reasons = "\n".join(result.reasons)
     prospect.existing_customer_id = result.customer.id if result.customer else None
     prospect.approved_for_outreach = result.status == MatchStatus.new_prospect and prospect.review_status.value == "approved"
+    if result.status != MatchStatus.new_prospect:
+        prospect.approved_for_outreach = False
     prospect.last_matched_at = datetime.utcnow()
     return result
 
@@ -35,21 +37,21 @@ def apply_matching(session: Session, prospect: Prospect) -> MatchResult:
 def match_prospect(session: Session, prospect: Prospect) -> MatchResult:
     website_domain = normalize_domain(prospect.website_domain or prospect.website)
     if website_domain:
-      domain_match = session.scalar(
-          select(Customer).where(
-              (Customer.match_key_domain == website_domain)
-              | (Customer.website_domain_candidate == website_domain)
-              | (Customer.email_domain_primary == website_domain)
-          )
-      )
-      if domain_match:
-          return MatchResult(
-              status=MatchStatus.existing_customer,
-              method="exact_domain",
-              score=100,
-              reasons=[f"Exact website domain match: {website_domain}"],
-              customer=domain_match,
-          )
+        domain_match = session.scalar(
+            select(Customer).where(
+                (Customer.match_key_domain == website_domain)
+                | (Customer.website_domain_candidate == website_domain)
+                | (Customer.email_domain_primary == website_domain)
+            )
+        )
+        if domain_match:
+            return MatchResult(
+                status=MatchStatus.existing_customer,
+                method="exact_domain",
+                score=100,
+                reasons=[f"Exact website domain match: {website_domain}"],
+                customer=domain_match,
+            )
 
     exact_email = normalize_email(prospect.email)
     if exact_email:

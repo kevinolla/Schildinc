@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Customer, Invoice, Prospect, ProspectState
+from app.tiering import apply_bike_tier
 from app.utils import build_name_geo_key, email_domain, normalize_domain, normalize_email, normalize_text, parse_bool
 
 
@@ -182,6 +183,9 @@ def upsert_prospects_from_dataframe(session: Session, df: pd.DataFrame, source: 
         prospect.canonical_company_name_clean = normalize_text(company_name)
         prospect.email = normalize_email(record.get("email") or record.get("best_email") or "")
         prospect.email_domain = email_domain(prospect.email)
+        if prospect.email:
+            prospect.email_discovery_status = "imported"
+            prospect.email_confidence = max(prospect.email_confidence, 60)
         prospect.website = str(record.get("website") or "")
         prospect.website_domain = normalize_domain(record.get("website_domain") or prospect.website)
         prospect.phone = str(record.get("phone") or "")
@@ -191,8 +195,12 @@ def upsert_prospects_from_dataframe(session: Session, df: pd.DataFrame, source: 
         prospect.address = str(record.get("address") or record.get("formatted_address") or "")
         prospect.google_maps_url = str(record.get("google_maps_url") or record.get("maps_url") or "")
         prospect.company_type = str(record.get("company_type") or record.get("type") or "")
-        prospect.notes = str(record.get("notes") or "")
-        prospect.review_status = ProspectState.pending
-        prospect.approved_for_outreach = False
+        prospect.linkedin_url = str(record.get("linkedin_url") or prospect.linkedin_url or "")
+        prospect.instagram_url = str(record.get("instagram_url") or prospect.instagram_url or "")
+        prospect.notes = str(record.get("notes") or prospect.notes or "")
+        if prospect.review_status is None:
+            prospect.review_status = ProspectState.pending
+        prospect.approved_for_outreach = False if prospect.review_status != ProspectState.approved else prospect.approved_for_outreach
         prospect.canonical_name_geo_key = build_name_geo_key(company_name, prospect.city, prospect.state, prospect.country_code)
+        apply_bike_tier(prospect)
     return summary

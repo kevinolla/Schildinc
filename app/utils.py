@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta
 import hashlib
 import hmac
 import re
@@ -62,3 +63,26 @@ def split_pipe_values(value: str | None) -> list[str]:
 
 def parse_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def parse_hhmm(value: str, default: str) -> time:
+    raw = value or default
+    hour, minute = (raw.split(":") + ["00"])[:2]
+    return time(hour=int(hour), minute=int(minute))
+
+
+def within_send_window(moment: datetime, start_hhmm: str, end_hhmm: str) -> bool:
+    current = moment.time()
+    start = parse_hhmm(start_hhmm, "08:00")
+    end = parse_hhmm(end_hhmm, "17:30")
+    return start <= current <= end
+
+
+def add_business_days(value: date, business_days: int) -> date:
+    current = value
+    remaining = business_days
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current

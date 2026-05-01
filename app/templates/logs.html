@@ -8,6 +8,7 @@
         <tr>
           <th>Created</th>
           <th>To</th>
+          <th>Channel</th>
           <th>Status</th>
           <th>Provider</th>
           <th>Reply-to</th>
@@ -18,14 +19,22 @@
         <tr>
           <td>{{ log.created_at }}</td>
           <td>{{ log.to_email }}</td>
+          <td>{{ log.channel }}</td>
           <td>{{ log.status }}</td>
           <td>{{ log.provider }}</td>
           <td>{{ log.reply_to }}</td>
         </tr>
+        <tr class="detail-row">
+          <td></td>
+          <td colspan="5"><pre>{{ log.response_excerpt }}</pre></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="muted">No email logs yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+
   <div class="card table-card">
     <h2>Webhook logs</h2>
     <table>
@@ -45,9 +54,41 @@
           <td>{{ log.event_type }}</td>
           <td>{{ log.status }}</td>
         </tr>
+        {% else %}
+        <tr><td colspan="4" class="muted">No webhook logs yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+</section>
+
+<section class="card table-card">
+  <h2>Prospect activity logs</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Created</th>
+        <th>Prospect</th>
+        <th>Action</th>
+        <th>Status</th>
+        <th>Source</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in activities %}
+      <tr>
+        <td>{{ log.created_at }}</td>
+        <td>{{ log.prospect_id or "-" }}</td>
+        <td>{{ log.action_type }}</td>
+        <td>{{ log.status }}</td>
+        <td>{{ log.source_url or "-" }}</td>
+        <td>{{ log.detail }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">No activity logs yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </section>
 {% endblock %}

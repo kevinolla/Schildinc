@@ -1,21 +1,59 @@
 {% extends "base.html" %}
 {% block content %}
+<section class="two-col">
+  <div class="card">
+    <h3>Build or refresh queue</h3>
+    <form method="post" action="/admin/queue/build" class="grid-form">
+      <input type="date" name="queue_date" value="{{ today.isoformat() }}">
+      <input type="number" name="limit" value="{{ daily_send_limit }}" min="1" max="100">
+      <button type="submit">Build queue</button>
+    </form>
+    <p class="muted">Only approved non-customers with public email, no suppression, no cooldown, and allowed tier will be added.</p>
+  </div>
+  <div class="card">
+    <h3>Send controls</h3>
+    <form method="post" action="/admin/queue/send-ready" class="grid-form">
+      <input type="date" name="queue_date" value="{{ today.isoformat() }}">
+      <input type="number" name="limit" value="{{ daily_send_limit }}" min="1" max="{{ daily_send_limit }}">
+      <button type="submit" {% if not campaign_active %}disabled{% endif %}>Send ready items</button>
+    </form>
+    <p class="muted">Campaign active: {{ "Yes" if campaign_active else "No" }}. Send window: {{ send_window_start }} - {{ send_window_end }}. Reply-to: {{ reply_to_email }}.</p>
+  </div>
+</section>
+
 <section class="card">
-  <h3>Build daily queue</h3>
-  <form method="post" action="/admin/queue/build" class="inline-form">
-    <input type="date" name="queue_date" value="{{ today.isoformat() }}">
-    <input type="number" name="limit" value="25" min="1" max="100">
-    <button type="submit">Build queue</button>
-  </form>
+  <div class="section-head">
+    <div>
+      <h3>Dry run preview</h3>
+      <p class="muted">Preview the next 20 likely sends before adding or sending anything.</p>
+    </div>
+    <div class="button-row">
+      <a class="button-link" href="/queue/preview?queue_date={{ today.isoformat() }}">Open preview</a>
+      <a class="button-link" href="/queue/export.csv?queue_date={{ today.isoformat() }}">Export queue CSV</a>
+    </div>
+  </div>
+  <div class="preview-chip-list">
+    {% for item in preview_items %}
+    <a class="preview-chip" href="/prospects/{{ item.prospect.id }}">
+      <strong>{{ item.prospect.company_name }}</strong>
+      <span>{{ item.prospect.email }}</span>
+      <span>{{ item.prospect.bike_shop_tier }} / {{ item.prospect.outreach_priority }}</span>
+    </a>
+    {% else %}
+    <div class="muted">No preview candidates yet. Approve a few non-customer prospects first.</div>
+    {% endfor %}
+  </div>
 </section>
 
 <section class="card table-card">
-  <h2>Outreach queue</h2>
+  <h2>Outreach queue for {{ today.isoformat() }}</h2>
   <table>
     <thead>
       <tr>
         <th>Date</th>
         <th>Prospect</th>
+        <th>Tier</th>
+        <th>Email</th>
         <th>Subject</th>
         <th>State</th>
         <th>Actions</th>
@@ -25,21 +63,50 @@
       {% for item in items %}
       <tr>
         <td>{{ item.queue_date }}</td>
-        <td>{{ item.prospect.company_name }}<br><span class="muted">{{ item.prospect.email }}</span></td>
-        <td>{{ item.subject }}</td>
-        <td><span class="badge {{ item.state.value }}">{{ item.state.value }}</span></td>
         <td>
-          <form method="post" action="/admin/queue/{{ item.id }}/send" class="inline-form">
-            <button type="submit" {% if item.state.value not in ["queued", "ready"] %}disabled{% endif %}>Send</button>
-          </form>
-          <form method="post" action="/admin/queue/{{ item.id }}/skip" class="inline-form">
-            <button type="submit">Skip</button>
-          </form>
+          <a class="table-title" href="/prospects/{{ item.prospect.id }}">{{ item.prospect.company_name }}</a>
+          <div class="muted">{{ item.prospect.city }}, {{ item.prospect.country_code }}</div>
+        </td>
+        <td>
+          <span class="badge badge-tier-{{ item.prospect.bike_shop_tier|lower|replace(' ', '-') }}">{{ item.prospect.bike_shop_tier }}</span>
+          <div class="muted">{{ item.prospect.outreach_priority }}</div>
+        </td>
+        <td>{{ item.prospect.email }}</td>
+        <td>{{ item.subject }}</td>
+        <td><span class="badge badge-queue-{{ item.state.value }}">{{ item.state.value }}</span></td>
+        <td>
+          <div class="action-stack">
+            <form method="post" action="/admin/queue/{{ item.id }}/send">
+              <button type="submit" {% if item.state.value not in ["queued", "ready"] %}disabled{% endif %}>Send now</button>
+            </form>
+            <form method="post" action="/admin/queue/{{ item.id }}/skip">
+              <button type="submit">Skip</button>
+            </form>
+            <a class="button-link" href="/prospects/{{ item.prospect.id }}">Open prospect</a>
+          </div>
         </td>
       </tr>
       <tr class="detail-row">
-        <td colspan="5"><pre>{{ item.body }}</pre></td>
+        <td></td>
+        <td colspan="6">
+          <div class="detail-grid">
+            <div>
+              <div class="mini-title">Text draft</div>
+              <pre>{{ item.body }}</pre>
+            </div>
+            <div>
+              <div class="mini-title">Queue notes</div>
+              <div>{{ item.reviewer_notes or "No reviewer notes." }}</div>
+            </div>
+            <div>
+              <div class="mini-title">Safety</div>
+              <div>Cooldown and suppression checks also run again at send time.</div>
+            </div>
+          </div>
+        </td>
       </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">No queue items for this date yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

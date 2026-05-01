@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="nl">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,11 +8,11 @@
   </head>
   <body>
     <header class="topbar">
-      <div>
+      <div class="topbar-copy">
         <h1>{{ app_name }}</h1>
-        <p>Customer matching, review queue, Stripe sync, and controlled outreach for Schild Inc.</p>
+        <p>Customer matching, publieke contact discovery, review-safe outreach, en Stripe sync voor Schild Inc.</p>
       </div>
-      <nav>
+      <nav class="topnav">
         <a href="/">Dashboard</a>
         <a href="/customers">Customers</a>
         <a href="/prospects">Prospects</a>
@@ -25,4 +25,4 @@
       {% block content %}{% endblock %}
     </main>
   </body>
-  </html>
+</html>

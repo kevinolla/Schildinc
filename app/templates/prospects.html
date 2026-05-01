@@ -3,14 +3,14 @@
 <section class="two-col">
   <div class="card">
     <h3>Import prospect CSV</h3>
-    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data">
+    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="stack-form">
       <input type="file" name="file" accept=".csv" required>
       <button type="submit">Upload Google Maps prospect list</button>
     </form>
   </div>
   <div class="card">
     <h3>Search Google Maps</h3>
-    <form method="post" action="/admin/google-places-search">
+    <form method="post" action="/admin/google-places-search" class="grid-form">
       <input name="query" placeholder="bike stores with repair service" required>
       <input name="location" placeholder="Netherlands">
       <input type="number" name="limit" value="10" min="1" max="25">
@@ -22,57 +22,155 @@
   </div>
 </section>
 
-<section class="card table-card">
-  <h2>Prospects</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Company</th>
-        <th>Email</th>
-        <th>Website</th>
-        <th>Match result</th>
-        <th>Review</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for prospect in prospects %}
-      <tr>
-        <td>
-          <strong>{{ prospect.company_name }}</strong><br>
-          <span class="muted">{{ prospect.city }}, {{ prospect.country_code }}</span>
-        </td>
-        <td>{{ prospect.email or "-" }}</td>
-        <td>{{ prospect.website_domain or "-" }}</td>
-        <td>
-          <span class="badge {{ prospect.match_status.value }}">{{ prospect.match_status.value.replace("_", " ") }}</span><br>
-          <span class="muted">{{ prospect.match_method or "not matched" }}</span>
-          {% if prospect.matched_customer %}
-          <div class="muted">Matched: {{ prospect.matched_customer.canonical_company_name }}</div>
-          {% endif %}
-        </td>
-        <td>
-          <span class="badge review-{{ prospect.review_status.value }}">{{ prospect.review_status.value }}</span>
-          {% if prospect.approved_for_outreach %}
-          <div class="muted">Approved for queue</div>
-          {% endif %}
-        </td>
-        <td>
-          <form method="post" action="/admin/prospects/{{ prospect.id }}/match" class="inline-form">
-            <button type="submit">Re-match</button>
-          </form>
-          <form method="post" action="/admin/prospects/{{ prospect.id }}/review" class="inline-form">
-            <input type="hidden" name="action" value="approve">
-            <button type="submit" {% if prospect.match_status.value != "new_prospect" %}disabled{% endif %}>Approve</button>
-          </form>
-          <form method="post" action="/admin/prospects/{{ prospect.id }}/review" class="inline-form">
-            <input type="hidden" name="action" value="reject">
-            <button type="submit">Reject</button>
-          </form>
-        </td>
-      </tr>
+<section class="card">
+  <h3>Filters</h3>
+  <form method="get" action="/prospects" class="grid-form">
+    <input name="search" value="{{ search }}" placeholder="Search company, website, city, or email">
+    <select name="match_filter">
+      <option value="">All match results</option>
+      {% for option in match_options %}
+      <option value="{{ option }}" {% if match_filter == option %}selected{% endif %}>{{ option.replace("_", " ") }}</option>
       {% endfor %}
-    </tbody>
-  </table>
+    </select>
+    <select name="review_filter">
+      <option value="">All review states</option>
+      {% for option in review_options %}
+      <option value="{{ option }}" {% if review_filter == option %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+    <select name="tier_filter">
+      <option value="">All bike shop tiers</option>
+      {% for option in tier_options %}
+      <option value="{{ option }}" {% if tier_filter == option %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+    <select name="discovery_filter">
+      {% for option in discovery_options %}
+      <option value="{{ option }}" {% if discovery_filter == option %}selected{% endif %}>{{ option.replace("_", " ") }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Apply filters</button>
+  </form>
+</section>
+
+<section class="card table-card">
+  <div class="section-head">
+    <div>
+      <h2>Prospects</h2>
+      <p class="muted">Public email discovery only. No hidden scraping, no auto social messages, and existing customers stay blocked from outreach.</p>
+    </div>
+    <div class="button-row">
+      <a class="button-link" href="/prospects">Reset</a>
+    </div>
+  </div>
+  <form method="post" action="/admin/prospects/discover-emails">
+    <div class="button-row section-actions">
+      <button type="submit">Discover Emails for Selected Prospects</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th class="checkbox-col"></th>
+          <th>Company</th>
+          <th>Email</th>
+          <th>Discovery</th>
+          <th>Socials</th>
+          <th>Matching</th>
+          <th>Tier</th>
+          <th>Review</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for prospect in prospects %}
+        <tr>
+          <td class="checkbox-col">
+            <input type="checkbox" name="selected_ids" value="{{ prospect.id }}">
+          </td>
+          <td>
+            <a class="table-title" href="/prospects/{{ prospect.id }}">{{ prospect.company_name }}</a>
+            <div class="muted">{{ prospect.city or "-" }}, {{ prospect.country_code or "-" }}</div>
+            <div class="muted">{{ prospect.website_domain or prospect.website or "-" }}</div>
+          </td>
+          <td>
+            <div>{{ prospect.email or "-" }}</div>
+            {% if prospect.email_source_page %}
+            <div class="muted">Source: {{ prospect.email_source_page }}</div>
+            {% endif %}
+            {% if prospect.phone %}
+            <div class="muted">{{ prospect.phone }}</div>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge badge-discovery-{{ prospect.email_discovery_status|replace('_', '-') }}">{{ prospect.email_discovery_status.replace("_", " ") }}</span>
+            <div class="muted">Confidence: {{ prospect.email_confidence or 0 }}/100</div>
+            {% if prospect.email_discovered_at %}
+            <div class="muted">{{ prospect.email_discovered_at }}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% if prospect.linkedin_url %}
+            <div><a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">LinkedIn</a></div>
+            {% endif %}
+            {% if prospect.instagram_url %}
+            <div><a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Instagram</a></div>
+            {% endif %}
+            {% if not prospect.linkedin_url and not prospect.instagram_url %}
+            <span class="muted">Not found</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge badge-match-{{ prospect.match_status.value }}">{{ prospect.match_status.value.replace("_", " ") }}</span>
+            <div class="muted">{{ prospect.match_method or "not matched" }}</div>
+            {% if prospect.matched_customer %}
+            <div class="muted">Matched: {{ prospect.matched_customer.canonical_company_name }}</div>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge badge-tier-{{ prospect.bike_shop_tier|lower|replace(' ', '-') }}">{{ prospect.bike_shop_tier }}</span>
+            <div class="muted">{{ prospect.outreach_priority }}</div>
+            {% if prospect.headquarters_required %}
+            <div class="muted">HQ required</div>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge review-{{ prospect.review_status.value }}">{{ prospect.review_status.value }}</span>
+            {% if prospect.approved_for_outreach %}
+            <div class="muted">Ready for queue</div>
+            {% endif %}
+          </td>
+          <td>
+            <div class="action-stack">
+              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/discover-email">Discover</button>
+              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/match">Re-match</button>
+              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/review" name="action" value="approve" {% if prospect.match_status.value != "new_prospect" %}disabled{% endif %}>Approve</button>
+              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/review" name="action" value="reject">Reject</button>
+              <a class="button-link" href="/prospects/{{ prospect.id }}">Open</a>
+            </div>
+          </td>
+        </tr>
+        <tr class="detail-row">
+          <td></td>
+          <td colspan="8">
+            <div class="detail-grid">
+              <div>
+                <div class="mini-title">Tier reason</div>
+                <div>{{ prospect.tier_reason or "No tier explanation yet." }}</div>
+              </div>
+              <div>
+                <div class="mini-title">Sales angle</div>
+                <div>{{ prospect.recommended_sales_angle or "Manual review" }}</div>
+              </div>
+              <div>
+                <div class="mini-title">Summary</div>
+                <div>{{ prospect.website_summary or "No website summary yet." }}</div>
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </form>
 </section>
 {% endblock %}

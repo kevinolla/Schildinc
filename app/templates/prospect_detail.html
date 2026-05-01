@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-head">
+  <div>
+    <a class="back-link" href="/prospects">Back to prospects</a>
+    <h2>{{ prospect.company_name }}</h2>
+    <p class="muted">{{ prospect.address or (prospect.city ~ ", " ~ prospect.country_code) }}</p>
+  </div>
+  <div class="button-row">
+    <form method="post" action="/admin/prospects/{{ prospect.id }}/discover-email">
+      <button type="submit">Discover Email</button>
+    </form>
+    <form method="post" action="/admin/prospects/{{ prospect.id }}/match">
+      <button type="submit">Re-match</button>
+    </form>
+  </div>
+</section>
+
+<section class="three-col">
+  <div class="card">
+    <h3>Contact discovery</h3>
+    <div class="kv-list">
+      <div><span>Status</span><strong>{{ prospect.email_discovery_status.replace("_", " ") }}</strong></div>
+      <div><span>Best email</span><strong>{{ prospect.email or "-" }}</strong></div>
+      <div><span>Email source</span><strong>{{ prospect.email_source_page or "-" }}</strong></div>
+      <div><span>Confidence</span><strong>{{ prospect.email_confidence or 0 }}/100</strong></div>
+      <div><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></div>
+      <div><span>Instagram</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></div>
+    </div>
+    {% if prospect.discovery_error %}
+    <p class="alert error">{{ prospect.discovery_error }}</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Matching</h3>
+    <div class="kv-list">
+      <div><span>Match result</span><strong>{{ prospect.match_status.value.replace("_", " ") }}</strong></div>
+      <div><span>Method</span><strong>{{ prospect.match_method or "-" }}</strong></div>
+      <div><span>Score</span><strong>{{ prospect.match_score or 0 }}/100</strong></div>
+      <div><span>Matched customer</span><strong>{{ prospect.matched_customer.canonical_company_name if prospect.matched_customer else "-" }}</strong></div>
+      <div><span>Review</span><strong>{{ prospect.review_status.value }}</strong></div>
+      <div><span>Approved</span><strong>{{ "Yes" if prospect.approved_for_outreach else "No" }}</strong></div>
+    </div>
+    {% if prospect.match_reasons %}
+    <pre class="soft-pre">{{ prospect.match_reasons }}</pre>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Bike shop tier</h3>
+    <div class="kv-list">
+      <div><span>Tier</span><strong>{{ prospect.bike_shop_tier }}</strong></div>
+      <div><span>Segment</span><strong>{{ prospect.bike_shop_segment or "-" }}</strong></div>
+      <div><span>Priority</span><strong>{{ prospect.outreach_priority }}</strong></div>
+      <div><span>HQ required</span><strong>{{ "Yes" if prospect.headquarters_required else "No" }}</strong></div>
+      <div><span>Contact type</span><strong>{{ prospect.recommended_contact_type or "-" }}</strong></div>
+      <div><span>Buying group</span><strong>{{ prospect.franchise_or_buying_group or "-" }}</strong></div>
+    </div>
+    <p>{{ prospect.tier_reason or "No tier explanation yet." }}</p>
+    <p class="muted">{{ prospect.recommended_sales_angle or "Manual review recommended." }}</p>
+  </div>
+</section>
+
+<section class="two-col">
+  <div class="card">
+    <h3>Website summary</h3>
+    <p>{{ prospect.website_summary or "No website summary yet." }}</p>
+    <h4>Highlights</h4>
+    <ul class="clean-list">
+      {% for item in prospect.discovery_highlights.split('\n') if item %}
+      <li>{{ item }}</li>
+      {% else %}
+      <li>No highlights captured yet.</li>
+      {% endfor %}
+    </ul>
+    <div class="button-row">
+      {% if prospect.website %}
+      <a class="button-link" href="{{ prospect.website }}" target="_blank" rel="noreferrer">Open website</a>
+      {% endif %}
+      {% if prospect.google_maps_url %}
+      <a class="button-link" href="{{ prospect.google_maps_url }}" target="_blank" rel="noreferrer">Open Google Maps result</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Manual override</h3>
+    <form method="post" action="/admin/prospects/{{ prospect.id }}/override" class="stack-form">
+      <div class="grid-form">
+        <label>
+          <span>Tier</span>
+          <select name="bike_shop_tier">
+            {% for option in tier_options %}
+            <option value="{{ option }}" {% if prospect.bike_shop_tier == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Priority</span>
+          <select name="outreach_priority">
+            {% for option in priority_options %}
+            <option value="{{ option }}" {% if prospect.outreach_priority == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Review state</span>
+          <select name="review_status">
+            {% for option in review_options %}
+            <option value="{{ option }}" {% if prospect.review_status.value == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>HQ required</span>
+          <select name="headquarters_required">
+            <option value="false" {% if not prospect.headquarters_required %}selected{% endif %}>No</option>
+            <option value="true" {% if prospect.headquarters_required %}selected{% endif %}>Yes</option>
+          </select>
+        </label>
+        <label>
+          <span>Approved for outreach</span>
+          <select name="approved_for_outreach">
+            <option value="false" {% if not prospect.approved_for_outreach %}selected{% endif %}>No</option>
+            <option value="true" {% if prospect.approved_for_outreach %}selected{% endif %}>Yes</option>
+          </select>
+        </label>
+      </div>
+      <label>
+        <span>Custom use case</span>
+        <textarea name="custom_use_case" rows="3">{{ prospect.custom_use_case }}</textarea>
+      </label>
+      <label>
+        <span>Proof line</span>
+        <textarea name="proof_line" rows="3">{{ prospect.proof_line }}</textarea>
+      </label>
+      <label>
+        <span>Notes</span>
+        <textarea name="notes" rows="5">{{ prospect.notes }}</textarea>
+      </label>
+      <button type="submit">Save override</button>
+    </form>
+  </div>
+</section>
+
+<section class="card">
+  <div class="section-head">
+    <div>
+      <h3>Outreach drafts</h3>
+      <p class="muted">Email can be queued after approval. LinkedIn and Instagram remain draft-only for manual use.</p>
+    </div>
+  </div>
+  <div class="two-col draft-grid">
+    <div>
+      <label class="draft-label">Email subject</label>
+      <textarea rows="2" readonly>{{ bundle.subject }}</textarea>
+      <label class="draft-label">Email text</label>
+      <textarea rows="18" readonly>{{ bundle.text_body }}</textarea>
+    </div>
+    <div>
+      <label class="draft-label">HTML email preview</label>
+      <div class="email-preview-frame">{{ bundle.html_body|safe }}</div>
+    </div>
+  </div>
+  <div class="three-col top-gap">
+    <div>
+      <label class="draft-label">LinkedIn draft</label>
+      <textarea rows="8" readonly>{{ bundle.linkedin_text }}</textarea>
+    </div>
+    <div>
+      <label class="draft-label">Instagram draft</label>
+      <textarea rows="8" readonly>{{ bundle.instagram_text }}</textarea>
+    </div>
+    <div>
+      <label class="draft-label">Contact-form-safe draft</label>
+      <textarea rows="8" readonly>{{ bundle.contact_form_text }}</textarea>
+    </div>
+  </div>
+  <div class="top-gap">
+    <label class="draft-label">Follow-up after 5 business days</label>
+    <textarea rows="10" readonly>{{ bundle.follow_up_subject }}&#10;&#10;{{ bundle.follow_up_text }}</textarea>
+  </div>
+</section>
+
+<section class="two-col">
+  <div class="card table-card">
+    <h3>Recent queue items</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Channel</th>
+          <th>State</th>
+          <th>Subject</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in recent_queue %}
+        <tr>
+          <td>{{ item.queue_date }}</td>
+          <td>{{ item.channel }}</td>
+          <td>{{ item.state.value }}</td>
+          <td>{{ item.subject }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="muted">No queue items yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card table-card">
+    <h3>Activity log</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Action</th>
+          <th>Status</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in recent_logs %}
+        <tr>
+          <td>{{ log.created_at }}</td>
+          <td>{{ log.action_type }}</td>
+          <td>{{ log.status }}</td>
+          <td>{{ log.detail }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="muted">No activity logged yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

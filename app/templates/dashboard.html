@@ -1,30 +1,57 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="stats-grid">
-  <div class="card"><span>Customers</span><strong>{{ stats.customer_count }}</strong></div>
-  <div class="card"><span>Prospects</span><strong>{{ stats.prospect_count }}</strong></div>
-  <div class="card"><span>Existing matches</span><strong>{{ stats.existing_match_count }}</strong></div>
-  <div class="card"><span>New prospects</span><strong>{{ stats.new_prospect_count }}</strong></div>
-  <div class="card"><span>Pending review</span><strong>{{ stats.pending_review_count }}</strong></div>
-  <div class="card"><span>Queued today</span><strong>{{ stats.queued_today_count }}</strong></div>
-  <div class="card"><span>Sent today</span><strong>{{ stats.sent_today_count }}/{{ stats.daily_send_limit }}</strong></div>
-  <div class="card"><span>Suppressed</span><strong>{{ stats.suppression_count }}</strong></div>
+  <div class="card stat-card"><span>Customers</span><strong>{{ stats.customer_count }}</strong></div>
+  <div class="card stat-card"><span>Prospects</span><strong>{{ stats.prospect_count }}</strong></div>
+  <div class="card stat-card"><span>Existing matches</span><strong>{{ stats.existing_match_count }}</strong></div>
+  <div class="card stat-card"><span>New prospects</span><strong>{{ stats.new_prospect_count }}</strong></div>
+  <div class="card stat-card"><span>Emails found</span><strong>{{ stats.discovered_email_count }}</strong></div>
+  <div class="card stat-card"><span>High priority</span><strong>{{ stats.high_priority_count }}</strong></div>
+  <div class="card stat-card"><span>Queued today</span><strong>{{ stats.queued_today_count }}</strong></div>
+  <div class="card stat-card"><span>Sent today</span><strong>{{ stats.sent_today_count }}/{{ stats.daily_send_limit }}</strong></div>
 </section>
 
 <section class="two-col">
   <div class="card">
     <h3>Import customer master</h3>
-    <form method="post" action="/admin/import/customers" enctype="multipart/form-data">
+    <form method="post" action="/admin/import/customers" enctype="multipart/form-data" class="stack-form">
       <input type="file" name="file" accept=".csv" required>
       <button type="submit">Upload normalized_customer_master.csv</button>
     </form>
   </div>
   <div class="card">
     <h3>Import invoice history</h3>
-    <form method="post" action="/admin/import/invoices" enctype="multipart/form-data">
+    <form method="post" action="/admin/import/invoices" enctype="multipart/form-data" class="stack-form">
       <input type="file" name="file" accept=".csv" required>
       <button type="submit">Upload normalized_invoice_history.csv</button>
     </form>
+  </div>
+</section>
+
+<section class="three-col">
+  <div class="card">
+    <h3>What stays protected</h3>
+    <ul class="clean-list">
+      <li>Existing customers stay blocked by domain, email, and name matching.</li>
+      <li>Replies always go to <strong>sales@schildinc.com</strong>.</li>
+      <li>No social auto-messaging. LinkedIn and Instagram are draft-only.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Discovery workflow</h3>
+    <ul class="clean-list">
+      <li>Import or search Google Maps prospects.</li>
+      <li>Run public website discovery for visible email and socials.</li>
+      <li>Review tier, match result, and queue approval.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Outreach controls</h3>
+    <ul class="clean-list">
+      <li>Daily send limit and send window stay enforced.</li>
+      <li>Cooldown blocks repeat sends too quickly.</li>
+      <li>Queue preview gives a dry-run view before sending.</li>
+    </ul>
   </div>
 </section>
 {% endblock %}

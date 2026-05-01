@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-head">
+  <div>
+    <a class="back-link" href="/queue?queue_date={{ today.isoformat() }}">Back to queue</a>
+    <h2>Queue preview for {{ today.isoformat() }}</h2>
+    <p class="muted">Dry run only. This page does not send anything.</p>
+  </div>
+  <div class="button-row">
+    <a class="button-link" href="/queue/export.csv?queue_date={{ today.isoformat() }}">Export queue CSV</a>
+  </div>
+</section>
+
+{% for item in preview_items %}
+<section class="card preview-card">
+  <div class="section-head">
+    <div>
+      <h3>{{ item.prospect.company_name }}</h3>
+      <p class="muted">{{ item.prospect.email }} | {{ item.prospect.bike_shop_tier }} | {{ item.prospect.outreach_priority }}</p>
+    </div>
+    <a class="button-link" href="/prospects/{{ item.prospect.id }}">Open prospect</a>
+  </div>
+  <div class="two-col draft-grid">
+    <div>
+      <label class="draft-label">Subject</label>
+      <textarea rows="2" readonly>{{ item.bundle.subject }}</textarea>
+      <label class="draft-label">Text email</label>
+      <textarea rows="16" readonly>{{ item.bundle.text_body }}</textarea>
+    </div>
+    <div>
+      <label class="draft-label">HTML email</label>
+      <div class="email-preview-frame">{{ item.bundle.html_body|safe }}</div>
+    </div>
+  </div>
+</section>
+{% else %}
+<section class="card">
+  <p class="muted">No approved queue candidates available for preview yet.</p>
+</section>
+{% endfor %}
+{% endblock %}
