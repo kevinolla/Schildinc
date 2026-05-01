@@ -1,6 +1,6 @@
 """Add prospect discovery, tiering, and richer outreach fields
 
-Revision ID: 0002_prospect_discovery_and_tiering
+Revision ID: 0002_discovery_tier
 Revises: 0001_initial_schema
 Create Date: 2026-05-01 00:00:01
 """
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0002_prospect_discovery_and_tiering"
+revision = "0002_discovery_tier"
 down_revision = "0001_initial_schema"
 branch_labels = None
 depends_on = None
