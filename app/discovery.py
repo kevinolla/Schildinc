@@ -4,7 +4,7 @@ import re
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -34,6 +34,9 @@ LIKELY_PATH_KEYWORDS = [
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+SOCIAL_URL_PATTERN = re.compile(r"https?://(?:www\.)?(instagram\.com/[^\s\"'<>]+|linkedin\.com/[^\s\"'<>]+)", re.I)
+MAILTO_PATTERN = re.compile(r"mailto:([^\"'<>?\s]+)", re.I)
+JSON_EMAIL_PATTERN = re.compile(r'"email"\s*:\s*"([^"]+@[^"]+)"', re.I)
 
 
 @dataclass
@@ -178,14 +181,20 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
         body_text = page.locator("body").inner_text()
     except PlaywrightError:
         body_text = ""
+    try:
+        raw_html = page.content()
+    except PlaywrightError:
+        raw_html = ""
     headings = page.locator("h1, h2, h3").all_inner_texts()
     footer_bits = _collect_visible_section_text(page, "footer, [class*='footer'], [id*='footer']")
     contact_bits = _collect_visible_section_text(page, "[class*='contact'], [id*='contact'], [class*='about'], [id*='about']")
     meta_text = _read_meta_description(page)
     structured_data = _extract_structured_data(page)
+    raw_source = _extract_public_source_data(raw_html)
     visible_text = " ".join([body_text, *headings, *footer_bits, *contact_bits, meta_text])
     emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(visible_text)}
     emails.update(structured_data["emails"])
+    emails.update(raw_source["emails"])
     for item in links:
         href = item.get("href", "") or ""
         text = " ".join([item.get("text", "") or "", item.get("label", "") or "", item.get("title", "") or ""]).strip()
@@ -208,6 +217,8 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
             internal_links.append(href)
     social_linkedin.extend(structured_data["linkedin"])
     social_instagram.extend(structured_data["instagram"])
+    social_linkedin.extend(raw_source["linkedin"])
+    social_instagram.extend(raw_source["instagram"])
 
     snippets = [clean_snippet(text) for text in headings if clean_snippet(text)]
     snippets.extend(clean_snippet(line) for line in body_text.split("\n")[:8] if clean_snippet(line))
@@ -375,6 +386,26 @@ def _collect_social_from_string(value: object, linkedin_links: list[str], instag
         linkedin_links.append(link)
     elif "instagram.com" in lower:
         instagram_links.append(link)
+
+
+def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
+    text = raw_html or ""
+    emails = [normalize_email(unquote(match.group(1))) for match in MAILTO_PATTERN.finditer(text)]
+    emails.extend(normalize_email(match.group(1)) for match in JSON_EMAIL_PATTERN.finditer(text))
+
+    linkedin_links: list[str] = []
+    instagram_links: list[str] = []
+    for match in SOCIAL_URL_PATTERN.finditer(text):
+        href = match.group(0)
+        if "linkedin.com" in href.lower():
+            linkedin_links.append(href)
+        elif "instagram.com" in href.lower():
+            instagram_links.append(href)
+    return {
+        "emails": _dedupe([item for item in emails if item]),
+        "linkedin": _dedupe(linkedin_links),
+        "instagram": _dedupe(instagram_links),
+    }
 
 
 def _summarize_snippets(snippets: list[str]) -> str:
