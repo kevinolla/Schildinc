@@ -438,6 +438,10 @@ button[disabled] {
   margin-top: 8px;
 }
 
+.compact-list li + li {
+  margin-top: 4px;
+}
+
 .kv-list {
   display: grid;
   gap: 12px;
@@ -524,6 +528,10 @@ pre {
 
 .top-gap {
   margin-top: 18px;
+}
+
+.top-gap-small {
+  margin-top: 8px;
 }
 
 @media (max-width: 840px) {

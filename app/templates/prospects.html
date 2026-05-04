@@ -101,6 +101,10 @@
                 <li><span>Instagram</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
                 <li><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
               </ul>
+              {% set extra_emails = prospect.emails_found.split('|')|select|list %}
+              {% if extra_emails|length > 1 %}
+              <div class="muted top-gap-small">{{ extra_emails|length }} public emails found</div>
+              {% endif %}
             </div>
 
             <div class="info-box">

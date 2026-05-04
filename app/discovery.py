@@ -21,6 +21,7 @@ LIKELY_PATH_KEYWORDS = [
     "contact",
     "about",
     "about-us",
+    "over-ons",
     "contact-us",
     "impressum",
     "legal",
@@ -30,7 +31,18 @@ LIKELY_PATH_KEYWORDS = [
     "support",
     "service",
     "customer-service",
+    "customer-care",
+    "team",
+    "shop",
+    "repair",
+    "reparatie",
+    "verhuur",
+    "winkel",
+    "company",
+    "solutions",
 ]
+MAX_CRAWL_PAGES = 12
+MAX_QUEUE_LINKS = 20
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
@@ -61,6 +73,8 @@ class DiscoveryResult:
     email: str
     source_page: str
     confidence: int
+    emails_found: list[str]
+    pages_scanned: list[str]
     whatsapp_number: str
     whatsapp_url: str
     linkedin_url: str
@@ -78,6 +92,8 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
             "",
             "",
             0,
+            [],
+            [],
             prospect.whatsapp_number or "",
             prospect.whatsapp_url or "",
             prospect.linkedin_url or "",
@@ -105,10 +121,9 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
             page = browser.new_page(ignore_https_errors=True)
             page.set_default_timeout(settings.playwright_timeout_ms)
 
-            pages_to_visit = [website]
-            pages_to_visit.extend(_build_likely_urls(website))
+            pages_to_visit = _seed_pages_to_visit(website)
 
-            while pages_to_visit and len(visited) < 6:
+            while pages_to_visit and len(visited) < MAX_CRAWL_PAGES:
                 target = pages_to_visit.pop(0)
                 if target in visited:
                     continue
@@ -133,12 +148,12 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                 snippets.extend(page_info["snippets"])
 
                 for href in page_info["internal_links"]:
-                    if href not in visited and href not in pages_to_visit and len(pages_to_visit) < 8:
+                    if href not in visited and href not in pages_to_visit and len(pages_to_visit) < MAX_QUEUE_LINKS:
                         pages_to_visit.append(href)
 
             browser.close()
     except Exception as exc:  # noqa: BLE001
-        result = DiscoveryResult("error", "", "", 0, "", "", "", "", "", [], str(exc))
+        result = DiscoveryResult("error", "", "", 0, [], [], "", "", "", "", [], str(exc))
         _apply_discovery_result(session, prospect, result)
         return result
 
@@ -153,6 +168,8 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
         email=best.email if best else "",
         source_page=best.source_page if best else "",
         confidence=best.confidence if best else 0,
+        emails_found=_dedupe([item.email for item in sorted(email_candidates, key=lambda item: (-item.confidence, item.email))]),
+        pages_scanned=visited,
         whatsapp_number=best_whatsapp_number,
         whatsapp_url=best_whatsapp_url,
         linkedin_url=_pick_social_link(linkedin_links),
@@ -169,6 +186,8 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
     prospect.discovery_error = result.error
     prospect.website_summary = result.summary or prospect.website_summary
     prospect.discovery_highlights = "\n".join(result.highlights[:4])
+    prospect.emails_found = "|".join(result.emails_found[:20])
+    prospect.pages_scanned = "|".join(result.pages_scanned[:20])
     if result.whatsapp_number:
         prospect.whatsapp_number = result.whatsapp_number
     if result.whatsapp_url:
@@ -227,9 +246,10 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
     meta_text = _read_meta_description(page)
     structured_data = _extract_structured_data(page)
     raw_source = _extract_public_source_data(raw_html)
-    visible_text = " ".join([body_text, *headings, *footer_bits, *contact_bits, meta_text])
-    emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(visible_text)}
-    emails.update(_extract_obfuscated_visible_emails(visible_text))
+    readable_text = _extract_readable_text(raw_html)
+    combined_text = " ".join([body_text, readable_text, *headings, *footer_bits, *contact_bits, meta_text])
+    emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(combined_text)}
+    emails.update(_extract_obfuscated_visible_emails(combined_text))
     emails.update(structured_data["emails"])
     emails.update(raw_source["emails"])
     for item in links:
@@ -245,8 +265,10 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
     whatsapp_urls = []
     social_linkedin = []
     social_instagram = []
+    raw_internal_links = []
     for item in links:
         href = item.get("href", "") or ""
+        anchor_text = item.get("text", "") or ""
         label_text = " ".join([item.get("text", "") or "", item.get("label", "") or "", item.get("title", "") or ""]).lower()
         href_lower = href.lower()
         if _is_whatsapp_url(href):
@@ -258,13 +280,16 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
             social_linkedin.append(href)
         elif "instagram.com" in href_lower or "instagram" in label_text:
             social_instagram.append(href)
-        elif _is_likely_internal_follow_link(href, current_url):
-            internal_links.append(href)
+        else:
+            normalized_link = _normalize_internal_link(href, current_url)
+            if normalized_link:
+                raw_internal_links.append({"url": normalized_link, "anchor_text": anchor_text})
         if "whatsapp" in label_text and item.get("text"):
             whatsapp_text_number = _normalize_phone_like_value(item.get("text", ""))
             if whatsapp_text_number:
                 whatsapp_numbers.append(whatsapp_text_number)
-    whatsapp_numbers.extend(_extract_visible_whatsapp_numbers(visible_text))
+    internal_links = _prioritize_internal_links(raw_internal_links, current_url)
+    whatsapp_numbers.extend(_extract_visible_whatsapp_numbers(combined_text))
     whatsapp_numbers.extend(raw_source["whatsapp_numbers"])
     whatsapp_urls.extend(raw_source["whatsapp"])
     social_linkedin.extend(structured_data["linkedin"])
@@ -273,7 +298,7 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
     social_instagram.extend(raw_source["instagram"])
 
     snippets = [clean_snippet(text) for text in headings if clean_snippet(text)]
-    snippets.extend(clean_snippet(line) for line in body_text.split("\n")[:8] if clean_snippet(line))
+    snippets.extend(clean_snippet(line) for line in readable_text.split(". ")[:8] if clean_snippet(line))
     snippets.extend(clean_snippet(line) for line in footer_bits[:3] if clean_snippet(line))
     if meta_text:
         snippets.append(clean_snippet(meta_text))
@@ -282,7 +307,7 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
         "emails": sorted(emails),
         "whatsapp_numbers": _dedupe([item for item in whatsapp_numbers if item]),
         "whatsapp_urls": _dedupe([item for item in whatsapp_urls if item]),
-        "internal_links": _dedupe(internal_links),
+        "internal_links": internal_links,
         "linkedin": _dedupe(social_linkedin),
         "instagram": _dedupe(social_instagram),
         "snippets": _dedupe([item for item in snippets if item]),
@@ -341,15 +366,65 @@ def _build_likely_urls(website: str) -> list[str]:
     return [urljoin(root + "/", path) for path in LIKELY_PATH_KEYWORDS]
 
 
-def _is_likely_internal_follow_link(href: str, current_url: str) -> bool:
-    if not href or href.startswith(("mailto:", "tel:", "#")):
-        return False
+def _seed_pages_to_visit(website: str) -> list[str]:
+    ordered = [website]
+    for link in _build_likely_urls(website):
+        if link not in ordered:
+            ordered.append(link)
+    return ordered
+
+
+def _normalize_internal_link(href: str, current_url: str) -> str:
+    if not href or href.startswith(("mailto:", "tel:", "#", "javascript:")):
+        return ""
     current = urlparse(current_url)
-    target = urlparse(href)
+    try:
+        target = urlparse(urljoin(current_url, href))
+    except ValueError:
+        return ""
     if target.netloc and normalize_domain(target.netloc) != normalize_domain(current.netloc):
-        return False
-    haystack = href.lower()
-    return any(keyword in haystack for keyword in LIKELY_PATH_KEYWORDS)
+        return ""
+    if re.search(r"\.(pdf|jpg|jpeg|png|gif|svg|webp|zip)$", target.path, re.I):
+        return ""
+    target = target._replace(fragment="", query=target.query)
+    return target.geturl()
+
+
+def _prioritize_internal_links(links: list[dict[str, str]], base_url: str) -> list[str]:
+    base = _normalize_internal_link(base_url, base_url)
+    seen: set[str] = set()
+    scored: list[tuple[int, str]] = []
+    priorities = [
+        ("contact", 12),
+        ("about", 9),
+        ("over", 9),
+        ("team", 8),
+        ("service", 8),
+        ("shop", 7),
+        ("repair", 7),
+        ("reparatie", 7),
+        ("verhuur", 7),
+        ("winkel", 7),
+        ("company", 6),
+        ("solutions", 6),
+        ("faq", 4),
+    ]
+    for link in links:
+        url = str(link.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        haystack = f"{url.lower()} {(link.get('anchor_text') or '').lower()}"
+        score = 0
+        for keyword, points in priorities:
+            if keyword in haystack:
+                score += points
+        if url.rstrip("/") == str(base).rstrip("/"):
+            score -= 20
+        if score > 0:
+            scored.append((score, url))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [url for _, url in scored[:MAX_QUEUE_LINKS]]
 
 
 def _pick_social_link(links: list[str]) -> str:
@@ -484,6 +559,25 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(value)
             output.append(value)
     return output
+
+
+def _extract_readable_text(html: str) -> str:
+    raw = str(html or "")
+    without_scripts = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
+    without_scripts = re.sub(r"<style[\s\S]*?</style>", " ", without_scripts, flags=re.I)
+    without_scripts = re.sub(r"<noscript[\s\S]*?</noscript>", " ", without_scripts, flags=re.I)
+    meta_descriptions = [match.group(1) for match in re.finditer(r"<meta[^>]+name=[\"']description[\"'][^>]+content=[\"']([^\"']+)[\"'][^>]*>", raw, re.I)]
+    titles = [match.group(2) for match in re.finditer(r"<(title|h1|h2|h3|h4)[^>]*>([\s\S]*?)</\1>", raw, re.I)]
+    paragraphs = [match.group(2) for match in re.finditer(r"<(p|li)[^>]*>([\s\S]*?)</\1>", without_scripts, re.I)]
+    text = " ".join([*meta_descriptions, *titles, *paragraphs])
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = (
+        text.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+    )
+    return " ".join(text.split()).strip()
 
 
 def _extract_obfuscated_visible_emails(text: str) -> list[str]:

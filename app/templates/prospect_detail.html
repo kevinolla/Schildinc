@@ -26,6 +26,16 @@
       <li><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
       <li><span>Phone</span><strong>{{ prospect.phone or "-" }}</strong></li>
     </ul>
+    <div class="top-gap">
+      <label class="draft-label">All emails found</label>
+      <ul class="clean-list compact-list">
+        {% for email in prospect.emails_found.split('|') if email %}
+        <li>{{ email }}</li>
+        {% else %}
+        <li>No public email list stored yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
     <div class="kv-list top-gap">
       <div><span>Status</span><strong>{{ prospect.email_discovery_status.replace("_", " ") }}</strong></div>
       <div><span>Email source</span><strong>{{ prospect.email_source_page or "-" }}</strong></div>
@@ -76,6 +86,14 @@
       <li>{{ item }}</li>
       {% else %}
       <li>No highlights captured yet.</li>
+      {% endfor %}
+    </ul>
+    <h4>Pages scanned</h4>
+    <ul class="clean-list compact-list">
+      {% for page in prospect.pages_scanned.split('|') if page %}
+      <li>{{ page }}</li>
+      {% else %}
+      <li>No page crawl list stored yet.</li>
       {% endfor %}
     </ul>
     <div class="button-row">

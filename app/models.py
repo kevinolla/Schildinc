@@ -122,6 +122,8 @@ class Prospect(Base):
     email_source_page: Mapped[str] = mapped_column(Text, default="")
     email_confidence: Mapped[int] = mapped_column(Integer, default=0, index=True)
     email_discovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    emails_found: Mapped[str] = mapped_column(Text, default="")
+    pages_scanned: Mapped[str] = mapped_column(Text, default="")
     whatsapp_number: Mapped[str] = mapped_column(Text, default="")
     whatsapp_url: Mapped[str] = mapped_column(Text, default="")
     website: Mapped[str] = mapped_column(Text, default="")
