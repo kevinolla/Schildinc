@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
+from app.discovery import ensure_prospect_contacts
 from app.models import EmailLog, MatchStatus, OutreachQueueItem, Prospect, ProspectActivityLog, ProspectState, QueueState, SuppressionEntry
 from app.outreach_templates import OutreachBundle, build_outreach_bundle
 from app.utils import build_unsubscribe_token, email_domain, normalize_email, within_send_window
@@ -98,6 +99,7 @@ def build_queue_for_day(session: Session, queue_day: date, limit: int | None = N
         )
         .order_by(Prospect.updated_at.desc())
     ).all()
+    _auto_refresh_candidates(session, candidates)
     candidates = sorted(candidates, key=lambda item: (PRIORITY_ORDER.get(item.outreach_priority or "Manual Review", 9), item.company_name.lower()))
 
     created = 0
@@ -155,6 +157,7 @@ def preview_queue_for_day(session: Session, queue_day: date, limit: int | None =
         )
         .order_by(Prospect.updated_at.desc())
     ).all()
+    _auto_refresh_candidates(session, candidates)
     ordered = sorted(candidates, key=lambda item: (PRIORITY_ORDER.get(item.outreach_priority or "Manual Review", 9), item.company_name.lower()))
     previews: list[QueuePreviewItem] = []
     for prospect in ordered:
@@ -191,6 +194,18 @@ def export_queue_csv(session: Session, queue_day: date) -> str:
             ]
         )
     return output.getvalue()
+
+
+def _auto_refresh_candidates(session: Session, candidates: list[Prospect]) -> int:
+    if not settings.auto_contact_discovery_enabled:
+        return 0
+    refreshed = 0
+    for prospect in candidates:
+        if refreshed >= settings.auto_contact_refresh_batch_size:
+            break
+        if ensure_prospect_contacts(session, prospect):
+            refreshed += 1
+    return refreshed
 
 
 def append_unsubscribe_footer(text_body: str, html_body: str, to_email: str) -> tuple[str, str, str]:

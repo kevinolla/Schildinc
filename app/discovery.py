@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from playwright.sync_api import Error as PlaywrightError
@@ -181,6 +181,48 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
     return result
 
 
+def prospect_needs_contact_refresh(prospect: Prospect) -> bool:
+    if not settings.auto_contact_discovery_enabled:
+        return False
+    if not (prospect.website or "").strip():
+        return False
+    if prospect.email_discovery_status in {"not_started", "error", "no_website"}:
+        return True
+    if not any(
+        [
+            (prospect.email or "").strip(),
+            (prospect.whatsapp_number or "").strip(),
+            (prospect.instagram_url or "").strip(),
+            (prospect.linkedin_url or "").strip(),
+        ]
+    ):
+        return True
+    if not (prospect.pages_scanned or "").strip():
+        return True
+    if not (prospect.emails_found or "").strip() and not (prospect.email or "").strip():
+        return True
+
+    latest = _latest_discovery_at(prospect)
+    if latest is None:
+        return True
+    updated = _coerce_utc(prospect.updated_at)
+    if updated and updated > latest:
+        return True
+    if prospect.email_discovery_status in {"partial", "no_contacts"}:
+        now = datetime.now(timezone.utc)
+        age_days = max(0, (now - latest).days)
+        if age_days >= settings.auto_contact_refresh_days:
+            return True
+    return False
+
+
+def ensure_prospect_contacts(session: Session, prospect: Prospect, force: bool = False) -> bool:
+    if force or prospect_needs_contact_refresh(prospect):
+        discover_public_contacts_for_prospect(session, prospect)
+        return True
+    return False
+
+
 def _apply_discovery_result(session: Session, prospect: Prospect, result: DiscoveryResult) -> None:
     prospect.email_discovery_status = result.status
     prospect.discovery_error = result.error
@@ -220,6 +262,23 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
             detail=result.error or _build_discovery_log_detail(result),
         )
     )
+
+
+def _latest_discovery_at(prospect: Prospect) -> datetime | None:
+    candidates = [
+        _coerce_utc(prospect.email_discovered_at),
+        _coerce_utc(prospect.social_discovered_at),
+    ]
+    present = [item for item in candidates if item is not None]
+    return max(present) if present else None
+
+
+def _coerce_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _extract_visible_page_info(page, current_url: str) -> dict:

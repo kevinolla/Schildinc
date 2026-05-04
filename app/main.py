@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.db import get_db
-from app.discovery import discover_public_contacts_for_prospect
+from app.discovery import discover_public_contacts_for_prospect, ensure_prospect_contacts
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
 from app.google_places import place_to_prospect_record, search_google_places
 from app.importers import read_csv_upload, upsert_customers_from_dataframe, upsert_invoices_from_dataframe, upsert_prospects_from_dataframe
@@ -394,6 +394,8 @@ def review_prospect(
     if action == "approve":
         prospect.review_status = ProspectState.approved
         prospect.approved_for_outreach = prospect.match_status == MatchStatus.new_prospect
+        if prospect.approved_for_outreach:
+            ensure_prospect_contacts(db, prospect)
     elif action == "reject":
         prospect.review_status = ProspectState.rejected
         prospect.approved_for_outreach = False
@@ -475,6 +477,8 @@ def queue_page(
         .limit(300)
     ).all()
     preview_items = preview_queue_for_day(db, selected_day)
+    if settings.auto_contact_discovery_enabled:
+        db.commit()
     return templates.TemplateResponse(
         request,
         "queue.html",
@@ -502,6 +506,8 @@ def queue_preview_page(
 ) -> HTMLResponse:
     selected_day = date.fromisoformat(queue_date) if queue_date else date.today()
     preview_items = preview_queue_for_day(db, selected_day)
+    if settings.auto_contact_discovery_enabled:
+        db.commit()
     return templates.TemplateResponse(
         request,
         "queue_preview.html",
