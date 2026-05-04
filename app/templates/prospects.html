@@ -1,36 +1,49 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="two-col">
-  <div class="card">
-    <h3>Import prospect CSV</h3>
-    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="stack-form">
-      <input type="file" name="file" accept=".csv" required>
-      <button type="submit">Upload Google Maps prospect list</button>
-    </form>
-  </div>
-  <div class="card">
-    <h3>Search Google Maps</h3>
+  <div class="card compact-card">
+    <div class="section-head">
+      <div>
+        <h3>Search Google Maps</h3>
+        <p class="muted">Fastest way to add new bike-shop prospects.</p>
+      </div>
+    </div>
     <form method="post" action="/admin/google-places-search" class="grid-form">
       <input name="query" placeholder="bike stores with repair service" required>
       <input name="location" placeholder="Netherlands">
-      <input type="number" name="limit" value="10" min="1" max="25">
-      <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search and import</button>
+      <div class="button-row">
+        <input class="input-small" type="number" name="limit" value="10" min="1" max="25">
+        <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search and import</button>
+      </div>
     </form>
     {% if not google_places_enabled %}
-    <p class="muted">Set GOOGLE_PLACES_API_KEY to enable live Google Maps import.</p>
+    <p class="muted top-gap-small">Set `GOOGLE_PLACES_API_KEY` to enable live search.</p>
     {% endif %}
+  </div>
+
+  <div class="card compact-card">
+    <div class="section-head">
+      <div>
+        <h3>Upload prospect CSV</h3>
+        <p class="muted">Use this when you already have a curated list to review.</p>
+      </div>
+    </div>
+    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="stack-form">
+      <input type="file" name="file" accept=".csv" required>
+      <button type="submit">Upload prospect list</button>
+    </form>
   </div>
 </section>
 
-<section class="card">
+<section class="card compact-card">
   <div class="section-head">
     <div>
-      <h3>Prospect filters</h3>
-      <p class="muted">Simple flow: find contacts, check fit, approve good non-customers, then open details only when you need a closer look.</p>
+      <h3>Prospect workflow</h3>
+      <p class="muted">1. Find contacts  2. Check customer match and fit  3. Approve only good new prospects  4. Move to queue</p>
     </div>
   </div>
   <form method="get" action="/prospects" class="grid-form">
-    <input name="search" value="{{ search }}" placeholder="Search company, website, city, or email">
+    <input name="search" value="{{ search }}" placeholder="Search company, city, website, email">
     <select name="match_filter">
       <option value="">All match results</option>
       {% for option in match_options %}
@@ -44,7 +57,7 @@
       {% endfor %}
     </select>
     <select name="tier_filter">
-      <option value="">All bike shop tiers</option>
+      <option value="">All tiers</option>
       {% for option in tier_options %}
       <option value="{{ option }}" {% if tier_filter == option %}selected{% endif %}>{{ option }}</option>
       {% endfor %}
@@ -63,17 +76,17 @@
     <div class="section-head">
       <div>
         <h2>Prospects</h2>
-        <p class="muted">The crawler looks only for public contact channels on the business website: email, WhatsApp, Instagram, and LinkedIn. Existing customers stay blocked from outreach.</p>
+        <p class="muted">The crawler checks public website pages for business email, WhatsApp, Instagram, and LinkedIn. Existing customers stay blocked.</p>
       </div>
       <div class="button-row">
         <button type="submit">Find contacts for selected</button>
-        <a class="button-link button-link-muted" href="/prospects">Reset</a>
+        <a class="button-link button-link-muted" href="/queue">Open queue</a>
       </div>
     </div>
 
-    <div class="prospect-list">
+    <div class="prospect-list prospect-list-compact">
       {% for prospect in prospects %}
-      <article class="prospect-card">
+      <article class="prospect-card prospect-card-compact">
         <div class="prospect-select">
           <input type="checkbox" name="selected_ids" value="{{ prospect.id }}" aria-label="Select {{ prospect.company_name }}">
         </div>
@@ -81,7 +94,7 @@
         <div class="prospect-main">
           <div class="prospect-head">
             <div>
-              <a class="table-title prospect-name" href="/prospects/{{ prospect.id }}">{{ prospect.company_name }}</a>
+              <a class="table-title prospect-name compact" href="/prospects/{{ prospect.id }}">{{ prospect.company_name }}</a>
               <div class="muted">{{ prospect.city or "-" }}, {{ prospect.country_code or "-" }}</div>
               <div class="muted">{{ prospect.website_domain or prospect.website or "-" }}</div>
             </div>
@@ -92,67 +105,44 @@
             </div>
           </div>
 
-          <div class="prospect-info-grid">
-            <div class="info-box">
-              <div class="mini-title">Contacts found</div>
-              <ul class="contact-list">
-                <li><span>Email</span><strong>{{ prospect.email or "-" }}</strong></li>
-                <li><span>WhatsApp</span><strong>{% if prospect.whatsapp_number %}<a href="{{ prospect.whatsapp_url or ('https://wa.me/' ~ prospect.whatsapp_number|replace('+', '')) }}" target="_blank" rel="noreferrer">{{ prospect.whatsapp_number }}</a>{% else %}-{% endif %}</strong></li>
-                <li><span>Instagram</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
-                <li><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
-              </ul>
-              {% set extra_emails = prospect.emails_found.split('|')|select|list %}
-              {% if extra_emails|length > 1 %}
-              <div class="muted top-gap-small">{{ extra_emails|length }} public emails found</div>
-              {% endif %}
+          <div class="channel-strip">
+            <div class="channel-chip">
+              <span>Email</span>
+              <strong>{{ prospect.email or "-" }}</strong>
             </div>
-
-            <div class="info-box">
-              <div class="mini-title">Crawler status</div>
-              <div class="info-value">{{ prospect.email_discovery_status.replace("_", " ") }}</div>
-              <div class="muted">Confidence {{ prospect.email_confidence or 0 }}/100</div>
-              {% if prospect.email_discovered_at %}
-              <div class="muted">{{ prospect.email_discovered_at }}</div>
-              {% endif %}
-              {% if prospect.email_source_page %}
-              <div class="muted">Email source: {{ prospect.email_source_page }}</div>
-              {% endif %}
+            <div class="channel-chip">
+              <span>WhatsApp</span>
+              <strong>{% if prospect.whatsapp_number %}<a href="{{ prospect.whatsapp_url or ('https://wa.me/' ~ prospect.whatsapp_number|replace('+', '')) }}" target="_blank" rel="noreferrer">{{ prospect.whatsapp_number }}</a>{% else %}-{% endif %}</strong>
             </div>
-
-            <div class="info-box">
-              <div class="mini-title">Phone and web</div>
-              <div class="info-value">{{ prospect.phone or "No phone in source" }}</div>
-              {% if prospect.website %}
-              <div class="muted"><a href="{{ prospect.website }}" target="_blank" rel="noreferrer">Open website</a></div>
-              {% endif %}
-              {% if prospect.google_maps_url %}
-              <div class="muted"><a href="{{ prospect.google_maps_url }}" target="_blank" rel="noreferrer">Open Google Maps result</a></div>
-              {% endif %}
+            <div class="channel-chip">
+              <span>Instagram</span>
+              <strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong>
             </div>
-
-            <div class="info-box">
-              <div class="mini-title">Sales view</div>
-              <div class="info-value">{{ prospect.outreach_priority }}</div>
-              <div class="muted">{{ prospect.recommended_contact_type or "Manual review" }}</div>
-              {% if prospect.headquarters_required %}
-              <div class="muted">Head office route needed</div>
-              {% endif %}
+            <div class="channel-chip">
+              <span>LinkedIn</span>
+              <strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong>
             </div>
           </div>
 
-          <div class="prospect-summary-row">
-            <div>
-              <div class="mini-title">Why this tier</div>
-              <div>{{ prospect.tier_reason or "No tier explanation yet." }}</div>
-            </div>
-            <div>
-              <div class="mini-title">What to say</div>
-              <div>{{ prospect.recommended_sales_angle or "Open the detail page for a closer review." }}</div>
-            </div>
+          <div class="meta-strip">
+            <div><span>Status</span><strong>{{ prospect.email_discovery_status.replace("_", " ") }}</strong></div>
+            <div><span>Confidence</span><strong>{{ prospect.email_confidence or 0 }}/100</strong></div>
+            <div><span>Priority</span><strong>{{ prospect.outreach_priority }}</strong></div>
+            <div><span>Contact route</span><strong>{{ prospect.recommended_contact_type or "Manual review" }}</strong></div>
+          </div>
+
+          <div class="prospect-summary-inline">
+            <div><strong>Fit:</strong> {{ prospect.tier_reason or "No fit explanation yet." }}</div>
+            {% if prospect.website_summary %}
+            <div><strong>Website:</strong> {{ prospect.website_summary }}</div>
+            {% endif %}
+            {% if prospect.email_source_page %}
+            <div><strong>Email source:</strong> {{ prospect.email_source_page }}</div>
+            {% endif %}
           </div>
         </div>
 
-        <div class="prospect-actions">
+        <div class="prospect-actions prospect-actions-inline">
           <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/discover-email">Find contacts</button>
           <button
             type="submit"

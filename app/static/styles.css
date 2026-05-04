@@ -1,7 +1,7 @@
 body {
   margin: 0;
   font-family: Inter, Arial, sans-serif;
-  background: #f5f7fb;
+  background: #f3f5f9;
   color: #17202a;
 }
 
@@ -14,9 +14,12 @@ a {
   justify-content: space-between;
   gap: 24px;
   align-items: flex-start;
-  padding: 24px 32px;
+  padding: 20px 32px;
   background: #ffffff;
   border-bottom: 1px solid #dfe5ef;
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
 .topbar-copy {
@@ -46,7 +49,7 @@ a {
 }
 
 .page-shell {
-  padding: 24px 32px 40px;
+  padding: 20px 32px 40px;
 }
 
 .stats-grid,
@@ -76,6 +79,7 @@ a {
   border: 1px solid #dfe5ef;
   border-radius: 8px;
   padding: 18px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 
 .stat-card strong {
@@ -164,6 +168,11 @@ button,
   justify-content: center;
   min-height: 40px;
   box-sizing: border-box;
+}
+
+.button-link:hover,
+button:hover:not([disabled]) {
+  filter: brightness(0.98);
 }
 
 .button-link {
@@ -269,6 +278,12 @@ button[disabled] {
   font-size: 12px;
 }
 
+.muted-large {
+  color: #5d6b7f;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .mini-title,
 .draft-label {
   display: block;
@@ -291,6 +306,10 @@ button[disabled] {
   line-height: 1.2;
 }
 
+.prospect-name.compact {
+  font-size: 20px;
+}
+
 .checkbox-col {
   width: 32px;
 }
@@ -298,6 +317,10 @@ button[disabled] {
 .prospect-list {
   display: grid;
   gap: 14px;
+}
+
+.prospect-list-compact {
+  gap: 12px;
 }
 
 .prospect-card {
@@ -308,6 +331,11 @@ button[disabled] {
   border-radius: 10px;
   padding: 16px;
   background: #fbfcff;
+}
+
+.prospect-card-compact {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
 }
 
 .prospect-select {
@@ -410,10 +438,31 @@ button[disabled] {
   border-top: 1px solid #e7edf6;
 }
 
+.prospect-summary-inline {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .prospect-actions {
   display: grid;
   gap: 10px;
   align-content: start;
+}
+
+.prospect-actions-inline {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.prospect-actions-inline .button-link,
+.prospect-actions-inline button {
+  width: auto;
+  min-width: 140px;
 }
 
 .prospect-actions .button-link,
@@ -518,6 +567,154 @@ pre {
 
 .preview-card h3 {
   margin: 0 0 6px;
+}
+
+.hero-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 1fr);
+  gap: 18px;
+  margin-bottom: 20px;
+  padding: 24px;
+  border: 1px solid #dfe5ef;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #ffffff 0%, #f6f9fd 100%);
+}
+
+.hero-panel h2 {
+  margin: 4px 0 10px;
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+.hero-copy {
+  max-width: 760px;
+  margin: 0 0 18px;
+  color: #526175;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  color: #0f4c81;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.hero-side {
+  display: grid;
+  gap: 12px;
+}
+
+.hero-card {
+  border: 1px solid #dde6f1;
+  border-radius: 10px;
+  padding: 16px;
+  background: #ffffff;
+}
+
+.hero-card span,
+.hero-card small {
+  display: block;
+  color: #5e6d81;
+}
+
+.hero-card strong {
+  display: block;
+  margin: 6px 0;
+  font-size: 32px;
+}
+
+.compact-card {
+  padding: 16px;
+}
+
+.stats-grid-compact .stat-card strong {
+  font-size: 24px;
+}
+
+.dashboard-quick-grid .card h3 {
+  margin: 0 0 8px;
+}
+
+.ordered-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ordered-list li + li {
+  margin-top: 8px;
+}
+
+.channel-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.channel-chip,
+.meta-strip div {
+  border: 1px solid #e7edf6;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.channel-chip span,
+.meta-strip span {
+  display: block;
+  margin-bottom: 4px;
+  color: #66758a;
+  font-size: 12px;
+}
+
+.channel-chip strong,
+.meta-strip strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.meta-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.input-small {
+  max-width: 90px;
+}
+
+.top-gap {
+  margin-top: 16px;
+}
+
+.top-gap-small {
+  margin-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .hero-panel,
+  .prospect-card,
+  .prospect-card-compact {
+    grid-template-columns: 1fr;
+  }
+
+  .prospect-actions-inline {
+    grid-column: auto;
+  }
+
+  .topbar {
+    position: static;
+  }
+
+  .page-shell,
+  .topbar {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
 }
 
 .back-link {

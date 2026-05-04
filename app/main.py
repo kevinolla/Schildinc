@@ -176,6 +176,7 @@ def dashboard(request: Request, db: Session = Depends(get_db), _: str = Depends(
             "app_name": settings.app_name,
             "request": request,
             "stats": dashboard_context(db),
+            "google_places_enabled": bool(settings.google_places_api_key),
         },
     )
 

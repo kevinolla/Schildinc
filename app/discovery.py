@@ -51,6 +51,7 @@ DISCOVERY_USER_AGENT = "Mozilla/5.0 (compatible; SchildIncProspectCrawler/2.0; +
 MAX_BROWSER_PAGES = 2
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
+GENERIC_LOCAL_PARTS = {"info", "sales", "contact", "hello", "service", "support", "team", "mail", "office", "shop"}
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 SOCIAL_URL_PATTERN = re.compile(r"https?://(?:www\.)?(instagram\.com/[^\s\"'<>]+|linkedin\.com/[^\s\"'<>]+)", re.I)
 MAILTO_PATTERN = re.compile(r"mailto:([^\"'<>?\s]+)", re.I)
@@ -64,6 +65,8 @@ OBFUSCATED_EMAIL_PATTERN = re.compile(
     r"([A-Z0-9._%+-]+)\s*(?:\[at\]|\(at\)| at )\s*([A-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)| dot )\s*([A-Z]{2,})",
     re.I,
 )
+STAR_OBFUSCATED_EMAIL_PATTERN = re.compile(r"([A-Z0-9._%+-]+)\s*\*\s*([A-Z0-9.-]+)\s*\.\s*([A-Z]{2,})", re.I)
+SLASH_OBFUSCATED_EMAIL_PATTERN = re.compile(r"([A-Z0-9._%+-]+)\s*//\s*([A-Z0-9.-]+)\s*/\s*([A-Z]{2,})", re.I)
 
 
 @dataclass
@@ -414,17 +417,20 @@ def _rank_email_candidates(emails: list[str], source_page: str, website_domain: 
         if not _looks_valid_business_email(email, website_domain, company_tokens):
             continue
         local = email.split("@", 1)[0]
+        external_domain = email_domain(email)
         score = 30
-        if email_domain(email) == website_domain:
+        if external_domain == website_domain:
             score += 35
-        elif any(token in email_domain(email) for token in company_tokens):
+        elif _looks_related_business_domain(external_domain, website_domain, company_tokens):
             score += 18
+        elif local in GENERIC_LOCAL_PARTS or any(local.startswith(prefix) for prefix in GENERIC_LOCAL_PARTS):
+            score += 8
         else:
             score -= 10
 
-        if local in {"info", "sales", "contact", "hello", "service"}:
+        if local in GENERIC_LOCAL_PARTS:
             score += 30
-        elif local.startswith(("info", "sales", "contact", "hello", "service")):
+        elif any(local.startswith(prefix) for prefix in GENERIC_LOCAL_PARTS):
             score += 24
         elif "." in local or "-" in local:
             score += 10
@@ -448,8 +454,9 @@ def _looks_valid_business_email(email: str, website_domain: str, company_tokens:
         return False
     if "example." in domain or "test." in domain:
         return False
-    if domain != website_domain and company_tokens and not any(token in domain for token in company_tokens):
-        return False
+    if domain != website_domain and not _looks_related_business_domain(domain, website_domain, company_tokens):
+        if local not in GENERIC_LOCAL_PARTS and not any(local.startswith(prefix) for prefix in GENERIC_LOCAL_PARTS):
+            return False
     return True
 
 
@@ -618,6 +625,7 @@ def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
     emails = [normalize_email(unquote(match.group(1))) for match in MAILTO_PATTERN.finditer(text)]
     emails.extend(normalize_email(match.group(1)) for match in JSON_EMAIL_PATTERN.finditer(text))
     emails.extend(_extract_obfuscated_visible_emails(unquote(text)))
+    emails.extend(_extract_symbol_obfuscated_emails(unescape(text)))
     emails.extend(_extract_cloudflare_protected_emails(text))
     emails.extend(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(unescape(text)))
 
@@ -660,8 +668,17 @@ def _fetch_raw_html(target_url: str) -> dict[str, str]:
 def _extract_page_info_from_html(raw_html: str, current_url: str) -> dict:
     readable_text = _extract_readable_text(raw_html)
     raw_source = _extract_public_source_data(raw_html)
-    emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(readable_text)}
+    combined_text = " ".join(
+        [
+            readable_text,
+            extract_title_from_html(raw_html),
+            extract_meta_description_from_html(raw_html),
+            " ".join(extract_open_graph_descriptions_from_html(raw_html)),
+        ]
+    )
+    emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(combined_text)}
     emails.update(_extract_obfuscated_visible_emails(readable_text))
+    emails.update(_extract_symbol_obfuscated_emails(combined_text))
     emails.update(raw_source["emails"])
     title = extract_title_from_html(raw_html)
     meta_text = extract_meta_description_from_html(raw_html)
@@ -725,10 +742,9 @@ def _extract_readable_text(html: str) -> str:
     without_scripts = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
     without_scripts = re.sub(r"<style[\s\S]*?</style>", " ", without_scripts, flags=re.I)
     without_scripts = re.sub(r"<noscript[\s\S]*?</noscript>", " ", without_scripts, flags=re.I)
-    meta_descriptions = [match.group(1) for match in re.finditer(r"<meta[^>]+name=[\"']description[\"'][^>]+content=[\"']([^\"']+)[\"'][^>]*>", raw, re.I)]
-    titles = [match.group(2) for match in re.finditer(r"<(title|h1|h2|h3|h4)[^>]*>([\s\S]*?)</\1>", raw, re.I)]
-    paragraphs = [match.group(2) for match in re.finditer(r"<(p|li)[^>]*>([\s\S]*?)</\1>", without_scripts, re.I)]
-    text = " ".join([*meta_descriptions, *titles, *paragraphs])
+    expanded_breaks = re.sub(r"<br\s*/?>", "\n", without_scripts, flags=re.I)
+    expanded_breaks = re.sub(r"</(p|li|div|span|a|h1|h2|h3|h4|h5|h6|footer|section|article|ul|ol)>", " ", expanded_breaks, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", expanded_breaks)
     text = re.sub(r"<[^>]+>", " ", text)
     text = (
         text.replace("&nbsp;", " ")
@@ -786,6 +802,16 @@ def _extract_obfuscated_visible_emails(text: str) -> list[str]:
     return results
 
 
+def _extract_symbol_obfuscated_emails(text: str) -> list[str]:
+    results: list[str] = []
+    for pattern in [STAR_OBFUSCATED_EMAIL_PATTERN, SLASH_OBFUSCATED_EMAIL_PATTERN]:
+        for match in pattern.finditer(text or ""):
+            email = normalize_email(f"{match.group(1)}@{match.group(2)}.{match.group(3)}")
+            if email:
+                results.append(email)
+    return results
+
+
 def _extract_cloudflare_protected_emails(text: str) -> list[str]:
     results: list[str] = []
     for match in re.finditer(r'data-cfemail=[\"\']([0-9a-fA-F]+)[\"\']', text or "", re.I):
@@ -825,6 +851,23 @@ def _should_use_browser_for_page(raw_page_info: dict | None, visited: list[str])
         ]
     )
     if not has_contacts:
+        return True
+    return False
+
+
+def _domain_tokens(value: str) -> set[str]:
+    tokens = {token for token in re.split(r"[^a-z0-9]+", str(value or "").lower()) if len(token) > 2}
+    return {token for token in tokens if token not in {"www", "shop", "store", "fiets", "bike", "bikes", "fietsen", "com", "net", "org", "nl", "de", "eu"}}
+
+
+def _looks_related_business_domain(domain: str, website_domain: str, company_tokens: set[str]) -> bool:
+    if domain == website_domain:
+        return True
+    domain_tokens = _domain_tokens(domain)
+    website_tokens = _domain_tokens(website_domain)
+    if domain_tokens & website_tokens:
+        return True
+    if company_tokens and domain_tokens & company_tokens:
         return True
     return False
 
