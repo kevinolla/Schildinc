@@ -5,7 +5,7 @@ from datetime import date
 
 import pandas as pd
 import stripe
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -14,7 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.discovery import discover_public_contacts_for_prospect, ensure_prospect_contacts
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
 from app.google_places import place_to_prospect_record, search_google_places
@@ -44,7 +44,7 @@ templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic(auto_error=False)
 
 TIER_FILTERS = ["Good Tier", "Hard to Reach", "Mid Tier", "Low Tier", "Brand Store", "Low Fit", "Unclassified"]
-DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_socials", "high_confidence", "low_confidence", "found", "partial", "no_contacts", "error", "not_started"]
+DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_socials", "high_confidence", "low_confidence", "found", "partial", "no_contacts", "error", "not_started", "running"]
 
 
 def require_admin(credentials: HTTPBasicCredentials | None = Depends(security)) -> str:
@@ -76,6 +76,50 @@ def require_admin(credentials: HTTPBasicCredentials | None = Depends(security)) 
 
 def redirect_back(request: Request, fallback: str) -> RedirectResponse:
     return RedirectResponse(request.headers.get("referer", fallback), status_code=303)
+
+
+def _run_contact_discovery_job(prospect_id: int) -> None:
+    db = SessionLocal()
+    try:
+        prospect = db.get(Prospect, prospect_id)
+        if not prospect:
+            return
+        discover_public_contacts_for_prospect(db, prospect)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        prospect = db.get(Prospect, prospect_id)
+        if prospect:
+            prospect.email_discovery_status = "error"
+            prospect.discovery_error = str(exc)
+            db.add(
+                ProspectActivityLog(
+                    prospect=prospect,
+                    action_type="email_discovery",
+                    status="error",
+                    source_url=prospect.website or prospect.google_maps_url,
+                    detail=str(exc),
+                )
+            )
+            db.commit()
+    finally:
+        db.close()
+
+
+def _queue_contact_discovery(background_tasks: BackgroundTasks, db: Session, prospect: Prospect) -> None:
+    prospect.email_discovery_status = "running"
+    prospect.discovery_error = ""
+    db.add(
+        ProspectActivityLog(
+            prospect=prospect,
+            action_type="email_discovery",
+            status="running",
+            source_url=prospect.website or prospect.google_maps_url,
+            detail="Discovery queued from admin action.",
+        )
+    )
+    db.commit()
+    background_tasks.add_task(_run_contact_discovery_job, prospect.id)
 
 
 def dashboard_context(db: Session) -> dict:
@@ -351,6 +395,7 @@ def rematch_prospect(
 @app.post("/admin/prospects/{prospect_id}/discover-email")
 def discover_email(
     prospect_id: int,
+    background_tasks: BackgroundTasks,
     request: Request,
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
@@ -358,13 +403,14 @@ def discover_email(
     prospect = db.get(Prospect, prospect_id)
     if not prospect:
         raise HTTPException(status_code=404, detail="Prospect not found")
-    discover_public_contacts_for_prospect(db, prospect)
-    db.commit()
+    if prospect.email_discovery_status != "running":
+        _queue_contact_discovery(background_tasks, db, prospect)
     return redirect_back(request, f"/prospects/{prospect_id}")
 
 
 @app.post("/admin/prospects/discover-emails")
 def bulk_discover_emails(
+    background_tasks: BackgroundTasks,
     request: Request,
     selected_ids: list[int] = Form([]),
     db: Session = Depends(get_db),
@@ -375,8 +421,8 @@ def bulk_discover_emails(
 
     prospects = db.scalars(select(Prospect).where(Prospect.id.in_(selected_ids)).order_by(Prospect.id.asc())).all()
     for prospect in prospects:
-        discover_public_contacts_for_prospect(db, prospect)
-    db.commit()
+        if prospect.email_discovery_status != "running":
+            _queue_contact_discovery(background_tasks, db, prospect)
     return redirect_back(request, "/prospects")
 
 
