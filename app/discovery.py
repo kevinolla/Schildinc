@@ -639,7 +639,7 @@ def _prioritize_internal_links(links: list[dict[str, str]], base_url: str, compa
 
 
 def _pick_social_link(links: list[str]) -> str:
-    cleaned = _dedupe([_clean_social_url(link) for link in links if link])
+    cleaned = _dedupe([link for link in (_clean_social_url(link) for link in links if link) if _is_valid_social_profile_url(link)])
     for link in cleaned:
         if "/company/" in link or "/business/" in link:
             return link
@@ -649,6 +649,18 @@ def _pick_social_link(links: list[str]) -> str:
 def _clean_social_url(value: str) -> str:
     link = unescape(str(value or "")).replace("\\/", "/").strip()
     return link.rstrip(").,;\"'<>\\")
+
+
+def _is_valid_social_profile_url(value: str) -> bool:
+    parsed = urlparse(_clean_social_url(value))
+    host = parsed.netloc.lower()
+    path = parsed.path.lower().rstrip("/")
+    if "instagram.com" in host:
+        first_part = path.strip("/").split("/", 1)[0]
+        return bool(first_part) and first_part not in {"p", "reel", "stories", "explore", "accounts", "share"}
+    if "linkedin.com" in host:
+        return path.startswith(("/company/", "/in/", "/showcase/", "/school/"))
+    return False
 
 
 def _slugify_path_part(value: str) -> str:
