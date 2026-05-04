@@ -48,6 +48,49 @@ TIER_FILTERS = ["Good Tier", "Hard to Reach", "Mid Tier", "Low Tier", "Brand Sto
 DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_socials", "high_confidence", "low_confidence", "found", "partial", "no_contacts", "error", "not_started", "running"]
 
 
+def prospect_contact_count(prospect: Prospect) -> int:
+    return sum(
+        1
+        for value in [prospect.email, prospect.whatsapp_number, prospect.instagram_url, prospect.linkedin_url]
+        if (value or "").strip()
+    )
+
+
+def prospect_reachability_summary(prospect: Prospect) -> dict[str, str | int | None]:
+    channels = prospect_contact_count(prospect)
+    status = (prospect.email_discovery_status or "not_started").replace("_", " ")
+    source = prospect.email_source_page or ""
+    confidence = prospect.email_confidence or 0
+
+    if prospect.email:
+        title = "Ready for outreach"
+        detail = f"{channels} public contact channel{'s' if channels != 1 else ''} found"
+    elif prospect.whatsapp_number or prospect.instagram_url or prospect.linkedin_url:
+        title = "Social or WhatsApp only"
+        detail = f"{channels} public contact channel{'s' if channels != 1 else ''} found"
+    elif prospect.email_discovery_status == "running":
+        title = "Checking website now"
+        detail = "Crawler is scanning the website"
+    elif prospect.email_discovery_status == "error":
+        title = "Needs retry"
+        detail = "Crawler hit an error"
+    elif prospect.email_discovery_status == "no_contacts":
+        title = "No public contact found"
+        detail = "No email or social contact detected"
+    else:
+        title = "Not checked yet"
+        detail = "Run Find contacts to scan the website"
+
+    return {
+        "title": title,
+        "detail": detail,
+        "status": status,
+        "source": source,
+        "confidence": confidence if prospect.email else None,
+        "channels": channels,
+    }
+
+
 def require_admin(credentials: HTTPBasicCredentials | None = Depends(security)) -> str:
     if not settings.admin_password:
         return credentials.username if credentials else "local-dev"
@@ -268,6 +311,8 @@ def prospects_page(
             "prospects": prospects,
             "app_name": settings.app_name,
             "google_places_enabled": bool(settings.google_places_api_key),
+            "prospect_contact_count": prospect_contact_count,
+            "prospect_reachability_summary": prospect_reachability_summary,
             **prospect_filters_context(
                 search=search,
                 match_filter=match_filter,
