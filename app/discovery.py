@@ -293,8 +293,12 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
         prospect.whatsapp_url = result.whatsapp_url
     if result.linkedin_url:
         prospect.linkedin_url = result.linkedin_url
+    elif prospect.linkedin_url and not _is_valid_social_profile_url(prospect.linkedin_url):
+        prospect.linkedin_url = ""
     if result.instagram_url:
         prospect.instagram_url = result.instagram_url
+    elif prospect.instagram_url and not _is_valid_social_profile_url(prospect.instagram_url):
+        prospect.instagram_url = ""
     if result.linkedin_url or result.instagram_url or result.whatsapp_number:
         prospect.social_discovered_at = datetime.utcnow()
 
