@@ -22,18 +22,23 @@ from app.utils import email_domain, normalize_domain, normalize_email, normalize
 
 LIKELY_PATH_KEYWORDS = [
     "contact",
+    "customer-service",
+    "contact-us",
+    "service",
+    "support",
+    "clubhouses",
+    "locations",
+    "stores",
+    "store",
+    "showroom",
     "about",
     "about-us",
     "over-ons",
-    "contact-us",
     "impressum",
     "legal",
     "privacy",
     "terms",
     "faq",
-    "support",
-    "service",
-    "customer-service",
     "customer-care",
     "team",
     "shop",
@@ -44,17 +49,18 @@ LIKELY_PATH_KEYWORDS = [
     "company",
     "solutions",
 ]
-MAX_CRAWL_PAGES = 5
-MAX_QUEUE_LINKS = 20
+MAX_CRAWL_PAGES = 8
+MAX_QUEUE_LINKS = 24
 RAW_FETCH_TIMEOUT_SECONDS = 6
 DISCOVERY_USER_AGENT = "Mozilla/5.0 (compatible; SchildIncProspectCrawler/2.0; +https://schildinc.com)"
-MAX_BROWSER_PAGES = 1
+MAX_BROWSER_PAGES = 3
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
 GENERIC_LOCAL_PARTS = {"info", "sales", "contact", "hello", "service", "support", "team", "mail", "office", "shop"}
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 SOCIAL_URL_PATTERN = re.compile(r"https?://(?:www\.)?(instagram\.com/[^\s\"'<>]+|linkedin\.com/[^\s\"'<>]+)", re.I)
 MAILTO_PATTERN = re.compile(r"mailto:([^\"'<>?\s]+)", re.I)
+TEL_PATTERN = re.compile(r"tel:([^\"'<>?\s]+)", re.I)
 JSON_EMAIL_PATTERN = re.compile(r'"email"\s*:\s*"([^"]+@[^"]+)"', re.I)
 WHATSAPP_URL_PATTERN = re.compile(
     r"(https?://(?:wa\.me/\+?\d[\d-]{5,}|api\.whatsapp\.com/send\?[^\"'\s<>]+)|whatsapp://send\?phone=\+?\d[\d-]{5,})",
@@ -62,6 +68,8 @@ WHATSAPP_URL_PATTERN = re.compile(
 )
 WHATSAPP_JSON_NUMBER_PATTERN = re.compile(r'"(?:number|phone|whatsapp|wa_number)"\s*:\s*"(\+?\d[\d\s()./-]{7,}\d)"', re.I)
 VISIBLE_WHATSAPP_PATTERN = re.compile(r"(?:whatsapp|whats app)[^+\d]{0,24}(\+?\d[\d\s()./-]{6,}\d)", re.I)
+VISIBLE_PHONE_PATTERN = re.compile(r"(?:telephone|phone|tel\.?|telefoon|mobile|call us)[^+\d]{0,36}(\+?\d[\d\s()./-]{7,}\d)", re.I)
+INSTAGRAM_HANDLE_PATTERN = re.compile(r"(?:instagram|insta)[^@\n\r]{0,48}@([A-Z0-9._]{2,30})", re.I)
 OBFUSCATED_EMAIL_PATTERN = re.compile(
     r"([A-Z0-9._%+-]+)\s*(?:\[at\]|\(at\)| at )\s*([A-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)| dot )\s*([A-Z]{2,})",
     re.I,
@@ -85,6 +93,7 @@ class DiscoveryResult:
     confidence: int
     emails_found: list[str]
     pages_scanned: list[str]
+    phone_number: str
     whatsapp_number: str
     whatsapp_url: str
     linkedin_url: str
@@ -104,6 +113,7 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
             0,
             [],
             [],
+            prospect.phone or "",
             prospect.whatsapp_number or "",
             prospect.whatsapp_url or "",
             prospect.linkedin_url or "",
@@ -119,6 +129,7 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
     domain = normalize_domain(website)
     visited: list[str] = []
     email_candidates: list[DiscoveryEmailCandidate] = []
+    phone_numbers: list[str] = []
     whatsapp_numbers: list[str] = []
     whatsapp_links: list[str] = []
     linkedin_links: list[str] = []
@@ -131,7 +142,7 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
             page = browser.new_page(ignore_https_errors=True)
             page.set_default_timeout(settings.playwright_timeout_ms)
 
-            pages_to_visit = _seed_pages_to_visit(website)
+            pages_to_visit = _seed_pages_to_visit(website, prospect.company_name, prospect.city)
 
             while pages_to_visit and len(visited) < MAX_CRAWL_PAGES:
                 target = pages_to_visit.pop(0)
@@ -146,19 +157,19 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                 try:
                     raw_doc = _fetch_raw_html(target)
                     normalized_target = raw_doc["url"] or normalized_target
-                    raw_page_info = _extract_page_info_from_html(raw_doc["html"], normalized_target)
+                    raw_page_info = _extract_page_info_from_html(raw_doc["html"], normalized_target, prospect.company_name, prospect.city)
                 except Exception:
                     raw_page_info = None
 
-                should_use_browser = _should_use_browser_for_page(raw_page_info, visited)
+                should_use_browser = _should_use_browser_for_page(raw_page_info, visited, normalized_target)
                 if should_use_browser:
                     try:
                         page.goto(target, wait_until="domcontentloaded")
                         try:
-                            page.wait_for_load_state("networkidle", timeout=1200)
+                            page.wait_for_load_state("networkidle", timeout=2500)
                         except PlaywrightTimeoutError:
                             pass
-                        page_info = _extract_visible_page_info(page, page.url or normalized_target)
+                        page_info = _extract_visible_page_info(page, page.url or normalized_target, prospect.company_name, prospect.city)
                     except PlaywrightError:
                         page_info = None
 
@@ -169,6 +180,7 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                 effective_url = (page.url if page_info and page.url else normalized_target) or target
                 visited.append(effective_url)
                 email_candidates.extend(_rank_email_candidates(merged_info["emails"], effective_url, domain, prospect.company_name))
+                phone_numbers.extend(merged_info["phone_numbers"])
                 whatsapp_numbers.extend(merged_info["whatsapp_numbers"])
                 whatsapp_links.extend(merged_info["whatsapp_urls"])
                 linkedin_links.extend(merged_info["linkedin"])
@@ -184,22 +196,21 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                     len(visited) >= 2 or merged_info["linkedin"] or merged_info["instagram"] or merged_info["whatsapp_numbers"]
                 ):
                     break
-                for href in merged_info["internal_links"]:
-                    if href not in visited and href not in pages_to_visit and len(pages_to_visit) < MAX_QUEUE_LINKS:
-                        pages_to_visit.append(href)
+                pages_to_visit = _prepend_priority_links(pages_to_visit, merged_info["internal_links"], visited)
 
             browser.close()
     except Exception as exc:  # noqa: BLE001
-        result = DiscoveryResult("error", "", "", 0, [], [], "", "", "", "", [], str(exc))
+        result = DiscoveryResult("error", "", "", 0, [], [], "", "", "", "", "", "", [], str(exc))
         _apply_discovery_result(session, prospect, result)
         return result
 
     best = max(email_candidates, key=lambda item: item.confidence, default=None)
+    best_phone_number = _pick_best_phone_number(phone_numbers, prospect.phone)
     best_whatsapp_number = _pick_best_whatsapp_number(whatsapp_numbers, prospect.phone)
     best_whatsapp_url = _pick_best_whatsapp_url(whatsapp_links, best_whatsapp_number)
     summary = _summarize_snippets(snippets)
     highlights = _highlights_from_snippets(snippets)
-    has_any_contact = bool(best or best_whatsapp_number or linkedin_links or instagram_links)
+    has_any_contact = bool(best or best_phone_number or best_whatsapp_number or linkedin_links or instagram_links)
     result = DiscoveryResult(
         status="found" if best else ("partial" if has_any_contact else "no_contacts"),
         email=best.email if best else "",
@@ -207,6 +218,7 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
         confidence=best.confidence if best else 0,
         emails_found=_dedupe([item.email for item in sorted(email_candidates, key=lambda item: (-item.confidence, item.email))]),
         pages_scanned=visited,
+        phone_number=best_phone_number,
         whatsapp_number=best_whatsapp_number,
         whatsapp_url=best_whatsapp_url,
         linkedin_url=_pick_social_link(linkedin_links),
@@ -264,7 +276,7 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
     effective_status = result.status
     if result.email or (prospect.email or "").strip():
         effective_status = "found"
-    elif result.whatsapp_number or result.linkedin_url or result.instagram_url:
+    elif result.phone_number or result.whatsapp_number or result.linkedin_url or result.instagram_url:
         effective_status = "partial"
 
     prospect.email_discovery_status = effective_status
@@ -273,6 +285,8 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
     prospect.discovery_highlights = "\n".join(result.highlights[:4])
     prospect.emails_found = "|".join(result.emails_found[:20])
     prospect.pages_scanned = "|".join(result.pages_scanned[:20])
+    if result.phone_number and not (prospect.phone or "").strip():
+        prospect.phone = result.phone_number
     if result.whatsapp_number:
         prospect.whatsapp_number = result.whatsapp_number
     if result.whatsapp_url:
@@ -324,7 +338,7 @@ def _coerce_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _extract_visible_page_info(page, current_url: str) -> dict:
+def _extract_visible_page_info(page, current_url: str, company_name: str = "", city: str = "") -> dict:
     links = page.locator("a").evaluate_all(
         """els => els
             .map(el => ({
@@ -363,6 +377,7 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
             emails.update(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(text))
 
     internal_links = []
+    phone_numbers = []
     whatsapp_numbers = []
     whatsapp_urls = []
     social_linkedin = []
@@ -378,6 +393,10 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
             parsed_number = _extract_whatsapp_number_from_url(href)
             if parsed_number:
                 whatsapp_numbers.append(parsed_number)
+        elif href.startswith("tel:"):
+            phone_number = _normalize_phone_like_value(href.replace("tel:", ""))
+            if phone_number:
+                phone_numbers.append(phone_number)
         elif "linkedin.com" in href_lower or "linkedin" in label_text:
             social_linkedin.append(href)
         elif "instagram.com" in href_lower or "instagram" in label_text:
@@ -390,7 +409,9 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
             whatsapp_text_number = _normalize_phone_like_value(item.get("text", ""))
             if whatsapp_text_number:
                 whatsapp_numbers.append(whatsapp_text_number)
-    internal_links = _prioritize_internal_links(raw_internal_links, current_url)
+    internal_links = _prioritize_internal_links(raw_internal_links, current_url, company_name, city)
+    phone_numbers.extend(_extract_visible_phone_numbers(combined_text))
+    phone_numbers.extend(raw_source["phone_numbers"])
     whatsapp_numbers.extend(_extract_visible_whatsapp_numbers(combined_text))
     whatsapp_numbers.extend(raw_source["whatsapp_numbers"])
     whatsapp_urls.extend(raw_source["whatsapp"])
@@ -398,6 +419,7 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
     social_instagram.extend(structured_data["instagram"])
     social_linkedin.extend(raw_source["linkedin"])
     social_instagram.extend(raw_source["instagram"])
+    social_instagram.extend(_extract_visible_instagram_handles(combined_text))
 
     snippets = [clean_snippet(text) for text in headings if clean_snippet(text)]
     snippets.extend(clean_snippet(line) for line in readable_text.split(". ")[:8] if clean_snippet(line))
@@ -407,6 +429,7 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
 
     return {
         "emails": sorted(emails),
+        "phone_numbers": _dedupe([item for item in phone_numbers if item]),
         "whatsapp_numbers": _dedupe([item for item in whatsapp_numbers if item]),
         "whatsapp_urls": _dedupe([item for item in whatsapp_urls if item]),
         "internal_links": internal_links,
@@ -472,12 +495,55 @@ def _build_likely_urls(website: str) -> list[str]:
     return [urljoin(root + "/", path) for path in LIKELY_PATH_KEYWORDS]
 
 
-def _seed_pages_to_visit(website: str) -> list[str]:
+def _build_contextual_likely_urls(website: str, company_name: str = "", city: str = "") -> list[str]:
+    parsed = urlparse(website)
+    root = f"{parsed.scheme}://{parsed.netloc}"
+    city_slug = _slugify_path_part(city)
+    company_slug = _slugify_path_part(company_name)
+    candidates = []
+    if city_slug:
+        candidates.extend(
+            [
+                f"clubhouses/{city_slug}",
+                f"locations/{city_slug}",
+                f"stores/{city_slug}",
+                f"store/{city_slug}",
+                f"showroom/{city_slug}",
+                f"winkel/{city_slug}",
+            ]
+        )
+    if company_slug:
+        candidates.extend([f"locations/{company_slug}", f"stores/{company_slug}"])
+    candidates.extend(
+        [
+            "contact",
+            "contact-us",
+            "customer-service",
+            "service",
+            "support",
+            "about",
+            "over-ons",
+            "locations",
+            "stores",
+            "clubhouses",
+        ]
+    )
+    return [urljoin(root + "/", path) for path in candidates]
+
+
+def _seed_pages_to_visit(website: str, company_name: str = "", city: str = "") -> list[str]:
     ordered = [website]
-    for link in _build_likely_urls(website)[:6]:
+    for link in _build_contextual_likely_urls(website, company_name, city):
         if link not in ordered:
             ordered.append(link)
     return ordered
+
+
+def _prepend_priority_links(queue: list[str], links: list[str], visited: list[str]) -> list[str]:
+    priority_links = [href for href in links if href and href not in visited and href not in queue]
+    available_slots = max(0, MAX_QUEUE_LINKS - len(queue))
+    priority_links = priority_links[:available_slots]
+    return priority_links + queue
 
 
 def _normalize_internal_link(href: str, current_url: str) -> str:
@@ -490,34 +556,66 @@ def _normalize_internal_link(href: str, current_url: str) -> str:
         return ""
     if target.netloc and normalize_domain(target.netloc) != normalize_domain(current.netloc):
         return ""
-    if re.search(r"\.(pdf|jpg|jpeg|png|gif|svg|webp|zip)$", target.path, re.I):
+    if re.search(r"\.(pdf|jpg|jpeg|png|gif|svg|webp|zip|js|css|woff|woff2|ttf|eot|ico)$", target.path, re.I):
         return ""
     junk_haystack = f"{target.path.lower()}?{target.query.lower()}"
-    if any(token in junk_haystack for token in ["add-to-cart", "/cart", "/checkout", "/my-account", "wishlist", "orderby=", "min_price=", "max_price=", "dgwt_wcas="]):
+    if any(
+        token in junk_haystack
+        for token in [
+            "/wp-content/",
+            "/_next/static/",
+            "/static/chunks/",
+            "add-to-cart",
+            "/cart",
+            "/checkout",
+            "/my-account",
+            "wishlist",
+            "orderby=",
+            "min_price=",
+            "max_price=",
+            "dgwt_wcas=",
+        ]
+    ):
         return ""
     target = target._replace(fragment="", query=target.query)
     return target.geturl()
 
 
-def _prioritize_internal_links(links: list[dict[str, str]], base_url: str) -> list[str]:
+def _prioritize_internal_links(links: list[dict[str, str]], base_url: str, company_name: str = "", city: str = "") -> list[str]:
     base = _normalize_internal_link(base_url, base_url)
     seen: set[str] = set()
     scored: list[tuple[int, str]] = []
     priorities = [
-        ("contact", 12),
+        ("customer-service", 28),
+        ("customer service", 28),
+        ("contact", 24),
+        ("telephone", 20),
+        ("email", 20),
+        ("service", 18),
+        ("support", 18),
+        ("clubhouse", 18),
+        ("clubhouses", 18),
+        ("location", 16),
+        ("locations", 16),
+        ("store", 16),
+        ("stores", 16),
+        ("showroom", 16),
+        ("shop finder", 14),
+        ("shop-finder", 14),
         ("about", 9),
         ("over", 9),
         ("team", 8),
-        ("service", 8),
-        ("shop", 7),
         ("repair", 7),
         ("reparatie", 7),
         ("verhuur", 7),
         ("winkel", 7),
         ("company", 6),
-        ("solutions", 6),
         ("faq", 4),
     ]
+    city_tokens = {token for token in normalize_text(city).split() if len(token) > 2}
+    company_tokens = {token for token in normalize_text(company_name).split() if len(token) > 3}
+    generic_company_tokens = {"bike", "bikes", "fiets", "fietsen", "rental", "rent", "tours", "store", "shop", "amsterdam"}
+    company_tokens = company_tokens - generic_company_tokens
     for link in links:
         url = str(link.get("url") or "")
         if not url or url in seen:
@@ -528,6 +626,10 @@ def _prioritize_internal_links(links: list[dict[str, str]], base_url: str) -> li
         for keyword, points in priorities:
             if keyword in haystack:
                 score += points
+        if city_tokens and city_tokens & _link_tokens(haystack):
+            score += 22
+        if company_tokens and company_tokens & _link_tokens(haystack):
+            score += 10
         if url.rstrip("/") == str(base).rstrip("/"):
             score -= 20
         if score > 0:
@@ -547,6 +649,15 @@ def _pick_social_link(links: list[str]) -> str:
 def _clean_social_url(value: str) -> str:
     link = unescape(str(value or "")).replace("\\/", "/").strip()
     return link.rstrip(").,;\"'<>\\")
+
+
+def _slugify_path_part(value: str) -> str:
+    parts = [part for part in re.split(r"[^a-z0-9]+", normalize_text(value)) if part]
+    return "-".join(parts[:4])
+
+
+def _link_tokens(value: str) -> set[str]:
+    return {token for token in re.split(r"[^a-z0-9]+", normalize_text(value)) if len(token) > 2}
 
 
 def _collect_visible_section_text(page, selector: str) -> list[str]:
@@ -642,6 +753,7 @@ def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
     emails.extend(_extract_cloudflare_protected_emails(text))
     emails.extend(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(normalized_source))
 
+    phone_numbers = [_normalize_phone_like_value(unquote(match.group(1))) for match in TEL_PATTERN.finditer(normalized_source)]
     whatsapp_links = [match.group(1) for match in WHATSAPP_URL_PATTERN.finditer(normalized_source)]
     whatsapp_numbers = [_extract_whatsapp_number_from_url(link) for link in whatsapp_links]
     if "whatsapp" in normalized_source.lower() or "wa.me" in normalized_source.lower():
@@ -656,6 +768,7 @@ def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
             instagram_links.append(href)
     return {
         "emails": _dedupe([item for item in emails if item]),
+        "phone_numbers": _dedupe([item for item in phone_numbers if item]),
         "whatsapp": _dedupe([item for item in whatsapp_links if item]),
         "whatsapp_numbers": _dedupe([item for item in whatsapp_numbers if item]),
         "linkedin": _dedupe(linkedin_links),
@@ -680,7 +793,7 @@ def _fetch_raw_html(target_url: str) -> dict[str, str]:
         return {"url": response.geturl() or target_url, "html": html}
 
 
-def _extract_page_info_from_html(raw_html: str, current_url: str) -> dict:
+def _extract_page_info_from_html(raw_html: str, current_url: str, company_name: str = "", city: str = "") -> dict:
     readable_text = _extract_readable_text(raw_html)
     raw_source = _extract_public_source_data(raw_html)
     combined_text = " ".join(
@@ -702,17 +815,21 @@ def _extract_page_info_from_html(raw_html: str, current_url: str) -> dict:
         if source_text:
             emails.update(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(source_text))
             emails.update(_extract_obfuscated_visible_emails(source_text))
-    internal_links = _prioritize_internal_links(_extract_internal_links_from_html(raw_html, current_url), current_url)
+    raw_internal_links = _extract_internal_links_from_html(raw_html, current_url)
+    raw_internal_links.extend(_extract_internal_urls_from_source(raw_html, current_url))
+    internal_links = _prioritize_internal_links(raw_internal_links, current_url, company_name, city)
+    phone_numbers = _dedupe(raw_source["phone_numbers"] + _extract_visible_phone_numbers(combined_text))
     headings = extract_headings_from_html(raw_html)
     snippets = [clean_snippet(item) for item in [title, meta_text, *og_meta, *headings] if clean_snippet(item)]
     snippets.extend(clean_snippet(line) for line in readable_text.split(". ")[:8] if clean_snippet(line))
     return {
         "emails": sorted(emails),
+        "phone_numbers": phone_numbers,
         "whatsapp_numbers": _dedupe(raw_source["whatsapp_numbers"]),
         "whatsapp_urls": _dedupe(raw_source["whatsapp"]),
         "internal_links": internal_links,
         "linkedin": _dedupe(raw_source["linkedin"]),
-        "instagram": _dedupe(raw_source["instagram"]),
+        "instagram": _dedupe(raw_source["instagram"] + _extract_visible_instagram_handles(combined_text)),
         "snippets": _dedupe([item for item in snippets if item]),
     }
 
@@ -724,6 +841,7 @@ def _merge_page_info(primary: dict | None, fallback: dict | None) -> dict | None
     fallback = fallback or {}
     return {
         "emails": _dedupe(list(primary.get("emails", [])) + list(fallback.get("emails", []))),
+        "phone_numbers": _dedupe(list(primary.get("phone_numbers", [])) + list(fallback.get("phone_numbers", []))),
         "whatsapp_numbers": _dedupe(list(primary.get("whatsapp_numbers", [])) + list(fallback.get("whatsapp_numbers", []))),
         "whatsapp_urls": _dedupe(list(primary.get("whatsapp_urls", [])) + list(fallback.get("whatsapp_urls", []))),
         "internal_links": _dedupe(list(primary.get("internal_links", [])) + list(fallback.get("internal_links", []))),
@@ -808,6 +926,20 @@ def _extract_internal_links_from_html(html: str, base_url: str) -> list[dict[str
     return links
 
 
+def _extract_internal_urls_from_source(html: str, base_url: str) -> list[dict[str, str]]:
+    normalized_source = unescape(str(html or "")).replace("\\/", "/")
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"https?://[^\s\"'<>\\]+", normalized_source, re.I):
+        raw_url = match.group(0).rstrip(").,;]")
+        normalized = _normalize_internal_link(raw_url, base_url)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        links.append({"url": normalized, "anchor_text": ""})
+    return links
+
+
 def _extract_obfuscated_visible_emails(text: str) -> list[str]:
     results: list[str] = []
     for match in OBFUSCATED_EMAIL_PATTERN.finditer(text or ""):
@@ -852,14 +984,30 @@ def _decode_cloudflare_email(value: str) -> str:
     return normalize_email("".join(chars))
 
 
-def _should_use_browser_for_page(raw_page_info: dict | None, visited: list[str]) -> bool:
+def _should_use_browser_for_page(raw_page_info: dict | None, visited: list[str], target_url: str = "") -> bool:
     if len(visited) >= MAX_BROWSER_PAGES:
         return False
     if not raw_page_info:
         return True
+    high_intent_page = any(
+        token in str(target_url or "").lower()
+        for token in [
+            "contact",
+            "customer-service",
+            "service",
+            "support",
+            "clubhouse",
+            "location",
+            "store",
+            "showroom",
+        ]
+    )
+    if high_intent_page and not raw_page_info.get("emails"):
+        return True
     has_contacts = any(
         [
             raw_page_info.get("emails"),
+            raw_page_info.get("phone_numbers"),
             raw_page_info.get("whatsapp_numbers"),
             raw_page_info.get("linkedin"),
             raw_page_info.get("instagram"),
@@ -911,6 +1059,26 @@ def _extract_visible_whatsapp_numbers(text: str) -> list[str]:
     return results
 
 
+def _extract_visible_phone_numbers(text: str) -> list[str]:
+    results: list[str] = []
+    for match in VISIBLE_PHONE_PATTERN.finditer(text or ""):
+        phone = _normalize_phone_like_value(match.group(1))
+        if phone:
+            results.append(phone)
+    return _dedupe(results)
+
+
+def _extract_visible_instagram_handles(text: str) -> list[str]:
+    links: list[str] = []
+    rejected = {"instagram", "insta", "open", "profile", "social", "follow"}
+    for match in INSTAGRAM_HANDLE_PATTERN.finditer(text or ""):
+        handle = (match.group(1) or "").strip("._- ").lower()
+        if not handle or handle in rejected:
+            continue
+        links.append(f"https://www.instagram.com/{handle}/")
+    return _dedupe(links)
+
+
 def _normalize_phone_like_value(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -929,6 +1097,13 @@ def _pick_best_whatsapp_number(candidates: list[str], fallback_phone: str) -> st
     return _normalize_phone_like_value(fallback_phone) if "whatsapp" in str(fallback_phone or "").lower() else ""
 
 
+def _pick_best_phone_number(candidates: list[str], fallback_phone: str) -> str:
+    normalized_candidates = _dedupe([_normalize_phone_like_value(item) for item in candidates if item])
+    for number in normalized_candidates:
+        return number
+    return _normalize_phone_like_value(fallback_phone)
+
+
 def _pick_best_whatsapp_url(candidates: list[str], number: str) -> str:
     for value in candidates:
         if value:
@@ -942,6 +1117,8 @@ def _build_discovery_log_detail(result: DiscoveryResult) -> str:
     channels = []
     if result.email:
         channels.append(f"email={result.email}")
+    if result.phone_number:
+        channels.append(f"phone={result.phone_number}")
     if result.whatsapp_number:
         channels.append(f"whatsapp={result.whatsapp_number}")
     if result.instagram_url:

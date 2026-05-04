@@ -102,6 +102,7 @@
           <td class="contacts-cell">
             <div class="contact-lines">
               <div><span>Email</span><strong>{{ prospect.email or "Not found" }}</strong></div>
+              <div><span>Phone</span><strong>{{ prospect.phone or "Not found" }}</strong></div>
               <div><span>WhatsApp</span><strong>{% if prospect.whatsapp_number %}<a href="{{ prospect.whatsapp_url or ('https://wa.me/' ~ prospect.whatsapp_number|replace('+', '')) }}" target="_blank" rel="noreferrer">{{ prospect.whatsapp_number }}</a>{% else %}Not found{% endif %}</strong></div>
               <div><span>Instagram</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open profile</a>{% else %}Not found{% endif %}</strong></div>
               <div><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open profile</a>{% else %}Not found{% endif %}</strong></div>

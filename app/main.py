@@ -51,7 +51,7 @@ DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_social
 def prospect_contact_count(prospect: Prospect) -> int:
     return sum(
         1
-        for value in [prospect.email, prospect.whatsapp_number, prospect.instagram_url, prospect.linkedin_url]
+        for value in [prospect.email, prospect.phone, prospect.whatsapp_number, prospect.instagram_url, prospect.linkedin_url]
         if (value or "").strip()
     )
 
@@ -65,8 +65,8 @@ def prospect_reachability_summary(prospect: Prospect) -> dict[str, str | int | N
     if prospect.email:
         title = "Ready for outreach"
         detail = f"{channels} public contact channel{'s' if channels != 1 else ''} found"
-    elif prospect.whatsapp_number or prospect.instagram_url or prospect.linkedin_url:
-        title = "Social or WhatsApp only"
+    elif prospect.phone or prospect.whatsapp_number or prospect.instagram_url or prospect.linkedin_url:
+        title = "Phone, social, or WhatsApp only"
         detail = f"{channels} public contact channel{'s' if channels != 1 else ''} found"
     elif prospect.email_discovery_status == "running":
         title = "Checking website now"
