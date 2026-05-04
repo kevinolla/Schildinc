@@ -184,9 +184,6 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                     len(visited) >= 2 or merged_info["linkedin"] or merged_info["instagram"] or merged_info["whatsapp_numbers"]
                 ):
                     break
-                if not current_best and len(visited) >= 3 and (whatsapp_numbers or whatsapp_links or linkedin_links or instagram_links):
-                    break
-
                 for href in merged_info["internal_links"]:
                     if href not in visited and href not in pages_to_visit and len(pages_to_visit) < MAX_QUEUE_LINKS:
                         pages_to_visit.append(href)
@@ -264,7 +261,13 @@ def ensure_prospect_contacts(session: Session, prospect: Prospect, force: bool =
 
 
 def _apply_discovery_result(session: Session, prospect: Prospect, result: DiscoveryResult) -> None:
-    prospect.email_discovery_status = result.status
+    effective_status = result.status
+    if result.email or (prospect.email or "").strip():
+        effective_status = "found"
+    elif result.whatsapp_number or result.linkedin_url or result.instagram_url:
+        effective_status = "partial"
+
+    prospect.email_discovery_status = effective_status
     prospect.discovery_error = result.error
     prospect.website_summary = result.summary or prospect.website_summary
     prospect.discovery_highlights = "\n".join(result.highlights[:4])
@@ -297,7 +300,7 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
         ProspectActivityLog(
             prospect=prospect,
             action_type="email_discovery",
-            status=result.status,
+            status=effective_status,
             source_url=result.source_page or prospect.website,
             detail=result.error or _build_discovery_log_detail(result),
         )
