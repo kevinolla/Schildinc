@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import secrets
 from datetime import date
+from threading import Thread
 
 import pandas as pd
 import stripe
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -106,7 +107,7 @@ def _run_contact_discovery_job(prospect_id: int) -> None:
         db.close()
 
 
-def _queue_contact_discovery(background_tasks: BackgroundTasks, db: Session, prospect: Prospect) -> None:
+def _queue_contact_discovery(db: Session, prospect: Prospect) -> None:
     prospect.email_discovery_status = "running"
     prospect.discovery_error = ""
     db.add(
@@ -119,7 +120,7 @@ def _queue_contact_discovery(background_tasks: BackgroundTasks, db: Session, pro
         )
     )
     db.commit()
-    background_tasks.add_task(_run_contact_discovery_job, prospect.id)
+    Thread(target=_run_contact_discovery_job, args=(prospect.id,), daemon=True).start()
 
 
 def dashboard_context(db: Session) -> dict:
@@ -395,7 +396,6 @@ def rematch_prospect(
 @app.post("/admin/prospects/{prospect_id}/discover-email")
 def discover_email(
     prospect_id: int,
-    background_tasks: BackgroundTasks,
     request: Request,
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
@@ -404,13 +404,12 @@ def discover_email(
     if not prospect:
         raise HTTPException(status_code=404, detail="Prospect not found")
     if prospect.email_discovery_status != "running":
-        _queue_contact_discovery(background_tasks, db, prospect)
+        _queue_contact_discovery(db, prospect)
     return redirect_back(request, f"/prospects/{prospect_id}")
 
 
 @app.post("/admin/prospects/discover-emails")
 def bulk_discover_emails(
-    background_tasks: BackgroundTasks,
     request: Request,
     selected_ids: list[int] = Form([]),
     db: Session = Depends(get_db),
@@ -422,7 +421,7 @@ def bulk_discover_emails(
     prospects = db.scalars(select(Prospect).where(Prospect.id.in_(selected_ids)).order_by(Prospect.id.asc())).all()
     for prospect in prospects:
         if prospect.email_discovery_status != "running":
-            _queue_contact_discovery(background_tasks, db, prospect)
+            _queue_contact_discovery(db, prospect)
     return redirect_back(request, "/prospects")
 
 
