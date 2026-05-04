@@ -404,8 +404,7 @@ def discover_email(
     prospect = db.get(Prospect, prospect_id)
     if not prospect:
         raise HTTPException(status_code=404, detail="Prospect not found")
-    if prospect.email_discovery_status != "running":
-        _queue_contact_discovery(db, prospect)
+    _queue_contact_discovery(db, prospect)
     return redirect_back(request, f"/prospects/{prospect_id}")
 
 
@@ -421,8 +420,7 @@ def bulk_discover_emails(
 
     prospects = db.scalars(select(Prospect).where(Prospect.id.in_(selected_ids)).order_by(Prospect.id.asc())).all()
     for prospect in prospects:
-        if prospect.email_discovery_status != "running":
-            _queue_contact_discovery(db, prospect)
+        _queue_contact_discovery(db, prospect)
     return redirect_back(request, "/prospects")
 
 

@@ -44,11 +44,11 @@ LIKELY_PATH_KEYWORDS = [
     "company",
     "solutions",
 ]
-MAX_CRAWL_PAGES = 8
+MAX_CRAWL_PAGES = 5
 MAX_QUEUE_LINKS = 20
-RAW_FETCH_TIMEOUT_SECONDS = 10
+RAW_FETCH_TIMEOUT_SECONDS = 6
 DISCOVERY_USER_AGENT = "Mozilla/5.0 (compatible; SchildIncProspectCrawler/2.0; +https://schildinc.com)"
-MAX_BROWSER_PAGES = 2
+MAX_BROWSER_PAGES = 1
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
 GENERIC_LOCAL_PARTS = {"info", "sales", "contact", "hello", "service", "support", "team", "mail", "office", "shop"}
@@ -183,6 +183,8 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                 if current_best and current_best.confidence >= 92 and (
                     len(visited) >= 2 or merged_info["linkedin"] or merged_info["instagram"] or merged_info["whatsapp_numbers"]
                 ):
+                    break
+                if not current_best and len(visited) >= 3 and (whatsapp_numbers or whatsapp_links or linkedin_links or instagram_links):
                     break
 
                 for href in merged_info["internal_links"]:
@@ -469,7 +471,7 @@ def _build_likely_urls(website: str) -> list[str]:
 
 def _seed_pages_to_visit(website: str) -> list[str]:
     ordered = [website]
-    for link in _build_likely_urls(website):
+    for link in _build_likely_urls(website)[:6]:
         if link not in ordered:
             ordered.append(link)
     return ordered
