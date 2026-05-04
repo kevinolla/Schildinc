@@ -1,161 +1,147 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="two-col">
-  <div class="card compact-card">
-    <div class="section-head">
-      <div>
-        <h3>Search Google Maps</h3>
-        <p class="muted">Fastest way to add new bike-shop prospects.</p>
-      </div>
-    </div>
-    <form method="post" action="/admin/google-places-search" class="grid-form">
+<section class="page-title-row">
+  <div>
+    <h2>Prospects</h2>
+    <p class="muted">Scan leads, find public contacts, block existing customers, then approve only good non-customers.</p>
+  </div>
+  <div class="button-row">
+    <a class="button-link button-link-muted" href="/queue">Open queue</a>
+    <a class="button-link button-link-muted" href="/logs">Logs</a>
+  </div>
+</section>
+
+<section class="tool-panel">
+  <div class="tool-block">
+    <h3>Search Google Maps</h3>
+    <form method="post" action="/admin/google-places-search" class="compact-form">
       <input name="query" placeholder="bike stores with repair service" required>
       <input name="location" placeholder="Netherlands">
-      <div class="button-row">
-        <input class="input-small" type="number" name="limit" value="10" min="1" max="25">
-        <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search and import</button>
-      </div>
+      <input class="input-small" type="number" name="limit" value="10" min="1" max="25">
+      <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search</button>
     </form>
     {% if not google_places_enabled %}
     <p class="muted top-gap-small">Set `GOOGLE_PLACES_API_KEY` to enable live search.</p>
     {% endif %}
   </div>
-
-  <div class="card compact-card">
-    <div class="section-head">
-      <div>
-        <h3>Upload prospect CSV</h3>
-        <p class="muted">Use this when you already have a curated list to review.</p>
-      </div>
-    </div>
-    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="stack-form">
+  <div class="tool-block">
+    <h3>Upload CSV</h3>
+    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="compact-form">
       <input type="file" name="file" accept=".csv" required>
-      <button type="submit">Upload prospect list</button>
+      <button type="submit">Upload</button>
     </form>
   </div>
 </section>
 
-<section class="card compact-card">
-  <div class="section-head">
-    <div>
-      <h3>Prospect workflow</h3>
-      <p class="muted">1. Find contacts  2. Check customer match and fit  3. Approve only good new prospects  4. Move to queue</p>
-    </div>
-  </div>
-  <form method="get" action="/prospects" class="grid-form">
+<section class="filter-panel">
+  <form method="get" action="/prospects" class="filter-form">
     <input name="search" value="{{ search }}" placeholder="Search company, city, website, email">
     <select name="match_filter">
-      <option value="">All match results</option>
+      <option value="">Match: all</option>
       {% for option in match_options %}
       <option value="{{ option }}" {% if match_filter == option %}selected{% endif %}>{{ option.replace("_", " ") }}</option>
       {% endfor %}
     </select>
     <select name="review_filter">
-      <option value="">All review states</option>
+      <option value="">Review: all</option>
       {% for option in review_options %}
       <option value="{{ option }}" {% if review_filter == option %}selected{% endif %}>{{ option }}</option>
       {% endfor %}
     </select>
     <select name="tier_filter">
-      <option value="">All tiers</option>
+      <option value="">Tier: all</option>
       {% for option in tier_options %}
       <option value="{{ option }}" {% if tier_filter == option %}selected{% endif %}>{{ option }}</option>
       {% endfor %}
     </select>
     <select name="discovery_filter">
       {% for option in discovery_options %}
-      <option value="{{ option }}" {% if discovery_filter == option %}selected{% endif %}>{{ option.replace("_", " ") }}</option>
+      <option value="{{ option }}" {% if discovery_filter == option %}selected{% endif %}>Contacts: {{ option.replace("_", " ") }}</option>
       {% endfor %}
     </select>
-    <button type="submit">Apply filters</button>
+    <button type="submit">Filter</button>
+    <a class="button-link button-link-muted" href="/prospects">Reset</a>
   </form>
 </section>
 
-<section class="card">
+<section class="card table-card prospects-table-card">
   <form method="post" action="/admin/prospects/discover-emails">
-    <div class="section-head">
+    <div class="table-toolbar">
       <div>
-        <h2>Prospects</h2>
-        <p class="muted">The crawler checks public website pages for business email, WhatsApp, Instagram, and LinkedIn. Existing customers stay blocked.</p>
+        <h3>Lead review table</h3>
+        <p class="muted">Use `Find contacts` after import or whenever contact data looks stale.</p>
       </div>
-      <div class="button-row">
-        <button type="submit">Find contacts for selected</button>
-        <a class="button-link button-link-muted" href="/queue">Open queue</a>
-      </div>
+      <button type="submit">Find contacts for selected</button>
     </div>
 
-    <div class="prospect-list prospect-list-compact">
-      {% for prospect in prospects %}
-      <article class="prospect-card prospect-card-compact">
-        <div class="prospect-select">
-          <input type="checkbox" name="selected_ids" value="{{ prospect.id }}" aria-label="Select {{ prospect.company_name }}">
-        </div>
-
-        <div class="prospect-main">
-          <div class="prospect-head">
-            <div>
-              <a class="table-title prospect-name compact" href="/prospects/{{ prospect.id }}">{{ prospect.company_name }}</a>
-              <div class="muted">{{ prospect.city or "-" }}, {{ prospect.country_code or "-" }}</div>
-              <div class="muted">{{ prospect.website_domain or prospect.website or "-" }}</div>
+    <table class="prospects-table">
+      <thead>
+        <tr>
+          <th class="checkbox-col"></th>
+          <th>Company</th>
+          <th>Contacts</th>
+          <th>Match / tier</th>
+          <th>Discovery</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for prospect in prospects %}
+        <tr>
+          <td><input type="checkbox" name="selected_ids" value="{{ prospect.id }}" aria-label="Select {{ prospect.company_name }}"></td>
+          <td>
+            <a class="table-title" href="/prospects/{{ prospect.id }}">{{ prospect.company_name }}</a>
+            <div class="muted">{{ prospect.city or "-" }}, {{ prospect.country_code or "-" }}</div>
+            {% if prospect.website %}
+            <div class="muted"><a href="{{ prospect.website }}" target="_blank" rel="noreferrer">{{ prospect.website_domain or prospect.website }}</a></div>
+            {% else %}
+            <div class="muted">{{ prospect.website_domain or "-" }}</div>
+            {% endif %}
+          </td>
+          <td>
+            <div class="contact-lines">
+              <div><span>Email</span><strong>{{ prospect.email or "-" }}</strong></div>
+              <div><span>WA</span><strong>{% if prospect.whatsapp_number %}<a href="{{ prospect.whatsapp_url or ('https://wa.me/' ~ prospect.whatsapp_number|replace('+', '')) }}" target="_blank" rel="noreferrer">{{ prospect.whatsapp_number }}</a>{% else %}-{% endif %}</strong></div>
+              <div><span>IG</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></div>
+              <div><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></div>
             </div>
-            <div class="prospect-badges">
+          </td>
+          <td>
+            <div class="badge-stack">
               <span class="badge badge-match-{{ prospect.match_status.value }}">{{ prospect.match_status.value.replace("_", " ") }}</span>
               <span class="badge badge-tier-{{ prospect.bike_shop_tier|lower|replace(' ', '-') }}">{{ prospect.bike_shop_tier }}</span>
               <span class="badge review-{{ prospect.review_status.value }}">{{ prospect.review_status.value }}</span>
             </div>
-          </div>
-
-          <div class="channel-strip">
-            <div class="channel-chip">
-              <span>Email</span>
-              <strong>{{ prospect.email or "-" }}</strong>
-            </div>
-            <div class="channel-chip">
-              <span>WhatsApp</span>
-              <strong>{% if prospect.whatsapp_number %}<a href="{{ prospect.whatsapp_url or ('https://wa.me/' ~ prospect.whatsapp_number|replace('+', '')) }}" target="_blank" rel="noreferrer">{{ prospect.whatsapp_number }}</a>{% else %}-{% endif %}</strong>
-            </div>
-            <div class="channel-chip">
-              <span>Instagram</span>
-              <strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong>
-            </div>
-            <div class="channel-chip">
-              <span>LinkedIn</span>
-              <strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong>
-            </div>
-          </div>
-
-          <div class="meta-strip">
-            <div><span>Status</span><strong>{{ prospect.email_discovery_status.replace("_", " ") }}</strong></div>
-            <div><span>Confidence</span><strong>{{ prospect.email_confidence or 0 }}/100</strong></div>
-            <div><span>Priority</span><strong>{{ prospect.outreach_priority }}</strong></div>
-            <div><span>Contact route</span><strong>{{ prospect.recommended_contact_type or "Manual review" }}</strong></div>
-          </div>
-
-          <div class="prospect-summary-inline">
-            <div><strong>Fit:</strong> {{ prospect.tier_reason or "No fit explanation yet." }}</div>
-            {% if prospect.website_summary %}
-            <div><strong>Website:</strong> {{ prospect.website_summary }}</div>
-            {% endif %}
+            <div class="muted top-gap-small">{{ prospect.outreach_priority }} · {{ prospect.recommended_contact_type or "Manual review" }}</div>
+          </td>
+          <td>
+            <strong>{{ prospect.email_discovery_status.replace("_", " ") }}</strong>
+            <div class="muted">Confidence {{ prospect.email_confidence or 0 }}/100</div>
             {% if prospect.email_source_page %}
-            <div><strong>Email source:</strong> {{ prospect.email_source_page }}</div>
+            <div class="muted source-line">Source: {{ prospect.email_source_page }}</div>
             {% endif %}
-          </div>
-        </div>
-
-        <div class="prospect-actions prospect-actions-inline">
-          <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/discover-email">Find contacts</button>
-          <button
-            type="submit"
-            formaction="/admin/prospects/{{ prospect.id }}/review"
-            name="action"
-            value="approve"
-            {% if prospect.match_status.value != "new_prospect" %}disabled{% endif %}
-          >Approve</button>
-          <a class="button-link button-link-muted" href="/prospects/{{ prospect.id }}">Details</a>
-        </div>
-      </article>
-      {% endfor %}
-    </div>
+          </td>
+          <td>
+            <div class="row-actions">
+              <button type="submit" formaction="/admin/prospects/{{ prospect.id }}/discover-email">Find contacts</button>
+              <button
+                type="submit"
+                formaction="/admin/prospects/{{ prospect.id }}/review"
+                name="action"
+                value="approve"
+                {% if prospect.match_status.value != "new_prospect" %}disabled{% endif %}
+              >Approve</button>
+              <a class="button-link button-link-muted" href="/prospects/{{ prospect.id }}">Details</a>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="muted">No prospects found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </form>
 </section>
 {% endblock %}

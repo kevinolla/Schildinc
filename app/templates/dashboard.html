@@ -1,48 +1,45 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="hero-panel">
+<section class="page-title-row">
   <div>
-    <div class="eyebrow">Schild Inc Prospect Workflow</div>
-    <h2>Van prospect naar veilige outreach, zonder bestaande klanten te raken.</h2>
-    <p class="hero-copy">Gebruik het dashboard in vier simpele stappen: importeer of zoek prospects, laat het systeem publieke contactgegevens vinden, review de match en tier, en zet alleen goedgekeurde niet-klanten in de daily queue.</p>
-    <div class="button-row">
-      <a class="button-link" href="/prospects">Open prospects</a>
-      <a class="button-link button-link-muted" href="/queue">Open queue</a>
-    </div>
+    <h2>Dashboard</h2>
+    <p class="muted">A simple operating view for prospect import, contact discovery, review, and safe outreach.</p>
   </div>
-  <div class="hero-side">
-    <div class="hero-card">
-      <span>Vandaag te reviewen</span>
-      <strong>{{ stats.pending_review_count }}</strong>
-      <small>pending prospects</small>
-    </div>
-    <div class="hero-card">
-      <span>Vandaag klaar om te sturen</span>
-      <strong>{{ stats.queued_today_count }}</strong>
-      <small>queue items</small>
-    </div>
-    <div class="hero-card">
-      <span>Publieke emails gevonden</span>
-      <strong>{{ stats.discovered_email_count }}</strong>
-      <small>prospects with email</small>
-    </div>
+  <div class="button-row">
+    <a class="button-link" href="/prospects">Review prospects</a>
+    <a class="button-link button-link-muted" href="/queue">Open queue</a>
   </div>
 </section>
 
 <section class="stats-grid stats-grid-compact">
   <div class="card stat-card"><span>Customers</span><strong>{{ stats.customer_count }}</strong></div>
   <div class="card stat-card"><span>Prospects</span><strong>{{ stats.prospect_count }}</strong></div>
-  <div class="card stat-card"><span>Existing matches</span><strong>{{ stats.existing_match_count }}</strong></div>
-  <div class="card stat-card"><span>New prospects</span><strong>{{ stats.new_prospect_count }}</strong></div>
+  <div class="card stat-card"><span>Need review</span><strong>{{ stats.pending_review_count }}</strong></div>
+  <div class="card stat-card"><span>Emails found</span><strong>{{ stats.discovered_email_count }}</strong></div>
   <div class="card stat-card"><span>High priority</span><strong>{{ stats.high_priority_count }}</strong></div>
   <div class="card stat-card"><span>Sent today</span><strong>{{ stats.sent_today_count }}/{{ stats.daily_send_limit }}</strong></div>
 </section>
 
-<section class="three-col dashboard-quick-grid">
-  <div class="card dashboard-action-card">
-    <div class="mini-title">Step 1</div>
-    <h3>Import customer data</h3>
-    <p class="muted-large">Upload your customer base once so matching and suppression stay reliable.</p>
+<section class="ops-grid">
+  <div class="card">
+    <h3>1. Add prospects</h3>
+    <form method="post" action="/admin/google-places-search" class="stack-form">
+      <input name="query" placeholder="bike stores with repair service" required>
+      <input name="location" placeholder="Netherlands">
+      <div class="button-row">
+        <input class="input-small" type="number" name="limit" value="10" min="1" max="25">
+        <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search Google Maps</button>
+      </div>
+    </form>
+    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="stack-form top-gap">
+      <input type="file" name="file" accept=".csv" required>
+      <button type="submit">Upload prospect CSV</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>2. Import customer data</h3>
+    <p class="muted-large">Keep this updated so existing customers stay blocked from outreach.</p>
     <form method="post" action="/admin/import/customers" enctype="multipart/form-data" class="stack-form top-gap">
       <input type="file" name="file" accept=".csv" required>
       <button type="submit">Upload customer master</button>
@@ -53,62 +50,28 @@
     </form>
   </div>
 
-  <div class="card dashboard-action-card">
-    <div class="mini-title">Step 2</div>
-    <h3>Bring in prospects</h3>
-    <p class="muted-large">Use Google Maps search for fresh leads or upload a prepared CSV list.</p>
-    <form method="post" action="/admin/google-places-search" class="stack-form top-gap">
-      <input name="query" placeholder="bike stores with repair service" required>
-      <input name="location" placeholder="Netherlands">
-      <div class="button-row">
-        <input class="input-small" type="number" name="limit" value="10" min="1" max="25">
-        <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search and import</button>
-      </div>
-    </form>
-    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="stack-form top-gap">
-      <input type="file" name="file" accept=".csv" required>
-      <button type="submit">Upload prospect CSV</button>
-    </form>
-    {% if not google_places_enabled %}
-    <p class="muted top-gap-small">Set `GOOGLE_PLACES_API_KEY` to enable live Google Maps import.</p>
-    {% endif %}
-  </div>
-
-  <div class="card dashboard-action-card">
-    <div class="mini-title">Step 3</div>
-    <h3>Review and queue safely</h3>
-    <ul class="clean-list compact-list">
-      <li>Existing customers stay blocked by domain, email, and name matching.</li>
-      <li>Only approved non-customers can enter the email queue.</li>
-      <li>Replies always go to <strong>sales@schildinc.com</strong>.</li>
-      <li>LinkedIn and Instagram stay draft-only.</li>
-    </ul>
+  <div class="card">
+    <h3>3. Daily workflow</h3>
+    <ol class="ordered-list">
+      <li>Open prospects and run `Find contacts` for new rows.</li>
+      <li>Approve only non-customers with good fit.</li>
+      <li>Preview the outreach queue before sending.</li>
+      <li>Keep LinkedIn and Instagram manual; no auto-messaging.</li>
+    </ol>
     <div class="button-row top-gap">
-      <a class="button-link" href="/prospects">Review prospects</a>
-      <a class="button-link button-link-muted" href="/logs">View logs</a>
+      <a class="button-link" href="/prospects">Prospects</a>
+      <a class="button-link button-link-muted" href="/logs">Logs</a>
     </div>
   </div>
 </section>
 
-<section class="two-col">
-  <div class="card">
-    <h3>Recommended daily flow</h3>
-    <ol class="ordered-list">
-      <li>Search or import prospects into the system.</li>
-      <li>Open prospects and run contact discovery in bulk.</li>
-      <li>Approve only real non-customers with a good fit.</li>
-      <li>Preview the queue and send inside the daily limit.</li>
-    </ol>
-  </div>
-  <div class="card">
-    <h3>What the crawler looks for</h3>
-    <ul class="clean-list compact-list">
-      <li>Visible footer or header emails</li>
-      <li>Contact and about pages</li>
-      <li>Cloudflare protected emails</li>
-      <li>Obfuscated public emails like `info*domain.nl`</li>
-      <li>Instagram, LinkedIn, and WhatsApp links</li>
-    </ul>
+<section class="card">
+  <h3>Safety rules active</h3>
+  <div class="safety-grid">
+    <div>Existing customer match blocks outreach</div>
+    <div>Suppression and unsubscribe checks stay active</div>
+    <div>Replies go to <strong>sales@schildinc.com</strong></div>
+    <div>Daily send limits protect the account</div>
   </div>
 </section>
 {% endblock %}

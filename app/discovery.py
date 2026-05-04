@@ -60,6 +60,7 @@ WHATSAPP_URL_PATTERN = re.compile(
     r"(https?://(?:wa\.me/\+?\d[\d-]{5,}|api\.whatsapp\.com/send\?[^\"'\s<>]+)|whatsapp://send\?phone=\+?\d[\d-]{5,})",
     re.I,
 )
+WHATSAPP_JSON_NUMBER_PATTERN = re.compile(r'"(?:number|phone|whatsapp|wa_number)"\s*:\s*"(\+?\d[\d\s()./-]{7,}\d)"', re.I)
 VISIBLE_WHATSAPP_PATTERN = re.compile(r"(?:whatsapp|whats app)[^+\d]{0,24}(\+?\d[\d\s()./-]{6,}\d)", re.I)
 OBFUSCATED_EMAIL_PATTERN = re.compile(
     r"([A-Z0-9._%+-]+)\s*(?:\[at\]|\(at\)| at )\s*([A-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)| dot )\s*([A-Z]{2,})",
@@ -531,10 +532,16 @@ def _prioritize_internal_links(links: list[dict[str, str]], base_url: str) -> li
 
 
 def _pick_social_link(links: list[str]) -> str:
-    for link in links:
+    cleaned = _dedupe([_clean_social_url(link) for link in links if link])
+    for link in cleaned:
         if "/company/" in link or "/business/" in link:
             return link
-    return links[0] if links else ""
+    return cleaned[0] if cleaned else ""
+
+
+def _clean_social_url(value: str) -> str:
+    link = unescape(str(value or "")).replace("\\/", "/").strip()
+    return link.rstrip(").,;\"'<>\\")
 
 
 def _collect_visible_section_text(page, selector: str) -> list[str]:
@@ -612,7 +619,7 @@ def _walk_schema_value(value: object, emails: list[str], linkedin_links: list[st
 
 
 def _collect_social_from_string(value: object, linkedin_links: list[str], instagram_links: list[str]) -> None:
-    link = str(value or "").strip()
+    link = _clean_social_url(str(value or "").strip())
     lower = link.lower()
     if "linkedin.com" in lower:
         linkedin_links.append(link)
@@ -622,19 +629,22 @@ def _collect_social_from_string(value: object, linkedin_links: list[str], instag
 
 def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
     text = raw_html or ""
+    normalized_source = unescape(text).replace("\\/", "/")
     emails = [normalize_email(unquote(match.group(1))) for match in MAILTO_PATTERN.finditer(text)]
     emails.extend(normalize_email(match.group(1)) for match in JSON_EMAIL_PATTERN.finditer(text))
-    emails.extend(_extract_obfuscated_visible_emails(unquote(text)))
-    emails.extend(_extract_symbol_obfuscated_emails(unescape(text)))
+    emails.extend(_extract_obfuscated_visible_emails(unquote(normalized_source)))
+    emails.extend(_extract_symbol_obfuscated_emails(normalized_source))
     emails.extend(_extract_cloudflare_protected_emails(text))
-    emails.extend(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(unescape(text)))
+    emails.extend(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(normalized_source))
 
-    whatsapp_links = [match.group(1) for match in WHATSAPP_URL_PATTERN.finditer(text)]
+    whatsapp_links = [match.group(1) for match in WHATSAPP_URL_PATTERN.finditer(normalized_source)]
     whatsapp_numbers = [_extract_whatsapp_number_from_url(link) for link in whatsapp_links]
+    if "whatsapp" in normalized_source.lower() or "wa.me" in normalized_source.lower():
+        whatsapp_numbers.extend(_normalize_phone_like_value(match.group(1)) for match in WHATSAPP_JSON_NUMBER_PATTERN.finditer(normalized_source))
     linkedin_links: list[str] = []
     instagram_links: list[str] = []
-    for match in SOCIAL_URL_PATTERN.finditer(text):
-        href = match.group(0)
+    for match in SOCIAL_URL_PATTERN.finditer(normalized_source):
+        href = _clean_social_url(match.group(0))
         if "linkedin.com" in href.lower():
             linkedin_links.append(href)
         elif "instagram.com" in href.lower():
