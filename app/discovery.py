@@ -44,10 +44,11 @@ LIKELY_PATH_KEYWORDS = [
     "company",
     "solutions",
 ]
-MAX_CRAWL_PAGES = 12
+MAX_CRAWL_PAGES = 8
 MAX_QUEUE_LINKS = 20
 RAW_FETCH_TIMEOUT_SECONDS = 10
 DISCOVERY_USER_AGENT = "Mozilla/5.0 (compatible; SchildIncProspectCrawler/2.0; +https://schildinc.com)"
+MAX_BROWSER_PAGES = 2
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
@@ -145,15 +146,17 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                 except Exception:
                     raw_page_info = None
 
-                try:
-                    page.goto(target, wait_until="domcontentloaded")
+                should_use_browser = _should_use_browser_for_page(raw_page_info, visited)
+                if should_use_browser:
                     try:
-                        page.wait_for_load_state("networkidle", timeout=2500)
-                    except PlaywrightTimeoutError:
-                        pass
-                    page_info = _extract_visible_page_info(page, page.url or normalized_target)
-                except PlaywrightError:
-                    page_info = None
+                        page.goto(target, wait_until="domcontentloaded")
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=1200)
+                        except PlaywrightTimeoutError:
+                            pass
+                        page_info = _extract_visible_page_info(page, page.url or normalized_target)
+                    except PlaywrightError:
+                        page_info = None
 
                 merged_info = _merge_page_info(page_info, raw_page_info)
                 if not merged_info:
@@ -167,6 +170,16 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                 linkedin_links.extend(merged_info["linkedin"])
                 instagram_links.extend(merged_info["instagram"])
                 snippets.extend(merged_info["snippets"])
+
+                current_best = max(
+                    email_candidates,
+                    key=lambda item: item.confidence,
+                    default=None,
+                )
+                if current_best and current_best.confidence >= 92 and (
+                    len(visited) >= 2 or merged_info["linkedin"] or merged_info["instagram"] or merged_info["whatsapp_numbers"]
+                ):
+                    break
 
                 for href in merged_info["internal_links"]:
                     if href not in visited and href not in pages_to_visit and len(pages_to_visit) < MAX_QUEUE_LINKS:
@@ -605,6 +618,8 @@ def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
     emails = [normalize_email(unquote(match.group(1))) for match in MAILTO_PATTERN.finditer(text)]
     emails.extend(normalize_email(match.group(1)) for match in JSON_EMAIL_PATTERN.finditer(text))
     emails.extend(_extract_obfuscated_visible_emails(unquote(text)))
+    emails.extend(_extract_cloudflare_protected_emails(text))
+    emails.extend(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(unescape(text)))
 
     whatsapp_links = [match.group(1) for match in WHATSAPP_URL_PATTERN.finditer(text)]
     whatsapp_numbers = [_extract_whatsapp_number_from_url(link) for link in whatsapp_links]
@@ -648,11 +663,16 @@ def _extract_page_info_from_html(raw_html: str, current_url: str) -> dict:
     emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(readable_text)}
     emails.update(_extract_obfuscated_visible_emails(readable_text))
     emails.update(raw_source["emails"])
-    internal_links = _prioritize_internal_links(_extract_internal_links_from_html(raw_html, current_url), current_url)
     title = extract_title_from_html(raw_html)
     meta_text = extract_meta_description_from_html(raw_html)
+    og_meta = extract_open_graph_descriptions_from_html(raw_html)
+    for source_text in [title, meta_text, *og_meta]:
+        if source_text:
+            emails.update(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(source_text))
+            emails.update(_extract_obfuscated_visible_emails(source_text))
+    internal_links = _prioritize_internal_links(_extract_internal_links_from_html(raw_html, current_url), current_url)
     headings = extract_headings_from_html(raw_html)
-    snippets = [clean_snippet(item) for item in [title, meta_text, *headings] if clean_snippet(item)]
+    snippets = [clean_snippet(item) for item in [title, meta_text, *og_meta, *headings] if clean_snippet(item)]
     snippets.extend(clean_snippet(line) for line in readable_text.split(". ")[:8] if clean_snippet(line))
     return {
         "emails": sorted(emails),
@@ -729,6 +749,15 @@ def extract_meta_description_from_html(html: str) -> str:
     return clean_snippet(unescape(match.group(1))) if match else ""
 
 
+def extract_open_graph_descriptions_from_html(html: str) -> list[str]:
+    matches = re.finditer(
+        r"<meta[^>]+(?:property|name)=[\"'](?:og:description|twitter:description)[\"'][^>]+content=[\"']([^\"']+)[\"'][^>]*>",
+        html or "",
+        re.I,
+    )
+    return [clean_snippet(unescape(match.group(1))) for match in matches if clean_snippet(unescape(match.group(1)))]
+
+
 def extract_headings_from_html(html: str) -> list[str]:
     matches = re.finditer(r"<(h1|h2|h3)[^>]*>([\s\S]*?)</\1>", html or "", re.I)
     return [clean_snippet(unescape(re.sub(r"<[^>]+>", " ", match.group(2)))) for match in matches if clean_snippet(unescape(re.sub(r"<[^>]+>", " ", match.group(2))))][:8]
@@ -755,6 +784,49 @@ def _extract_obfuscated_visible_emails(text: str) -> list[str]:
         if email:
             results.append(email)
     return results
+
+
+def _extract_cloudflare_protected_emails(text: str) -> list[str]:
+    results: list[str] = []
+    for match in re.finditer(r'data-cfemail=[\"\']([0-9a-fA-F]+)[\"\']', text or "", re.I):
+        decoded = _decode_cloudflare_email(match.group(1))
+        if decoded:
+            results.append(decoded)
+    for match in re.finditer(r'aria-label=[\"\']([^\"\']+@[^\"\']+)[\"\']', text or "", re.I):
+        email = normalize_email(unescape(match.group(1)))
+        if email:
+            results.append(email)
+    return results
+
+
+def _decode_cloudflare_email(value: str) -> str:
+    raw = (value or "").strip()
+    if len(raw) < 4 or len(raw) % 2:
+        return ""
+    try:
+        key = int(raw[:2], 16)
+        chars = [chr(int(raw[index : index + 2], 16) ^ key) for index in range(2, len(raw), 2)]
+    except ValueError:
+        return ""
+    return normalize_email("".join(chars))
+
+
+def _should_use_browser_for_page(raw_page_info: dict | None, visited: list[str]) -> bool:
+    if len(visited) >= MAX_BROWSER_PAGES:
+        return False
+    if not raw_page_info:
+        return True
+    has_contacts = any(
+        [
+            raw_page_info.get("emails"),
+            raw_page_info.get("whatsapp_numbers"),
+            raw_page_info.get("linkedin"),
+            raw_page_info.get("instagram"),
+        ]
+    )
+    if not has_contacts:
+        return True
+    return False
 
 
 def _is_whatsapp_url(value: str) -> bool:
