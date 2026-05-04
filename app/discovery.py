@@ -4,7 +4,10 @@ import re
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html import unescape
+from urllib.error import URLError
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.request import Request, urlopen
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -43,6 +46,8 @@ LIKELY_PATH_KEYWORDS = [
 ]
 MAX_CRAWL_PAGES = 12
 MAX_QUEUE_LINKS = 20
+RAW_FETCH_TIMEOUT_SECONDS = 10
+DISCOVERY_USER_AGENT = "Mozilla/5.0 (compatible; SchildIncProspectCrawler/2.0; +https://schildinc.com)"
 REJECT_LOCAL_PARTS = {"noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "support-ticket"}
 VENDOR_DOMAINS = {"2moso.com", "shopify.com", "mailchimp.com", "klaviyo.com", "zendesk.com", "salesforce.com"}
 EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
@@ -129,25 +134,41 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                     continue
                 if normalize_domain(target) != domain:
                     continue
+                page_info: dict | None = None
+                raw_page_info: dict | None = None
+                normalized_target = target
+
+                try:
+                    raw_doc = _fetch_raw_html(target)
+                    normalized_target = raw_doc["url"] or normalized_target
+                    raw_page_info = _extract_page_info_from_html(raw_doc["html"], normalized_target)
+                except Exception:
+                    raw_page_info = None
+
                 try:
                     page.goto(target, wait_until="domcontentloaded")
                     try:
                         page.wait_for_load_state("networkidle", timeout=2500)
                     except PlaywrightTimeoutError:
                         pass
+                    page_info = _extract_visible_page_info(page, page.url or normalized_target)
                 except PlaywrightError:
+                    page_info = None
+
+                merged_info = _merge_page_info(page_info, raw_page_info)
+                if not merged_info:
                     continue
 
-                visited.append(target)
-                page_info = _extract_visible_page_info(page, target)
-                email_candidates.extend(_rank_email_candidates(page_info["emails"], target, domain, prospect.company_name))
-                whatsapp_numbers.extend(page_info["whatsapp_numbers"])
-                whatsapp_links.extend(page_info["whatsapp_urls"])
-                linkedin_links.extend(page_info["linkedin"])
-                instagram_links.extend(page_info["instagram"])
-                snippets.extend(page_info["snippets"])
+                effective_url = (page.url if page_info and page.url else normalized_target) or target
+                visited.append(effective_url)
+                email_candidates.extend(_rank_email_candidates(merged_info["emails"], effective_url, domain, prospect.company_name))
+                whatsapp_numbers.extend(merged_info["whatsapp_numbers"])
+                whatsapp_links.extend(merged_info["whatsapp_urls"])
+                linkedin_links.extend(merged_info["linkedin"])
+                instagram_links.extend(merged_info["instagram"])
+                snippets.extend(merged_info["snippets"])
 
-                for href in page_info["internal_links"]:
+                for href in merged_info["internal_links"]:
                     if href not in visited and href not in pages_to_visit and len(pages_to_visit) < MAX_QUEUE_LINKS:
                         pages_to_visit.append(href)
 
@@ -445,6 +466,9 @@ def _normalize_internal_link(href: str, current_url: str) -> str:
         return ""
     if re.search(r"\.(pdf|jpg|jpeg|png|gif|svg|webp|zip)$", target.path, re.I):
         return ""
+    junk_haystack = f"{target.path.lower()}?{target.query.lower()}"
+    if any(token in junk_haystack for token in ["add-to-cart", "/cart", "/checkout", "/my-account", "wishlist", "orderby=", "min_price=", "max_price=", "dgwt_wcas="]):
+        return ""
     target = target._replace(fragment="", query=target.query)
     return target.geturl()
 
@@ -601,6 +625,62 @@ def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
     }
 
 
+def _fetch_raw_html(target_url: str) -> dict[str, str]:
+    request = Request(
+        ensure_http_url(target_url),
+        headers={
+            "User-Agent": DISCOVERY_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
+    with urlopen(request, timeout=RAW_FETCH_TIMEOUT_SECONDS) as response:
+        content_type = response.headers.get("Content-Type", "")
+        if "html" not in content_type.lower():
+            raise URLError(f"Non-HTML response: {content_type}")
+        charset = response.headers.get_content_charset() or "utf-8"
+        html = response.read().decode(charset, errors="replace")
+        return {"url": response.geturl() or target_url, "html": html}
+
+
+def _extract_page_info_from_html(raw_html: str, current_url: str) -> dict:
+    readable_text = _extract_readable_text(raw_html)
+    raw_source = _extract_public_source_data(raw_html)
+    emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(readable_text)}
+    emails.update(_extract_obfuscated_visible_emails(readable_text))
+    emails.update(raw_source["emails"])
+    internal_links = _prioritize_internal_links(_extract_internal_links_from_html(raw_html, current_url), current_url)
+    title = extract_title_from_html(raw_html)
+    meta_text = extract_meta_description_from_html(raw_html)
+    headings = extract_headings_from_html(raw_html)
+    snippets = [clean_snippet(item) for item in [title, meta_text, *headings] if clean_snippet(item)]
+    snippets.extend(clean_snippet(line) for line in readable_text.split(". ")[:8] if clean_snippet(line))
+    return {
+        "emails": sorted(emails),
+        "whatsapp_numbers": _dedupe(raw_source["whatsapp_numbers"]),
+        "whatsapp_urls": _dedupe(raw_source["whatsapp"]),
+        "internal_links": internal_links,
+        "linkedin": _dedupe(raw_source["linkedin"]),
+        "instagram": _dedupe(raw_source["instagram"]),
+        "snippets": _dedupe([item for item in snippets if item]),
+    }
+
+
+def _merge_page_info(primary: dict | None, fallback: dict | None) -> dict | None:
+    if not primary and not fallback:
+        return None
+    primary = primary or {}
+    fallback = fallback or {}
+    return {
+        "emails": _dedupe(list(primary.get("emails", [])) + list(fallback.get("emails", []))),
+        "whatsapp_numbers": _dedupe(list(primary.get("whatsapp_numbers", [])) + list(fallback.get("whatsapp_numbers", []))),
+        "whatsapp_urls": _dedupe(list(primary.get("whatsapp_urls", [])) + list(fallback.get("whatsapp_urls", []))),
+        "internal_links": _dedupe(list(primary.get("internal_links", [])) + list(fallback.get("internal_links", []))),
+        "linkedin": _dedupe(list(primary.get("linkedin", [])) + list(fallback.get("linkedin", []))),
+        "instagram": _dedupe(list(primary.get("instagram", [])) + list(fallback.get("instagram", []))),
+        "snippets": _dedupe(list(primary.get("snippets", [])) + list(fallback.get("snippets", []))),
+    }
+
+
 def _summarize_snippets(snippets: list[str]) -> str:
     useful = [item for item in snippets if len(item) > 20]
     return " ".join(useful[:2]).strip()
@@ -637,6 +717,35 @@ def _extract_readable_text(html: str) -> str:
         .replace("&#39;", "'")
     )
     return " ".join(text.split()).strip()
+
+
+def extract_title_from_html(html: str) -> str:
+    match = re.search(r"<title[^>]*>([\s\S]*?)</title>", html or "", re.I)
+    return clean_snippet(unescape(re.sub(r"<[^>]+>", " ", match.group(1)))) if match else ""
+
+
+def extract_meta_description_from_html(html: str) -> str:
+    match = re.search(r"<meta[^>]+name=[\"']description[\"'][^>]+content=[\"']([^\"']+)[\"'][^>]*>", html or "", re.I)
+    return clean_snippet(unescape(match.group(1))) if match else ""
+
+
+def extract_headings_from_html(html: str) -> list[str]:
+    matches = re.finditer(r"<(h1|h2|h3)[^>]*>([\s\S]*?)</\1>", html or "", re.I)
+    return [clean_snippet(unescape(re.sub(r"<[^>]+>", " ", match.group(2)))) for match in matches if clean_snippet(unescape(re.sub(r"<[^>]+>", " ", match.group(2))))][:8]
+
+
+def _extract_internal_links_from_html(html: str, base_url: str) -> list[dict[str, str]]:
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>([\s\S]*?)</a>", html or "", re.I):
+        href = clean_snippet(unescape(match.group(1) or ""))
+        anchor_text = clean_snippet(unescape(re.sub(r"<[^>]+>", " ", match.group(2) or "")))
+        normalized = _normalize_internal_link(href, base_url)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        links.append({"url": normalized, "anchor_text": anchor_text})
+    return links
 
 
 def _extract_obfuscated_visible_emails(text: str) -> list[str]:
