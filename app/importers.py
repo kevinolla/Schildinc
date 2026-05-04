@@ -183,9 +183,13 @@ def upsert_prospects_from_dataframe(session: Session, df: pd.DataFrame, source: 
         prospect.canonical_company_name_clean = normalize_text(company_name)
         prospect.email = normalize_email(record.get("email") or record.get("best_email") or "")
         prospect.email_domain = email_domain(prospect.email)
+        prospect.whatsapp_number = str(record.get("whatsapp_number") or prospect.whatsapp_number or "")
+        prospect.whatsapp_url = str(record.get("whatsapp_url") or prospect.whatsapp_url or "")
         if prospect.email:
             prospect.email_discovery_status = "imported"
             prospect.email_confidence = max(prospect.email_confidence, 60)
+        elif prospect.whatsapp_number or record.get("linkedin_url") or record.get("instagram_url"):
+            prospect.email_discovery_status = "partial"
         prospect.website = str(record.get("website") or "")
         prospect.website_domain = normalize_domain(record.get("website_domain") or prospect.website)
         prospect.phone = str(record.get("phone") or "")

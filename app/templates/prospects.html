@@ -26,7 +26,7 @@
   <div class="section-head">
     <div>
       <h3>Prospect filters</h3>
-      <p class="muted">Keep this page simple: find contacts, check fit, approve the good ones, and open details only when needed.</p>
+      <p class="muted">Simple flow: find contacts, check fit, approve good non-customers, then open details only when you need a closer look.</p>
     </div>
   </div>
   <form method="get" action="/prospects" class="grid-form">
@@ -63,7 +63,7 @@
     <div class="section-head">
       <div>
         <h2>Prospects</h2>
-        <p class="muted">The crawler looks for public business email, Instagram, and LinkedIn. No hidden scraping, no auto social messaging, and existing customers stay blocked from outreach.</p>
+        <p class="muted">The crawler looks only for public contact channels on the business website: email, WhatsApp, Instagram, and LinkedIn. Existing customers stay blocked from outreach.</p>
       </div>
       <div class="button-row">
         <button type="submit">Find contacts for selected</button>
@@ -94,38 +94,36 @@
 
           <div class="prospect-info-grid">
             <div class="info-box">
-              <div class="mini-title">Best contact</div>
-              <div class="info-value">{{ prospect.email or "No email yet" }}</div>
-              {% if prospect.phone %}
-              <div class="muted">{{ prospect.phone }}</div>
-              {% endif %}
-              {% if prospect.email_source_page %}
-              <div class="muted">Found on {{ prospect.email_source_page }}</div>
-              {% endif %}
+              <div class="mini-title">Contacts found</div>
+              <ul class="contact-list">
+                <li><span>Email</span><strong>{{ prospect.email or "-" }}</strong></li>
+                <li><span>WhatsApp</span><strong>{% if prospect.whatsapp_number %}<a href="{{ prospect.whatsapp_url or ('https://wa.me/' ~ prospect.whatsapp_number|replace('+', '')) }}" target="_blank" rel="noreferrer">{{ prospect.whatsapp_number }}</a>{% else %}-{% endif %}</strong></li>
+                <li><span>Instagram</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
+                <li><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
+              </ul>
             </div>
 
             <div class="info-box">
-              <div class="mini-title">Discovery</div>
+              <div class="mini-title">Crawler status</div>
               <div class="info-value">{{ prospect.email_discovery_status.replace("_", " ") }}</div>
               <div class="muted">Confidence {{ prospect.email_confidence or 0 }}/100</div>
               {% if prospect.email_discovered_at %}
               <div class="muted">{{ prospect.email_discovered_at }}</div>
               {% endif %}
+              {% if prospect.email_source_page %}
+              <div class="muted">Email source: {{ prospect.email_source_page }}</div>
+              {% endif %}
             </div>
 
             <div class="info-box">
-              <div class="mini-title">Socials</div>
-              <div class="social-links-inline">
-                {% if prospect.linkedin_url %}
-                <a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">LinkedIn</a>
-                {% endif %}
-                {% if prospect.instagram_url %}
-                <a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Instagram</a>
-                {% endif %}
-                {% if not prospect.linkedin_url and not prospect.instagram_url %}
-                <span class="muted">Not found yet</span>
-                {% endif %}
-              </div>
+              <div class="mini-title">Phone and web</div>
+              <div class="info-value">{{ prospect.phone or "No phone in source" }}</div>
+              {% if prospect.website %}
+              <div class="muted"><a href="{{ prospect.website }}" target="_blank" rel="noreferrer">Open website</a></div>
+              {% endif %}
+              {% if prospect.google_maps_url %}
+              <div class="muted"><a href="{{ prospect.google_maps_url }}" target="_blank" rel="noreferrer">Open Google Maps result</a></div>
+              {% endif %}
             </div>
 
             <div class="info-box">

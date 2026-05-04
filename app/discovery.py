@@ -4,7 +4,7 @@ import re
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -37,6 +37,15 @@ EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 SOCIAL_URL_PATTERN = re.compile(r"https?://(?:www\.)?(instagram\.com/[^\s\"'<>]+|linkedin\.com/[^\s\"'<>]+)", re.I)
 MAILTO_PATTERN = re.compile(r"mailto:([^\"'<>?\s]+)", re.I)
 JSON_EMAIL_PATTERN = re.compile(r'"email"\s*:\s*"([^"]+@[^"]+)"', re.I)
+WHATSAPP_URL_PATTERN = re.compile(
+    r"(https?://(?:wa\.me/\+?\d[\d-]{5,}|api\.whatsapp\.com/send\?[^\"'\s<>]+)|whatsapp://send\?phone=\+?\d[\d-]{5,})",
+    re.I,
+)
+VISIBLE_WHATSAPP_PATTERN = re.compile(r"(?:whatsapp|whats app)[^+\d]{0,24}(\+?\d[\d\s()./-]{6,}\d)", re.I)
+OBFUSCATED_EMAIL_PATTERN = re.compile(
+    r"([A-Z0-9._%+-]+)\s*(?:\[at\]|\(at\)| at )\s*([A-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)| dot )\s*([A-Z]{2,})",
+    re.I,
+)
 
 
 @dataclass
@@ -52,6 +61,8 @@ class DiscoveryResult:
     email: str
     source_page: str
     confidence: int
+    whatsapp_number: str
+    whatsapp_url: str
     linkedin_url: str
     instagram_url: str
     summary: str
@@ -62,7 +73,19 @@ class DiscoveryResult:
 def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) -> DiscoveryResult:
     base_url = prospect.website or ""
     if not base_url:
-        result = DiscoveryResult("no_website", "", "", 0, prospect.linkedin_url or "", prospect.instagram_url or "", "", [], "")
+        result = DiscoveryResult(
+            "no_website",
+            "",
+            "",
+            0,
+            prospect.whatsapp_number or "",
+            prospect.whatsapp_url or "",
+            prospect.linkedin_url or "",
+            prospect.instagram_url or "",
+            "",
+            [],
+            "",
+        )
         _apply_discovery_result(session, prospect, result)
         return result
 
@@ -70,6 +93,8 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
     domain = normalize_domain(website)
     visited: list[str] = []
     email_candidates: list[DiscoveryEmailCandidate] = []
+    whatsapp_numbers: list[str] = []
+    whatsapp_links: list[str] = []
     linkedin_links: list[str] = []
     instagram_links: list[str] = []
     snippets: list[str] = []
@@ -101,6 +126,8 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
                 visited.append(target)
                 page_info = _extract_visible_page_info(page, target)
                 email_candidates.extend(_rank_email_candidates(page_info["emails"], target, domain, prospect.company_name))
+                whatsapp_numbers.extend(page_info["whatsapp_numbers"])
+                whatsapp_links.extend(page_info["whatsapp_urls"])
                 linkedin_links.extend(page_info["linkedin"])
                 instagram_links.extend(page_info["instagram"])
                 snippets.extend(page_info["snippets"])
@@ -111,18 +138,23 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
 
             browser.close()
     except Exception as exc:  # noqa: BLE001
-        result = DiscoveryResult("error", "", "", 0, "", "", "", [], str(exc))
+        result = DiscoveryResult("error", "", "", 0, "", "", "", "", "", [], str(exc))
         _apply_discovery_result(session, prospect, result)
         return result
 
     best = max(email_candidates, key=lambda item: item.confidence, default=None)
+    best_whatsapp_number = _pick_best_whatsapp_number(whatsapp_numbers, prospect.phone)
+    best_whatsapp_url = _pick_best_whatsapp_url(whatsapp_links, best_whatsapp_number)
     summary = _summarize_snippets(snippets)
     highlights = _highlights_from_snippets(snippets)
+    has_any_contact = bool(best or best_whatsapp_number or linkedin_links or instagram_links)
     result = DiscoveryResult(
-        status="found" if best else "no_email",
+        status="found" if best else ("partial" if has_any_contact else "no_contacts"),
         email=best.email if best else "",
         source_page=best.source_page if best else "",
         confidence=best.confidence if best else 0,
+        whatsapp_number=best_whatsapp_number,
+        whatsapp_url=best_whatsapp_url,
         linkedin_url=_pick_social_link(linkedin_links),
         instagram_url=_pick_social_link(instagram_links),
         summary=summary,
@@ -137,11 +169,15 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
     prospect.discovery_error = result.error
     prospect.website_summary = result.summary or prospect.website_summary
     prospect.discovery_highlights = "\n".join(result.highlights[:4])
+    if result.whatsapp_number:
+        prospect.whatsapp_number = result.whatsapp_number
+    if result.whatsapp_url:
+        prospect.whatsapp_url = result.whatsapp_url
     if result.linkedin_url:
         prospect.linkedin_url = result.linkedin_url
     if result.instagram_url:
         prospect.instagram_url = result.instagram_url
-    if result.linkedin_url or result.instagram_url:
+    if result.linkedin_url or result.instagram_url or result.whatsapp_number:
         prospect.social_discovered_at = datetime.utcnow()
 
     if result.email:
@@ -162,7 +198,7 @@ def _apply_discovery_result(session: Session, prospect: Prospect, result: Discov
             action_type="email_discovery",
             status=result.status,
             source_url=result.source_page or prospect.website,
-            detail=result.error or result.email or "No public business email found.",
+            detail=result.error or _build_discovery_log_detail(result),
         )
     )
 
@@ -193,6 +229,7 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
     raw_source = _extract_public_source_data(raw_html)
     visible_text = " ".join([body_text, *headings, *footer_bits, *contact_bits, meta_text])
     emails = {normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(visible_text)}
+    emails.update(_extract_obfuscated_visible_emails(visible_text))
     emails.update(structured_data["emails"])
     emails.update(raw_source["emails"])
     for item in links:
@@ -204,17 +241,32 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
             emails.update(normalize_email(match.group(0)) for match in EMAIL_PATTERN.finditer(text))
 
     internal_links = []
+    whatsapp_numbers = []
+    whatsapp_urls = []
     social_linkedin = []
     social_instagram = []
     for item in links:
         href = item.get("href", "") or ""
         label_text = " ".join([item.get("text", "") or "", item.get("label", "") or "", item.get("title", "") or ""]).lower()
-        if "linkedin.com" in href.lower() or "linkedin" in label_text:
+        href_lower = href.lower()
+        if _is_whatsapp_url(href):
+            whatsapp_urls.append(href)
+            parsed_number = _extract_whatsapp_number_from_url(href)
+            if parsed_number:
+                whatsapp_numbers.append(parsed_number)
+        elif "linkedin.com" in href_lower or "linkedin" in label_text:
             social_linkedin.append(href)
-        elif "instagram.com" in href.lower() or "instagram" in label_text:
+        elif "instagram.com" in href_lower or "instagram" in label_text:
             social_instagram.append(href)
         elif _is_likely_internal_follow_link(href, current_url):
             internal_links.append(href)
+        if "whatsapp" in label_text and item.get("text"):
+            whatsapp_text_number = _normalize_phone_like_value(item.get("text", ""))
+            if whatsapp_text_number:
+                whatsapp_numbers.append(whatsapp_text_number)
+    whatsapp_numbers.extend(_extract_visible_whatsapp_numbers(visible_text))
+    whatsapp_numbers.extend(raw_source["whatsapp_numbers"])
+    whatsapp_urls.extend(raw_source["whatsapp"])
     social_linkedin.extend(structured_data["linkedin"])
     social_instagram.extend(structured_data["instagram"])
     social_linkedin.extend(raw_source["linkedin"])
@@ -228,6 +280,8 @@ def _extract_visible_page_info(page, current_url: str) -> dict:
 
     return {
         "emails": sorted(emails),
+        "whatsapp_numbers": _dedupe([item for item in whatsapp_numbers if item]),
+        "whatsapp_urls": _dedupe([item for item in whatsapp_urls if item]),
         "internal_links": _dedupe(internal_links),
         "linkedin": _dedupe(social_linkedin),
         "instagram": _dedupe(social_instagram),
@@ -392,7 +446,10 @@ def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
     text = raw_html or ""
     emails = [normalize_email(unquote(match.group(1))) for match in MAILTO_PATTERN.finditer(text)]
     emails.extend(normalize_email(match.group(1)) for match in JSON_EMAIL_PATTERN.finditer(text))
+    emails.extend(_extract_obfuscated_visible_emails(unquote(text)))
 
+    whatsapp_links = [match.group(1) for match in WHATSAPP_URL_PATTERN.finditer(text)]
+    whatsapp_numbers = [_extract_whatsapp_number_from_url(link) for link in whatsapp_links]
     linkedin_links: list[str] = []
     instagram_links: list[str] = []
     for match in SOCIAL_URL_PATTERN.finditer(text):
@@ -403,6 +460,8 @@ def _extract_public_source_data(raw_html: str) -> dict[str, list[str]]:
             instagram_links.append(href)
     return {
         "emails": _dedupe([item for item in emails if item]),
+        "whatsapp": _dedupe([item for item in whatsapp_links if item]),
+        "whatsapp_numbers": _dedupe([item for item in whatsapp_numbers if item]),
         "linkedin": _dedupe(linkedin_links),
         "instagram": _dedupe(instagram_links),
     }
@@ -425,6 +484,79 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(value)
             output.append(value)
     return output
+
+
+def _extract_obfuscated_visible_emails(text: str) -> list[str]:
+    results: list[str] = []
+    for match in OBFUSCATED_EMAIL_PATTERN.finditer(text or ""):
+        email = normalize_email(f"{match.group(1)}@{match.group(2)}.{match.group(3)}")
+        if email:
+            results.append(email)
+    return results
+
+
+def _is_whatsapp_url(value: str) -> bool:
+    lower = str(value or "").lower()
+    return "wa.me/" in lower or "api.whatsapp.com/" in lower or lower.startswith("whatsapp://")
+
+
+def _extract_whatsapp_number_from_url(value: str) -> str:
+    parsed = urlparse(str(value or ""))
+    raw = ""
+    if "wa.me" in parsed.netloc:
+        raw = parsed.path.strip("/")
+    elif "api.whatsapp.com" in parsed.netloc or parsed.scheme == "whatsapp":
+        raw = parse_qs(parsed.query).get("phone", [""])[0]
+    return _normalize_phone_like_value(raw)
+
+
+def _extract_visible_whatsapp_numbers(text: str) -> list[str]:
+    results: list[str] = []
+    for match in VISIBLE_WHATSAPP_PATTERN.finditer(text or ""):
+        phone = _normalize_phone_like_value(match.group(1))
+        if phone:
+            results.append(phone)
+    return results
+
+
+def _normalize_phone_like_value(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    keep_plus = raw.startswith("+")
+    digits = "".join(char for char in raw if char.isdigit())
+    if len(digits) < 8:
+        return ""
+    return f"+{digits}" if keep_plus else digits
+
+
+def _pick_best_whatsapp_number(candidates: list[str], fallback_phone: str) -> str:
+    for number in candidates:
+        if number:
+            return number
+    return _normalize_phone_like_value(fallback_phone) if "whatsapp" in str(fallback_phone or "").lower() else ""
+
+
+def _pick_best_whatsapp_url(candidates: list[str], number: str) -> str:
+    for value in candidates:
+        if value:
+            return value
+    if number:
+        return f"https://wa.me/{number.lstrip('+')}"
+    return ""
+
+
+def _build_discovery_log_detail(result: DiscoveryResult) -> str:
+    channels = []
+    if result.email:
+        channels.append(f"email={result.email}")
+    if result.whatsapp_number:
+        channels.append(f"whatsapp={result.whatsapp_number}")
+    if result.instagram_url:
+        channels.append("instagram")
+    if result.linkedin_url:
+        channels.append("linkedin")
+    return ", ".join(channels) if channels else "No public contact channels found."
 
 
 def ensure_http_url(value: str) -> str:

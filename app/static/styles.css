@@ -216,7 +216,8 @@ button[disabled] {
 
 .badge-match-possible_match,
 .review-pending,
-.badge-discovery-no_email {
+.badge-discovery-no_email,
+.badge-discovery-partial {
   background: #fff1b8;
 }
 
@@ -235,7 +236,8 @@ button[disabled] {
 .badge-queue-skipped,
 .badge-queue-suppressed,
 .review-rejected,
-.badge-discovery-error {
+.badge-discovery-error,
+.badge-discovery-no_contacts {
   background: #f4d7d7;
 }
 
@@ -300,7 +302,7 @@ button[disabled] {
 
 .prospect-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 180px;
+  grid-template-columns: auto minmax(0, 1fr) 150px;
   gap: 16px;
   border: 1px solid #e4ebf5;
   border-radius: 10px;
@@ -342,7 +344,7 @@ button[disabled] {
   border-radius: 8px;
   background: #ffffff;
   padding: 12px;
-  min-height: 88px;
+  min-height: 96px;
 }
 
 .info-value {
@@ -362,6 +364,43 @@ button[disabled] {
   font-weight: 600;
 }
 
+.contact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.contact-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  border-bottom: 1px solid #edf1f7;
+  padding-bottom: 8px;
+}
+
+.contact-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.contact-list span {
+  color: #66758a;
+  font-size: 13px;
+}
+
+.contact-list strong {
+  text-align: right;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.detail-contact-list {
+  margin-bottom: 14px;
+}
+
 .prospect-summary-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -375,6 +414,11 @@ button[disabled] {
   display: grid;
   gap: 10px;
   align-content: start;
+}
+
+.prospect-actions .button-link,
+.prospect-actions button {
+  width: 100%;
 }
 
 .detail-row td {

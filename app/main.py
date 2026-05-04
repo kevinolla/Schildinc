@@ -44,7 +44,7 @@ templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic(auto_error=False)
 
 TIER_FILTERS = ["Good Tier", "Hard to Reach", "Mid Tier", "Low Tier", "Brand Store", "Low Fit", "Unclassified"]
-DISCOVERY_FILTERS = ["all", "has_email", "no_email", "high_confidence", "low_confidence", "found", "error", "not_started"]
+DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_socials", "high_confidence", "low_confidence", "found", "partial", "no_contacts", "error", "not_started"]
 
 
 def require_admin(credentials: HTTPBasicCredentials | None = Depends(security)) -> str:
@@ -188,6 +188,7 @@ def prospects_page(
                 Prospect.company_name.ilike(like_term),
                 Prospect.website.ilike(like_term),
                 Prospect.email.ilike(like_term),
+                Prospect.whatsapp_number.ilike(like_term),
                 Prospect.city.ilike(like_term),
             )
         )
@@ -201,11 +202,15 @@ def prospects_page(
         query = query.where(Prospect.email != "")
     elif discovery_filter == "no_email":
         query = query.where(Prospect.email == "")
+    elif discovery_filter == "has_whatsapp":
+        query = query.where(Prospect.whatsapp_number != "")
+    elif discovery_filter == "has_socials":
+        query = query.where(or_(Prospect.linkedin_url != "", Prospect.instagram_url != ""))
     elif discovery_filter == "high_confidence":
         query = query.where(Prospect.email_confidence >= 75)
     elif discovery_filter == "low_confidence":
         query = query.where(Prospect.email_confidence < 75)
-    elif discovery_filter in {"found", "error", "not_started"}:
+    elif discovery_filter in {"found", "partial", "no_contacts", "error", "not_started"}:
         query = query.where(Prospect.email_discovery_status == discovery_filter)
 
     prospects = db.scalars(query.limit(300)).all()

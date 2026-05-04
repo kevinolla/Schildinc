@@ -8,7 +8,7 @@
   </div>
   <div class="button-row">
     <form method="post" action="/admin/prospects/{{ prospect.id }}/discover-email">
-      <button type="submit">Discover Email</button>
+      <button type="submit">Find contacts</button>
     </form>
     <form method="post" action="/admin/prospects/{{ prospect.id }}/match">
       <button type="submit">Re-match</button>
@@ -18,14 +18,18 @@
 
 <section class="three-col">
   <div class="card">
-    <h3>Contact discovery</h3>
-    <div class="kv-list">
+    <h3>Contacts found</h3>
+    <ul class="contact-list detail-contact-list">
+      <li><span>Email</span><strong>{{ prospect.email or "-" }}</strong></li>
+      <li><span>WhatsApp</span><strong>{% if prospect.whatsapp_number %}<a href="{{ prospect.whatsapp_url or ('https://wa.me/' ~ prospect.whatsapp_number|replace('+', '')) }}" target="_blank" rel="noreferrer">{{ prospect.whatsapp_number }}</a>{% else %}-{% endif %}</strong></li>
+      <li><span>Instagram</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
+      <li><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></li>
+      <li><span>Phone</span><strong>{{ prospect.phone or "-" }}</strong></li>
+    </ul>
+    <div class="kv-list top-gap">
       <div><span>Status</span><strong>{{ prospect.email_discovery_status.replace("_", " ") }}</strong></div>
-      <div><span>Best email</span><strong>{{ prospect.email or "-" }}</strong></div>
       <div><span>Email source</span><strong>{{ prospect.email_source_page or "-" }}</strong></div>
       <div><span>Confidence</span><strong>{{ prospect.email_confidence or 0 }}/100</strong></div>
-      <div><span>LinkedIn</span><strong>{% if prospect.linkedin_url %}<a href="{{ prospect.linkedin_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></div>
-      <div><span>Instagram</span><strong>{% if prospect.instagram_url %}<a href="{{ prospect.instagram_url }}" target="_blank" rel="noreferrer">Open</a>{% else %}-{% endif %}</strong></div>
     </div>
     {% if prospect.discovery_error %}
     <p class="alert error">{{ prospect.discovery_error }}</p>
