@@ -261,3 +261,165 @@ class WebhookLog(Base):
     status: Mapped[str] = mapped_column(Text, default="")
     payload_excerpt: Mapped[str] = mapped_column(Text, default="")
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class KvkCompany(Base):
+    __tablename__ = "kvk_companies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    source_system: Mapped[str] = mapped_column(Text, default="kvk_bike_list")
+    source_file: Mapped[str] = mapped_column(Text, default="")
+    company_entity_id: Mapped[str] = mapped_column(Text, unique=True, index=True, default="")
+    record_type: Mapped[str] = mapped_column(Text, default="company")
+
+    kvk_number: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    company_name: Mapped[str] = mapped_column(Text, index=True)
+    canonical_company_name_clean: Mapped[str] = mapped_column(Text, default="", index=True)
+    search_company_name: Mapped[str] = mapped_column(Text, default="")
+
+    main_activity_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    main_activity_description: Mapped[str] = mapped_column(Text, default="")
+    date_of_establishment: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    country_code: Mapped[str] = mapped_column(Text, default="NL", index=True)
+    province_code: Mapped[str] = mapped_column(Text, default="")
+    establishments_count: Mapped[int] = mapped_column(Integer, default=1)
+    primary_establishment_number: Mapped[str] = mapped_column(Text, default="")
+    primary_city: Mapped[str] = mapped_column(Text, default="", index=True)
+    primary_postal_code: Mapped[str] = mapped_column(Text, default="")
+    primary_address: Mapped[str] = mapped_column(Text, default="")
+
+    website: Mapped[str] = mapped_column(Text, default="")
+    website_domain: Mapped[str] = mapped_column(Text, default="", index=True)
+    email_public: Mapped[str] = mapped_column(Text, default="", index=True)
+    phone_public: Mapped[str] = mapped_column(Text, default="")
+    email_source_url: Mapped[str] = mapped_column(Text, default="")
+    phone_source_url: Mapped[str] = mapped_column(Text, default="")
+    email_confidence: Mapped[str] = mapped_column(Text, default="")
+    phone_confidence: Mapped[str] = mapped_column(Text, default="")
+
+    enrichment_status: Mapped[str] = mapped_column(Text, default="pending", index=True)
+    google_maps_query: Mapped[str] = mapped_column(Text, default="")
+    contact_search_query: Mapped[str] = mapped_column(Text, default="")
+    last_enrichment_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    already_client_flag: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    client_match_status: Mapped[str] = mapped_column(Text, default="unknown", index=True)
+    matched_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True)
+    match_confidence: Mapped[str] = mapped_column(Text, default="")
+    best_match_reason: Mapped[str] = mapped_column(Text, default="")
+
+    bike_shop_tier: Mapped[str] = mapped_column(Text, default="Unclassified", index=True)
+    bike_shop_segment: Mapped[str] = mapped_column(Text, default="")
+    outreach_priority: Mapped[str] = mapped_column(Text, default="")
+    tier_reason: Mapped[str] = mapped_column(Text, default="")
+    headquarters_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    franchise_or_buying_group: Mapped[str] = mapped_column(Text, default="")
+    recommended_sales_angle: Mapped[str] = mapped_column(Text, default="")
+    recommended_contact_type: Mapped[str] = mapped_column(Text, default="")
+
+    approved_for_outreach: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    matched_customer: Mapped[Customer | None] = relationship("Customer", foreign_keys=[matched_customer_id])
+    establishments: Mapped[list["KvkEstablishment"]] = relationship(back_populates="company", cascade="all, delete-orphan")
+
+
+class KvkEstablishment(Base):
+    __tablename__ = "kvk_establishments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    source_system: Mapped[str] = mapped_column(Text, default="kvk_bike_list")
+    source_file: Mapped[str] = mapped_column(Text, default="")
+    record_id: Mapped[str] = mapped_column(Text, unique=True, index=True, default="")
+    record_type: Mapped[str] = mapped_column(Text, default="establishment")
+
+    kvk_number: Mapped[str] = mapped_column(Text, index=True)
+    establishment_number: Mapped[str] = mapped_column(Text, default="", index=True)
+    company_id: Mapped[int | None] = mapped_column(ForeignKey("kvk_companies.id"), nullable=True, index=True)
+
+    company_name_raw: Mapped[str] = mapped_column(Text, default="")
+    company_name: Mapped[str] = mapped_column(Text, index=True)
+    canonical_company_name_clean: Mapped[str] = mapped_column(Text, default="", index=True)
+    search_company_name: Mapped[str] = mapped_column(Text, default="")
+
+    main_activity_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    main_activity_description: Mapped[str] = mapped_column(Text, default="")
+    date_of_establishment: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    country_code: Mapped[str] = mapped_column(Text, default="NL", index=True)
+    province_code: Mapped[str] = mapped_column(Text, default="")
+    non_mailing_indicator: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    visiting_street: Mapped[str] = mapped_column(Text, default="")
+    visiting_house_number: Mapped[str] = mapped_column(Text, default="")
+    visiting_house_letter: Mapped[str] = mapped_column(Text, default="")
+    visiting_house_number_addition: Mapped[str] = mapped_column(Text, default="")
+    visiting_location_addition: Mapped[str] = mapped_column(Text, default="")
+    visiting_postal_code: Mapped[str] = mapped_column(Text, default="")
+    visiting_city: Mapped[str] = mapped_column(Text, default="", index=True)
+    visiting_municipality_code: Mapped[str] = mapped_column(Text, default="")
+    visiting_municipality_name: Mapped[str] = mapped_column(Text, default="")
+
+    postal_street: Mapped[str] = mapped_column(Text, default="")
+    postal_house_number: Mapped[str] = mapped_column(Text, default="")
+    postal_house_letter: Mapped[str] = mapped_column(Text, default="")
+    postal_house_number_addition: Mapped[str] = mapped_column(Text, default="")
+    postal_location_addition: Mapped[str] = mapped_column(Text, default="")
+    postal_postal_code: Mapped[str] = mapped_column(Text, default="")
+    postal_city: Mapped[str] = mapped_column(Text, default="")
+    postal_municipality_code: Mapped[str] = mapped_column(Text, default="")
+    postal_municipality_name: Mapped[str] = mapped_column(Text, default="")
+    full_visiting_address: Mapped[str] = mapped_column(Text, default="")
+    full_postal_address: Mapped[str] = mapped_column(Text, default="")
+
+    website: Mapped[str] = mapped_column(Text, default="")
+    website_domain: Mapped[str] = mapped_column(Text, default="")
+    email_public: Mapped[str] = mapped_column(Text, default="")
+    phone_public: Mapped[str] = mapped_column(Text, default="")
+    email_source_url: Mapped[str] = mapped_column(Text, default="")
+    phone_source_url: Mapped[str] = mapped_column(Text, default="")
+    email_confidence: Mapped[str] = mapped_column(Text, default="")
+    phone_confidence: Mapped[str] = mapped_column(Text, default="")
+
+    enrichment_status: Mapped[str] = mapped_column(Text, default="pending", index=True)
+    google_maps_query: Mapped[str] = mapped_column(Text, default="")
+    contact_search_query: Mapped[str] = mapped_column(Text, default="")
+    has_multiple_establishments: Mapped[bool] = mapped_column(Boolean, default=False)
+    establishments_per_kvk: Mapped[int] = mapped_column(Integer, default=1)
+
+    already_client_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    client_match_status: Mapped[str] = mapped_column(Text, default="unknown")
+    matched_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True)
+
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    company: Mapped[KvkCompany | None] = relationship(back_populates="establishments")
+    matched_customer: Mapped[Customer | None] = relationship("Customer", foreign_keys=[matched_customer_id])
+
+    __table_args__ = (
+        UniqueConstraint("kvk_number", "establishment_number", name="uq_kvk_establishment"),
+    )
+
+
+class KvkImportLog(Base):
+    __tablename__ = "kvk_import_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    import_batch_id: Mapped[str] = mapped_column(Text, index=True)
+    file_name: Mapped[str] = mapped_column(Text, default="")
+    record_type: Mapped[str] = mapped_column(Text, default="")
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    successful_upserts: Mapped[int] = mapped_column(Integer, default=0)
+    failed_rows: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(Text, default="in_progress")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

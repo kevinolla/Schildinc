@@ -1,0 +1,278 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h2>KVK Bedrijven</h2>
+    <p class="page-subtitle">{{ total }} bedrijven gevonden</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn btn-secondary" onclick="document.getElementById('import-panel').classList.toggle('hidden')">
+      + Importeer CSV
+    </button>
+    <form method="post" action="/kvk/run-matching" style="display:inline">
+      <button class="btn btn-secondary" onclick="return confirm('Klantmatching uitvoeren voor alle onbekende bedrijven?')">
+        Matching uitvoeren
+      </button>
+    </form>
+    <form method="post" action="/kvk/bulk-enrich" style="display:inline">
+      <input type="hidden" name="company_ids" value="">
+      <button class="btn btn-primary">
+        Verrijken (tot 50 pending)
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if request.query_params.get('flash') %}
+<div class="flash flash-success">{{ request.query_params.get('flash') }}</div>
+{% endif %}
+
+<!-- Import panel -->
+<div id="import-panel" class="card hidden" style="margin-bottom:1.5rem">
+  <h3 style="margin-top:0">Importeer KVK bestanden</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+    <div>
+      <p class="label">Bedrijven (normalized_kvk_bike_companies.csv)</p>
+      <form method="post" action="/kvk/import-companies" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".csv" required style="margin-bottom:.5rem;display:block">
+        <button class="btn btn-primary" type="submit">Importeer bedrijven</button>
+      </form>
+    </div>
+    <div>
+      <p class="label">Vestigingen (normalized_kvk_bike_establishments.csv)</p>
+      <form method="post" action="/kvk/import-establishments" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".csv" required style="margin-bottom:.5rem;display:block">
+        <button class="btn btn-secondary" type="submit">Importeer vestigingen</button>
+      </form>
+    </div>
+  </div>
+  {% if recent_imports %}
+  <div style="margin-top:1rem;border-top:1px solid #e5e7eb;padding-top:1rem">
+    <p class="label">Recente imports</p>
+    <table class="data-table" style="font-size:.8rem">
+      <thead><tr><th>Bestand</th><th>Type</th><th>Rijen</th><th>Succesvol</th><th>Mislukt</th><th>Status</th><th>Datum</th></tr></thead>
+      <tbody>
+        {% for log in recent_imports %}
+        <tr>
+          <td>{{ log.file_name }}</td>
+          <td>{{ log.record_type }}</td>
+          <td>{{ log.row_count }}</td>
+          <td class="text-green">{{ log.successful_upserts }}</td>
+          <td class="{% if log.failed_rows > 0 %}text-red{% endif %}">{{ log.failed_rows }}</td>
+          <td><span class="badge badge-{{ 'green' if log.status == 'success' else 'yellow' }}">{{ log.status }}</span></td>
+          <td>{{ log.started_at.strftime('%d-%m %H:%M') if log.started_at else '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Filters -->
+<div class="card filter-bar">
+  <form method="get" action="/kvk" class="filter-form">
+    <input type="text" name="search" placeholder="Zoek op naam, stad of KVK…" value="{{ search }}" class="search-input">
+
+    <select name="tier">
+      <option value="">Alle tiers</option>
+      {% for t in tier_options %}
+      <option value="{{ t }}" {% if tier == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+
+    <select name="enrichment">
+      {% for e in enrichment_options %}
+      <option value="{{ e }}" {% if enrichment == e %}selected{% endif %}>
+        {% if e == 'all' %}Alle statussen{% else %}{{ e | capitalize }}{% endif %}
+      </option>
+      {% endfor %}
+    </select>
+
+    <select name="match">
+      {% for m in match_options %}
+      <option value="{{ m }}" {% if match == m %}selected{% endif %}>
+        {% if m == 'all' %}Alle matches{% elif m == 'matched' %}Klant gevonden{% elif m == 'no_match' %}Geen klant{% else %}Onbekend{% endif %}
+      </option>
+      {% endfor %}
+    </select>
+
+    <select name="has_email">
+      <option value="" {% if has_email == '' %}selected{% endif %}>Alle (email)</option>
+      <option value="1" {% if has_email == '1' %}selected{% endif %}>✓ Heeft e-mail</option>
+      <option value="0" {% if has_email == '0' %}selected{% endif %}>✗ Geen e-mail</option>
+    </select>
+
+    <select name="has_website">
+      <option value="" {% if has_website == '' %}selected{% endif %}>Alle (website)</option>
+      <option value="1" {% if has_website == '1' %}selected{% endif %}>✓ Heeft website</option>
+      <option value="0" {% if has_website == '0' %}selected{% endif %}>✗ Geen website</option>
+    </select>
+
+    <button type="submit" class="btn btn-secondary">Filter</button>
+    <a href="/kvk" class="btn btn-ghost">Wis filters</a>
+  </form>
+</div>
+
+{% if companies %}
+<!-- Bulk actions bar -->
+<div class="bulk-bar" id="bulk-bar" style="display:none">
+  <span id="bulk-count">0</span> geselecteerd
+  <form method="post" action="/kvk/bulk-enrich" style="display:inline" id="bulk-enrich-form">
+    <input type="hidden" name="company_ids" id="bulk-ids">
+    <button class="btn btn-primary btn-sm">Verrijken</button>
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="data-table kvk-table">
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="select-all" title="Selecteer alles"></th>
+        <th>Bedrijf</th>
+        <th>Stad</th>
+        <th>Website</th>
+        <th>E-mail</th>
+        <th>Telefoon</th>
+        <th>Klant?</th>
+        <th>Tier</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in companies %}
+      <tr class="{% if c.already_client_flag %}row-existing-customer{% endif %}">
+        <td><input type="checkbox" class="row-check" value="{{ c.id }}"></td>
+        <td>
+          <a href="/kvk/{{ c.id }}" class="company-link">{{ c.company_name }}</a>
+          {% if c.establishments_count > 1 %}
+          <span class="badge badge-gray" title="{{ c.establishments_count }} vestigingen">{{ c.establishments_count }}×</span>
+          {% endif %}
+        </td>
+        <td>{{ c.primary_city or '-' }}</td>
+        <td>
+          {% if c.website %}
+          <a href="{{ c.website }}" target="_blank" class="ext-link" title="{{ c.website }}">
+            {{ c.website_domain or c.website[:30] }}
+          </a>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if c.email_public %}
+          <span class="has-contact" title="{{ c.email_public }}">
+            {{ c.email_public[:30] }}{% if c.email_public|length > 30 %}…{% endif %}
+          </span>
+          {% if c.email_confidence %}
+          <span class="conf-dot conf-{{ c.email_confidence }}" title="Betrouwbaarheid: {{ c.email_confidence }}">●</span>
+          {% endif %}
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if c.phone_public %}
+          <span class="has-contact">{{ c.phone_public }}</span>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if c.already_client_flag %}
+          <span class="badge badge-red" title="{% if c.matched_customer %}{{ c.matched_customer.canonical_company_name }}{% endif %}">Klant</span>
+          {% elif c.client_match_status == 'no_match' %}
+          <span class="badge badge-green">Nieuw</span>
+          {% else %}
+          <span class="badge badge-gray">?</span>
+          {% endif %}
+        </td>
+        <td>
+          {% set tier_class = {
+            'Good Tier': 'green',
+            'Hard to Reach': 'orange',
+            'Mid Tier': 'blue',
+            'Low Tier': 'gray',
+            'Brand Store': 'purple',
+            'Low Fit': 'gray',
+            'Unclassified': 'gray'
+          }[c.bike_shop_tier] | default('gray') %}
+          <span class="badge badge-{{ tier_class }}">{{ c.bike_shop_tier }}</span>
+        </td>
+        <td>
+          {% if c.enrichment_status == 'discovered' %}
+          <span class="badge badge-green">Verrijkt</span>
+          {% elif c.enrichment_status == 'running' %}
+          <span class="badge badge-yellow">Bezig…</span>
+          {% elif c.enrichment_status == 'error' %}
+          <span class="badge badge-red">Fout</span>
+          {% elif c.enrichment_status == 'no_website' %}
+          <span class="badge badge-gray">Geen website</span>
+          {% elif c.enrichment_status == 'no_contacts' %}
+          <span class="badge badge-gray">Geen contact</span>
+          {% elif c.enrichment_status == 'partial' %}
+          <span class="badge badge-blue">Gedeeltelijk</span>
+          {% else %}
+          <span class="badge badge-gray">{{ c.enrichment_status }}</span>
+          {% endif %}
+        </td>
+        <td>
+          <a href="/kvk/{{ c.id }}" class="btn btn-ghost btn-xs">→</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+  <a href="?{{ request.query_params | replace('page=' ~ page, 'page=' ~ (page - 1)) }}&page={{ page - 1 }}" class="btn btn-ghost btn-sm">← Vorige</a>
+  {% endif %}
+  <span>Pagina {{ page }} van {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a href="?{% for k, v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page + 1 }}" class="btn btn-ghost btn-sm">Volgende →</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <p>Geen bedrijven gevonden.</p>
+  {% if not search and enrichment == 'all' and not tier %}
+  <p>Importeer een KVK CSV om te beginnen.</p>
+  <button class="btn btn-primary" onclick="document.getElementById('import-panel').classList.remove('hidden')">+ Importeer CSV</button>
+  {% endif %}
+</div>
+{% endif %}
+
+<script>
+  // Bulk select logic
+  const selectAll = document.getElementById('select-all');
+  const bulkBar = document.getElementById('bulk-bar');
+  const bulkCount = document.getElementById('bulk-count');
+  const bulkIds = document.getElementById('bulk-ids');
+
+  function updateBulkBar() {
+    const checked = document.querySelectorAll('.row-check:checked');
+    if (checked.length > 0) {
+      bulkBar.style.display = 'flex';
+      bulkCount.textContent = checked.length;
+      bulkIds.value = Array.from(checked).map(c => c.value).join(',');
+    } else {
+      bulkBar.style.display = 'none';
+    }
+  }
+
+  selectAll && selectAll.addEventListener('change', () => {
+    document.querySelectorAll('.row-check').forEach(c => c.checked = selectAll.checked);
+    updateBulkBar();
+  });
+
+  document.querySelectorAll('.row-check').forEach(c => c.addEventListener('change', updateBulkBar));
+</script>
+{% endblock %}

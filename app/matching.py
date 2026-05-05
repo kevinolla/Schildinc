@@ -7,7 +7,7 @@ from rapidfuzz import fuzz
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Customer, MatchStatus, Prospect
+from app.models import Customer, KvkCompany, MatchStatus, Prospect
 from app.utils import build_name_geo_key, email_domain, normalize_domain, normalize_email, normalize_text, split_pipe_values
 
 
@@ -127,3 +127,80 @@ def match_prospect(session: Session, prospect: Prospect) -> MatchResult:
         reasons=["No exact customer match was found. This looks like a net-new prospect."],
         customer=None,
     )
+
+
+def match_kvk_company(session: Session, company: KvkCompany) -> tuple[Customer | None, str, str]:
+    """
+    Match a KvkCompany against existing customers.
+    Returns (customer | None, confidence, reason).
+    Priority: domain > email > name+city+country > fuzzy.
+    """
+    domain = normalize_domain(company.website_domain or company.website)
+    if domain:
+        customer = session.scalar(
+            select(Customer).where(
+                (Customer.match_key_domain == domain)
+                | (Customer.website_domain_candidate == domain)
+                | (Customer.email_domain_primary == domain)
+            )
+        )
+        if customer:
+            return customer, "high", "domain"
+
+    if company.email_public:
+        norm_email = normalize_email(company.email_public)
+        customer = session.scalar(select(Customer).where(Customer.customer_email_primary == norm_email))
+        if customer:
+            return customer, "high", "email"
+
+    clean_name = company.canonical_company_name_clean or normalize_text(company.company_name)
+    city = (company.primary_city or "").lower().strip()
+    country = (company.country_code or "").upper().strip()
+
+    name_geo = build_name_geo_key(company.company_name, company.primary_city, "", company.country_code)
+    geo_match = session.scalar(select(Customer).where(Customer.canonical_name_geo_key == name_geo))
+    if geo_match:
+        return geo_match, "medium", "name_city_country"
+
+    candidates = session.scalars(
+        select(Customer).where(Customer.country_code == country)
+    ).all()
+    if not candidates:
+        candidates = session.scalars(select(Customer)).all()
+
+    best_customer: Customer | None = None
+    best_score = 0
+    for cust in candidates:
+        cust_name = cust.canonical_company_name_clean or normalize_text(cust.canonical_company_name)
+        if not cust_name:
+            continue
+        score = int(fuzz.WRatio(clean_name, cust_name))
+        if city and cust.city and normalize_text(city) == normalize_text(cust.city):
+            score += 4
+        if domain and cust.website_domain_candidate and domain == normalize_domain(cust.website_domain_candidate):
+            score += 6
+        if score > best_score:
+            best_score = score
+            best_customer = cust
+
+    if best_customer and best_score >= 92:
+        return best_customer, "medium", "fuzzy_name"
+    if best_customer and best_score >= 82:
+        return best_customer, "low", "fuzzy_name_review"
+
+    return None, "none", "no_match"
+
+
+def apply_kvk_matching(session: Session, company: KvkCompany) -> None:
+    """Run matching for a single KvkCompany and persist results."""
+    customer, confidence, reason = match_kvk_company(session, company)
+    if customer:
+        company.already_client_flag = True
+        company.matched_customer_id = customer.id
+        company.match_confidence = confidence
+        company.best_match_reason = reason
+        company.client_match_status = "matched"
+        company.approved_for_outreach = False
+    else:
+        company.already_client_flag = False
+        company.client_match_status = "no_match"

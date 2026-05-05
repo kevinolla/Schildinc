@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <a href="/kvk" class="back-link">← KVK Bedrijven</a>
+    <h2>{{ company.company_name }}</h2>
+    <p class="page-subtitle">KVK {{ company.kvk_number }} · {{ company.primary_city or '—' }}</p>
+  </div>
+  <div class="page-actions">
+    {% if not company.already_client_flag %}
+      {% if company.website %}
+      <form method="post" action="/kvk/{{ company.id }}/enrich" style="display:inline">
+        <button class="btn btn-secondary"
+          {% if company.enrichment_status == 'running' %}disabled{% endif %}>
+          {% if company.enrichment_status == 'running' %}Bezig…{% else %}Contactgegevens ophalen{% endif %}
+        </button>
+      </form>
+      {% endif %}
+      <form method="post" action="/kvk/{{ company.id }}/approve" style="display:inline">
+        <button class="btn {% if company.approved_for_outreach %}btn-danger{% else %}btn-primary{% endif %}"
+          {% if not company.email_public %}disabled title="Geen e-mailadres beschikbaar"{% endif %}>
+          {% if company.approved_for_outreach %}Goedkeuring intrekken{% else %}Goedkeuren voor outreach{% endif %}
+        </button>
+      </form>
+    {% endif %}
+    <form method="post" action="/kvk/{{ company.id }}/run-matching" style="display:inline">
+      <button class="btn btn-ghost">Matching heruitvoeren</button>
+    </form>
+    <form method="post" action="/kvk/{{ company.id }}/re-tier" style="display:inline">
+      <button class="btn btn-ghost">Tier herberekenen</button>
+    </form>
+  </div>
+</div>
+
+{% if flash %}
+<div class="flash flash-success">{{ flash }}</div>
+{% endif %}
+
+<!-- Status banners -->
+{% if company.already_client_flag %}
+<div class="alert alert-warning">
+  <strong>Bestaande klant</strong> — Dit bedrijf staat al in de klantenlijst en wordt uitgesloten van outreach.
+  {% if company.matched_customer %}
+  Gekoppeld aan: <strong>{{ company.matched_customer.canonical_company_name }}</strong>
+  ({{ company.best_match_reason or 'match' }}, {{ company.match_confidence or '?' }} betrouwbaarheid)
+  {% endif %}
+</div>
+{% elif company.approved_for_outreach %}
+<div class="alert alert-success">
+  <strong>Goedgekeurd voor outreach</strong> — Dit bedrijf staat in de outreach-wachtrij.
+</div>
+{% endif %}
+
+<div class="detail-grid">
+
+  <!-- Left column -->
+  <div class="detail-col">
+
+    <!-- Contact info card -->
+    <div class="card">
+      <h3>Contactgegevens</h3>
+      <dl class="detail-list">
+        <dt>Website</dt>
+        <dd>
+          {% if company.website %}
+          <a href="{{ company.website }}" target="_blank">{{ company.website }}</a>
+          {% else %}
+          <span class="text-muted">Niet bekend</span>
+          {% endif %}
+        </dd>
+
+        <dt>E-mail</dt>
+        <dd>
+          {% if company.email_public %}
+          <a href="mailto:{{ company.email_public }}">{{ company.email_public }}</a>
+          <span class="conf-dot conf-{{ company.email_confidence }}" title="Betrouwbaarheid: {{ company.email_confidence }}">●</span>
+          {% if company.email_source_url %}
+          <small class="source-label">Bron: <a href="{{ company.email_source_url }}" target="_blank">{{ company.email_source_url[:60] }}</a></small>
+          {% endif %}
+          {% else %}
+          <span class="text-muted">Niet gevonden</span>
+          {% endif %}
+        </dd>
+
+        <dt>Telefoon</dt>
+        <dd>
+          {% if company.phone_public %}
+          {{ company.phone_public }}
+          {% if company.phone_source_url %}
+          <small class="source-label">Bron: <a href="{{ company.phone_source_url }}" target="_blank">{{ company.phone_source_url[:60] }}</a></small>
+          {% endif %}
+          {% else %}
+          <span class="text-muted">Niet gevonden</span>
+          {% endif %}
+        </dd>
+      </dl>
+
+      {% if not company.website %}
+      <div class="hint-box">
+        <p>Geen website bekend. Zoek handmatig via de Google Maps query:</p>
+        <code>{{ company.google_maps_query }}</code>
+      </div>
+      {% elif company.enrichment_status in ['pending', 'no_contacts', 'error', 'partial'] %}
+      <div style="margin-top:1rem">
+        <form method="post" action="/kvk/{{ company.id }}/enrich">
+          <button class="btn btn-secondary btn-sm">Opnieuw proberen: contactgegevens ophalen</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Address card -->
+    <div class="card">
+      <h3>Adres</h3>
+      <dl class="detail-list">
+        <dt>Bezoekadres</dt>
+        <dd>{{ company.primary_address or '—' }}<br>{{ company.primary_postal_code or '' }} {{ company.primary_city or '' }}</dd>
+        <dt>Provincie</dt>
+        <dd>{{ company.province_code or '—' }}</dd>
+        <dt>Land</dt>
+        <dd>{{ company.country_code or '—' }}</dd>
+        <dt>KVK-nummer</dt>
+        <dd><code>{{ company.kvk_number }}</code></dd>
+        <dt>Activiteitscode</dt>
+        <dd>{{ company.main_activity_code or '—' }} — {{ company.main_activity_description or '' }}</dd>
+        {% if company.date_of_establishment %}
+        <dt>Opgericht</dt>
+        <dd>{{ company.date_of_establishment.strftime('%d-%m-%Y') }}</dd>
+        {% endif %}
+        <dt>Aantal vestigingen</dt>
+        <dd>{{ company.establishments_count }}</dd>
+      </dl>
+    </div>
+
+    <!-- Establishments list -->
+    {% if company.establishments %}
+    <div class="card">
+      <h3>Vestigingen ({{ company.establishments | length }})</h3>
+      <table class="data-table" style="font-size:.85rem">
+        <thead>
+          <tr><th>Naam</th><th>Adres</th><th>Stad</th><th>E-mail</th></tr>
+        </thead>
+        <tbody>
+          {% for est in company.establishments %}
+          <tr>
+            <td>{{ est.company_name }}</td>
+            <td>{{ est.full_visiting_address or '—' }}</td>
+            <td>{{ est.visiting_city or '—' }}</td>
+            <td>{{ est.email_public or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- Right column -->
+  <div class="detail-col">
+
+    <!-- Tier & outreach card -->
+    <div class="card">
+      <h3>Tier & Outreach</h3>
+      {% set tier_class = {
+        'Good Tier': 'green',
+        'Hard to Reach': 'orange',
+        'Mid Tier': 'blue',
+        'Low Tier': 'gray',
+        'Brand Store': 'purple',
+        'Low Fit': 'gray',
+        'Unclassified': 'gray'
+      }[company.bike_shop_tier] | default('gray') %}
+      <dl class="detail-list">
+        <dt>Tier</dt>
+        <dd><span class="badge badge-{{ tier_class }} badge-lg">{{ company.bike_shop_tier }}</span></dd>
+        <dt>Segment</dt>
+        <dd>{{ company.bike_shop_segment or '—' }}</dd>
+        <dt>Prioriteit</dt>
+        <dd>{{ company.outreach_priority or '—' }}</dd>
+        <dt>Hoofdkantoor vereist</dt>
+        <dd>{% if company.headquarters_required %}<span class="text-orange">Ja</span>{% else %}Nee{% endif %}</dd>
+        <dt>Aanbevolen contact</dt>
+        <dd>{{ company.recommended_contact_type or '—' }}</dd>
+        <dt>Verkoopinvalshoek</dt>
+        <dd>{{ company.recommended_sales_angle or '—' }}</dd>
+        {% if company.tier_reason %}
+        <dt>Redenering</dt>
+        <dd><small class="text-muted">{{ company.tier_reason }}</small></dd>
+        {% endif %}
+        {% if company.franchise_or_buying_group %}
+        <dt>Groep / franchise</dt>
+        <dd>{{ company.franchise_or_buying_group }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+
+    <!-- Matching card -->
+    <div class="card">
+      <h3>Klantmatching</h3>
+      <dl class="detail-list">
+        <dt>Status</dt>
+        <dd>
+          {% if company.already_client_flag %}
+          <span class="badge badge-red">Bestaande klant</span>
+          {% elif company.client_match_status == 'no_match' %}
+          <span class="badge badge-green">Nieuw prospect</span>
+          {% else %}
+          <span class="badge badge-gray">Onbekend (nog niet gematcht)</span>
+          {% endif %}
+        </dd>
+        {% if company.matched_customer %}
+        <dt>Gekoppelde klant</dt>
+        <dd>{{ company.matched_customer.canonical_company_name }}</dd>
+        <dt>Match-methode</dt>
+        <dd>{{ company.best_match_reason or '—' }}</dd>
+        <dt>Betrouwbaarheid</dt>
+        <dd>{{ company.match_confidence or '—' }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+
+    <!-- Enrichment status card -->
+    <div class="card">
+      <h3>Verrijkingsstatus</h3>
+      <dl class="detail-list">
+        <dt>Status</dt>
+        <dd>
+          {% if company.enrichment_status == 'discovered' %}
+          <span class="badge badge-green">Verrijkt</span>
+          {% elif company.enrichment_status == 'running' %}
+          <span class="badge badge-yellow">Bezig…</span>
+          {% elif company.enrichment_status == 'error' %}
+          <span class="badge badge-red">Fout</span>
+          {% elif company.enrichment_status == 'no_website' %}
+          <span class="badge badge-gray">Geen website</span>
+          {% elif company.enrichment_status == 'no_contacts' %}
+          <span class="badge badge-gray">Geen contactgegevens gevonden</span>
+          {% elif company.enrichment_status == 'partial' %}
+          <span class="badge badge-blue">Gedeeltelijk</span>
+          {% else %}
+          <span class="badge badge-gray">{{ company.enrichment_status }}</span>
+          {% endif %}
+        </dd>
+        {% if company.last_enrichment_attempt_at %}
+        <dt>Laatste poging</dt>
+        <dd>{{ company.last_enrichment_attempt_at.strftime('%d-%m-%Y %H:%M') }}</dd>
+        {% endif %}
+        <dt>Goedgekeurd voor outreach</dt>
+        <dd>
+          {% if company.approved_for_outreach %}
+          <span class="badge badge-green">Ja</span>
+          {% else %}
+          <span class="badge badge-gray">Nee</span>
+          {% endif %}
+        </dd>
+      </dl>
+
+      {% if company.notes %}
+      <div class="hint-box" style="margin-top:.75rem">
+        <small>{{ company.notes }}</small>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Search queries card -->
+    <div class="card">
+      <h3>Zoekquery's</h3>
+      <dl class="detail-list">
+        <dt>Google Maps query</dt>
+        <dd>
+          <code>{{ company.google_maps_query or '—' }}</code>
+          {% if company.google_maps_query %}
+          <a href="https://www.google.com/maps/search/{{ company.google_maps_query | urlencode }}"
+             target="_blank" class="btn btn-ghost btn-xs">Zoek op Maps</a>
+          {% endif %}
+        </dd>
+        <dt>Contactzoekopdracht</dt>
+        <dd><code>{{ company.contact_search_query or '—' }}</code></dd>
+      </dl>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

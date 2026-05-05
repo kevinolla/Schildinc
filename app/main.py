@@ -16,15 +16,18 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.db import SessionLocal, get_db
-from app.discovery import discover_public_contacts_for_prospect, ensure_prospect_contacts
+from app.discovery import discover_contacts_for_kvk_company, discover_public_contacts_for_prospect, ensure_prospect_contacts
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
 from app.google_places import place_to_prospect_record, search_google_places
-from app.importers import read_csv_upload, upsert_customers_from_dataframe, upsert_invoices_from_dataframe, upsert_prospects_from_dataframe
+from app.importers import read_csv_upload, upsert_customers_from_dataframe, upsert_invoices_from_dataframe, upsert_kvk_companies_from_dataframe, upsert_kvk_establishments_from_dataframe, upsert_prospects_from_dataframe
 from app.jobs import run_daily_queue_build, run_daily_queue_send
-from app.matching import apply_matching
+from app.matching import apply_kvk_matching, apply_matching
 from app.models import (
     Customer,
     EmailLog,
+    KvkCompany,
+    KvkEstablishment,
+    KvkImportLog,
     MatchStatus,
     OutreachQueueItem,
     Prospect,
@@ -35,7 +38,7 @@ from app.models import (
     WebhookLog,
 )
 from app.outreach_templates import build_outreach_bundle
-from app.tiering import apply_bike_tier
+from app.tiering import apply_bike_tier, score_kvk_company_tier
 from app.stripe_sync import sync_stripe_event
 from app.utils import build_unsubscribe_token, normalize_domain, normalize_email
 
@@ -181,6 +184,15 @@ def dashboard_context(db: Session) -> dict:
         "discovered_email_count": db.scalar(select(func.count(Prospect.id)).where(Prospect.email != "")) or 0,
         "high_priority_count": db.scalar(select(func.count(Prospect.id)).where(Prospect.outreach_priority == "High")) or 0,
         "daily_send_limit": settings.daily_send_limit,
+        # KVK stats
+        "kvk_total": db.scalar(select(func.count(KvkCompany.id))) or 0,
+        "kvk_with_website": db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.website != "")) or 0,
+        "kvk_with_email": db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.email_public != "")) or 0,
+        "kvk_with_phone": db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.phone_public != "")) or 0,
+        "kvk_existing_customers": db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.already_client_flag.is_(True))) or 0,
+        "kvk_good_tier": db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.bike_shop_tier == "Good Tier")) or 0,
+        "kvk_outreach_ready": db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.approved_for_outreach.is_(True), KvkCompany.already_client_flag.is_(False))) or 0,
+        "kvk_pending_enrichment": db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.enrichment_status == "pending")) or 0,
     }
 
 
@@ -741,3 +753,268 @@ def unsubscribe(token: str, email: str, db: Session = Depends(get_db)) -> HTMLRe
     )
     db.commit()
     return HTMLResponse("<h2>Unsubscribed</h2><p>You will not receive future outreach from Schild Inc.</p>")
+
+
+# ---------------------------------------------------------------------------
+# KVK routes
+# ---------------------------------------------------------------------------
+
+KVK_TIER_FILTERS = ["Good Tier", "Hard to Reach", "Mid Tier", "Low Tier", "Brand Store", "Low Fit", "Unclassified"]
+KVK_ENRICHMENT_FILTERS = ["all", "pending", "running", "discovered", "partial", "no_website", "no_contacts", "error"]
+KVK_MATCH_FILTERS = ["all", "no_match", "matched", "unknown"]
+
+
+@app.get("/kvk", response_class=HTMLResponse)
+def kvk_companies_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    search: str = "",
+    tier: str = "",
+    enrichment: str = "all",
+    match: str = "all",
+    has_email: str = "",
+    has_website: str = "",
+    page: int = 1,
+) -> HTMLResponse:
+    PAGE_SIZE = 50
+    q = select(KvkCompany).order_by(KvkCompany.company_name)
+
+    if search:
+        q = q.where(
+            or_(
+                KvkCompany.company_name.ilike(f"%{search}%"),
+                KvkCompany.primary_city.ilike(f"%{search}%"),
+                KvkCompany.kvk_number.ilike(f"%{search}%"),
+            )
+        )
+    if tier:
+        q = q.where(KvkCompany.bike_shop_tier == tier)
+    if enrichment != "all":
+        q = q.where(KvkCompany.enrichment_status == enrichment)
+    if match != "all":
+        q = q.where(KvkCompany.client_match_status == match)
+    if has_email == "1":
+        q = q.where(KvkCompany.email_public != "")
+    elif has_email == "0":
+        q = q.where(KvkCompany.email_public == "")
+    if has_website == "1":
+        q = q.where(KvkCompany.website != "")
+    elif has_website == "0":
+        q = q.where(KvkCompany.website == "")
+
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    companies = db.scalars(q.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+
+    recent_imports = db.scalars(
+        select(KvkImportLog).order_by(KvkImportLog.started_at.desc()).limit(5)
+    ).all()
+
+    return templates.TemplateResponse("kvk_companies.html", {
+        "request": request,
+        "app_name": settings.app_name,
+        "companies": companies,
+        "total": total,
+        "page": page,
+        "total_pages": total_pages,
+        "search": search,
+        "tier": tier,
+        "enrichment": enrichment,
+        "match": match,
+        "has_email": has_email,
+        "has_website": has_website,
+        "tier_options": KVK_TIER_FILTERS,
+        "enrichment_options": KVK_ENRICHMENT_FILTERS,
+        "match_options": KVK_MATCH_FILTERS,
+        "recent_imports": recent_imports,
+    })
+
+
+@app.post("/kvk/import-companies")
+async def kvk_import_companies(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    contents = await file.read()
+    df = read_csv_upload(contents)
+    summary = upsert_kvk_companies_from_dataframe(db, df, file_name=file.filename or "upload")
+    db.commit()
+    return RedirectResponse(
+        f"/kvk?flash=Geïmporteerd%3A+{summary.inserted}+nieuw%2C+{summary.updated}+bijgewerkt%2C+{summary.failed}+mislukt",
+        status_code=303,
+    )
+
+
+@app.post("/kvk/import-establishments")
+async def kvk_import_establishments(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    contents = await file.read()
+    df = read_csv_upload(contents)
+    summary = upsert_kvk_establishments_from_dataframe(db, df, file_name=file.filename or "upload")
+    db.commit()
+    return RedirectResponse(
+        f"/kvk?flash=Vestigingen+geïmporteerd%3A+{summary.inserted}+nieuw%2C+{summary.updated}+bijgewerkt%2C+{summary.failed}+mislukt",
+        status_code=303,
+    )
+
+
+@app.post("/kvk/run-matching")
+def kvk_run_matching_bulk(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    companies = db.scalars(select(KvkCompany).where(KvkCompany.client_match_status == "unknown")).all()
+    count = 0
+    for company in companies:
+        apply_kvk_matching(db, company)
+        count += 1
+        if count % 100 == 0:
+            db.commit()
+    db.commit()
+    return RedirectResponse(f"/kvk?flash={count}+bedrijven+gematcht", status_code=303)
+
+
+@app.post("/kvk/{company_id}/run-matching")
+def kvk_run_matching_single(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+    apply_kvk_matching(db, company)
+    db.commit()
+    return RedirectResponse(f"/kvk/{company_id}", status_code=303)
+
+
+def _run_kvk_enrichment_job(company_id: int) -> None:
+    db = SessionLocal()
+    try:
+        company = db.get(KvkCompany, company_id)
+        if company:
+            discover_contacts_for_kvk_company(db, company)
+    finally:
+        db.close()
+
+
+@app.post("/kvk/{company_id}/enrich")
+def kvk_enrich_single(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+    if not company.website:
+        return RedirectResponse(f"/kvk/{company_id}?flash=Geen+website+beschikbaar+voor+discovery", status_code=303)
+    company.enrichment_status = "running"
+    db.commit()
+    Thread(target=_run_kvk_enrichment_job, args=(company_id,), daemon=True).start()
+    return RedirectResponse(f"/kvk/{company_id}?flash=Contactgegevens+worden+opgezocht", status_code=303)
+
+
+@app.post("/kvk/bulk-enrich")
+async def kvk_bulk_enrich(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    form = await request.form()
+    ids_raw = form.get("company_ids", "")
+    if ids_raw:
+        company_ids = [int(i) for i in str(ids_raw).split(",") if i.strip().isdigit()]
+    else:
+        # Enrich all that have a website and are pending
+        company_ids = [
+            c.id for c in db.scalars(
+                select(KvkCompany)
+                .where(KvkCompany.website != "", KvkCompany.enrichment_status == "pending")
+                .limit(50)
+            ).all()
+        ]
+    for cid in company_ids:
+        c = db.get(KvkCompany, cid)
+        if c and c.enrichment_status not in ("running",):
+            c.enrichment_status = "running"
+    db.commit()
+    for cid in company_ids:
+        Thread(target=_run_kvk_enrichment_job, args=(cid,), daemon=True).start()
+    return RedirectResponse(f"/kvk?flash={len(company_ids)}+bedrijven+worden+verrijkt", status_code=303)
+
+
+@app.post("/kvk/{company_id}/approve")
+def kvk_approve_outreach(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+    if company.already_client_flag:
+        return RedirectResponse(f"/kvk/{company_id}?flash=Bestaande+klant%3A+outreach+niet+toegestaan", status_code=303)
+    if not company.email_public:
+        return RedirectResponse(f"/kvk/{company_id}?flash=Geen+e-mailadres+beschikbaar", status_code=303)
+    company.approved_for_outreach = not company.approved_for_outreach
+    db.commit()
+    label = "goedgekeurd" if company.approved_for_outreach else "ingetrokken"
+    return RedirectResponse(f"/kvk/{company_id}?flash=Outreach+{label}", status_code=303)
+
+
+@app.post("/kvk/{company_id}/re-tier")
+def kvk_retier_single(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+    decision = score_kvk_company_tier(company)
+    company.bike_shop_tier = decision.bike_shop_tier
+    company.bike_shop_segment = decision.bike_shop_segment
+    company.outreach_priority = decision.outreach_priority
+    company.headquarters_required = decision.headquarters_required
+    company.franchise_or_buying_group = decision.franchise_or_buying_group
+    company.tier_reason = decision.tier_reason
+    company.recommended_sales_angle = decision.recommended_sales_angle
+    company.recommended_contact_type = decision.recommended_contact_type
+    db.commit()
+    return RedirectResponse(f"/kvk/{company_id}?flash=Tier+herberekend%3A+{decision.bike_shop_tier}", status_code=303)
+
+
+@app.get("/kvk/{company_id}", response_class=HTMLResponse)
+def kvk_company_detail(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    flash: str = "",
+) -> HTMLResponse:
+    company = db.scalar(
+        select(KvkCompany)
+        .where(KvkCompany.id == company_id)
+        .options(selectinload(KvkCompany.matched_customer), selectinload(KvkCompany.establishments))
+    )
+    if not company:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+    return templates.TemplateResponse("kvk_company_detail.html", {
+        "request": request,
+        "app_name": settings.app_name,
+        "company": company,
+        "flash": flash,
+    })

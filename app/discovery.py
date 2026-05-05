@@ -15,8 +15,8 @@ from playwright.sync_api import sync_playwright
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.matching import apply_matching
-from app.models import Prospect, ProspectActivityLog
+from app.matching import apply_matching, apply_kvk_matching
+from app.models import KvkCompany, Prospect, ProspectActivityLog
 from app.tiering import apply_bike_tier
 from app.utils import email_domain, normalize_domain, normalize_email, normalize_text
 
@@ -1155,3 +1155,75 @@ def clean_snippet(value: str) -> str:
     if len(text) > 180:
         text = text[:177].rsplit(" ", 1)[0] + "..."
     return text
+
+
+def discover_contacts_for_kvk_company(session: Session, company: KvkCompany) -> None:
+    """
+    Run public contact discovery for a KvkCompany.
+    Reuses the same Playwright crawler as prospect discovery.
+    Updates enrichment_status, email_public, phone_public, and source fields in-place.
+    """
+    from datetime import datetime, timezone
+
+    company.last_enrichment_attempt_at = datetime.now(tz=timezone.utc)
+
+    if not company.website:
+        company.enrichment_status = "no_website"
+        session.commit()
+        return
+
+    company.enrichment_status = "running"
+    session.commit()
+
+    # Build a temporary Prospect-like object so we can reuse the crawler
+    temp_prospect = Prospect(
+        company_name=company.company_name,
+        website=company.website,
+        website_domain=company.website_domain or normalize_domain(company.website),
+        city=company.primary_city,
+        country_code=company.country_code,
+        email=company.email_public or "",
+        phone=company.phone_public or "",
+        email_discovery_status="not_started",
+        email_confidence=0,
+    )
+
+    try:
+        result = discover_public_contacts_for_prospect(session, temp_prospect)
+
+        if result.email:
+            company.email_public = result.email
+            company.email_source_url = result.source_page
+            company.email_confidence = _confidence_label(result.confidence)
+        if result.phone_number and not company.phone_public:
+            company.phone_public = result.phone_number
+            company.phone_source_url = result.source_page
+            company.phone_confidence = "medium"
+
+        if result.email or result.phone_number:
+            company.enrichment_status = "discovered"
+        elif result.status == "no_contacts":
+            company.enrichment_status = "no_contacts"
+        elif result.status == "error":
+            company.enrichment_status = "error"
+            company.notes = (company.notes or "") + f" | discovery error: {result.error}"
+        else:
+            company.enrichment_status = "partial"
+
+        # Re-run customer matching after discovering email/domain
+        apply_kvk_matching(session, company)
+
+    except Exception as exc:
+        company.enrichment_status = "error"
+        company.notes = (company.notes or "") + f" | discovery exception: {exc}"
+
+    finally:
+        session.commit()
+
+
+def _confidence_label(score: int) -> str:
+    if score >= 80:
+        return "high"
+    if score >= 50:
+        return "medium"
+    return "low"

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.models import Prospect
+
+if TYPE_CHECKING:
+    from app.models import KvkCompany
 
 
 @dataclass
@@ -136,3 +140,96 @@ def apply_bike_tier(prospect: Prospect) -> TierDecision:
     if not prospect.custom_use_case:
         prospect.custom_use_case = decision.inferred_use_case
     return decision
+
+
+def score_kvk_company_tier(company: "KvkCompany") -> TierDecision:
+    """Same heuristics as apply_bike_tier but for KvkCompany (no website_summary available at import time)."""
+    text = " ".join([
+        company.company_name or "",
+        company.website or "",
+        company.notes or "",
+        str(company.main_activity_description or ""),
+    ]).lower()
+
+    def has(*keywords: str) -> bool:
+        return any(k in text for k in keywords)
+
+    buying_group = ""
+    if has("bike totaal", "biketotaal"):
+        buying_group = "Bike Totaal / buying-group context"
+    elif has("franchise", "dealer network", "inkoopgroep", "buying group"):
+        buying_group = "Franchise / buying-group context"
+
+    establishments = getattr(company, "establishments_count", 1) or 1
+
+    if establishments >= 5 or has("mantel", "store locator", "filialen", "head office", "hoofdkantoor", "retail group"):
+        return TierDecision(
+            bike_shop_tier="Hard to Reach",
+            bike_shop_segment="Chain / Buying Group",
+            outreach_priority="Medium",
+            headquarters_required=True,
+            franchise_or_buying_group=buying_group or "Chain / HQ-led structure",
+            tier_reason=f"Multi-location or centrally controlled structure ({establishments} establishments).",
+            recommended_sales_angle="Central purchasing, brand consistency, scalable rollout",
+            recommended_contact_type="Head Office",
+            inferred_use_case="Consistente branding over meerdere winkels of vestigingen.",
+        )
+    if has("giant store", "trek store", "cube store", "brand store", "specialized store"):
+        return TierDecision(
+            bike_shop_tier="Brand Store",
+            bike_shop_segment="Single Brand Store",
+            outreach_priority="Low",
+            headquarters_required=True,
+            franchise_or_buying_group=buying_group,
+            tier_reason="Manufacturer-led or single-brand format.",
+            recommended_sales_angle="Central branding partnership only",
+            recommended_contact_type="Brand HQ",
+            inferred_use_case="Alleen relevant als er een centraal merk- of hoofdkantoorbesluit nodig is.",
+        )
+    if has("custom motorcycle", "motorcycle", "motoren", "sport bike only", "triathlon only"):
+        return TierDecision(
+            bike_shop_tier="Low Fit",
+            bike_shop_segment="Niche / Non-core",
+            outreach_priority="Very Low",
+            headquarters_required=False,
+            franchise_or_buying_group=buying_group,
+            tier_reason="Segment outside Schild's core mudguard/label opportunity.",
+            recommended_sales_angle="Usually not a target",
+            recommended_contact_type="Manual Review",
+            inferred_use_case="Geen standaard eerste outreach.",
+        )
+    if has("second hand", "tweedehands", "occasions", "budget", "goedkope fietsen", "outlet"):
+        return TierDecision(
+            bike_shop_tier="Mid Tier",
+            bike_shop_segment="Used / Volume Driven",
+            outreach_priority="Low",
+            headquarters_required=False,
+            franchise_or_buying_group=buying_group,
+            tier_reason="Price-driven or second-hand focus.",
+            recommended_sales_angle="Simple affordable branding, practical logo visibility",
+            recommended_contact_type="Owner",
+            inferred_use_case="Eenvoudige branding en zichtbaarheid op fietsen of accessoires.",
+        )
+    if has("reparatie", "fietsenmaker", "repair", "workshop") and not has("premium", "showroom", "e-bike"):
+        return TierDecision(
+            bike_shop_tier="Low Tier",
+            bike_shop_segment="Repair First",
+            outreach_priority="Very Low",
+            headquarters_required=False,
+            franchise_or_buying_group=buying_group,
+            tier_reason="Mainly repair-focused, lower branding urgency.",
+            recommended_sales_angle="Usually not a priority lead",
+            recommended_contact_type="Owner",
+            inferred_use_case="Geen standaard outreach, alleen handmatige beoordeling.",
+        )
+    return TierDecision(
+        bike_shop_tier="Good Tier",
+        bike_shop_segment="Premium / Professional Bike Store",
+        outreach_priority="High",
+        headquarters_required=False,
+        franchise_or_buying_group=buying_group,
+        tier_reason="Retail bike store with no chain/brand-store signals — likely core Schild target.",
+        recommended_sales_angle="Professional branding, premium look, add-on sales",
+        recommended_contact_type="Owner/Manager",
+        inferred_use_case="Professionelere uitstraling en extra add-on verkoop met eigen branding.",
+    )
