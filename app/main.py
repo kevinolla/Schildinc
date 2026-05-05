@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.discovery import discover_contacts_for_kvk_company, discover_public_contacts_for_prospect, ensure_prospect_contacts
+from app.kvk_enrichment import enrich_kvk_company_full, find_website_for_kvk_company, run_kvk_bulk_enrichment, run_kvk_enrichment_job
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
 from app.google_places import place_to_prospect_record, search_google_places
 from app.importers import read_csv_upload, upsert_customers_from_dataframe, upsert_invoices_from_dataframe, upsert_kvk_companies_from_dataframe, upsert_kvk_establishments_from_dataframe, upsert_prospects_from_dataframe
@@ -897,16 +898,6 @@ def kvk_run_matching_single(
     return RedirectResponse(f"/kvk/{company_id}", status_code=303)
 
 
-def _run_kvk_enrichment_job(company_id: int) -> None:
-    db = SessionLocal()
-    try:
-        company = db.get(KvkCompany, company_id)
-        if company:
-            discover_contacts_for_kvk_company(db, company)
-    finally:
-        db.close()
-
-
 @app.post("/kvk/{company_id}/enrich")
 def kvk_enrich_single(
     company_id: int,
@@ -917,12 +908,41 @@ def kvk_enrich_single(
     company = db.get(KvkCompany, company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
-    if not company.website:
-        return RedirectResponse(f"/kvk/{company_id}?flash=Geen+website+beschikbaar+voor+discovery", status_code=303)
-    company.enrichment_status = "running"
+    company.enrichment_status = "searching" if not company.website else "running"
     db.commit()
-    Thread(target=_run_kvk_enrichment_job, args=(company_id,), daemon=True).start()
+    Thread(target=run_kvk_enrichment_job, args=(company_id,), daemon=True).start()
     return RedirectResponse(f"/kvk/{company_id}?flash=Contactgegevens+worden+opgezocht", status_code=303)
+
+
+@app.post("/kvk/{company_id}/find-website")
+def kvk_find_website(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    """Search for a website using business name + city (Places API or DuckDuckGo)."""
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Bedrijf niet gevonden")
+
+    result = find_website_for_kvk_company(company)
+    if result.get("website"):
+        website = result["website"]
+        if not website.startswith(("http://", "https://")):
+            website = f"https://{website}"
+        company.website = website
+        company.website_domain = normalize_domain(website)
+        if result.get("phone") and not company.phone_public:
+            company.phone_public = result["phone"]
+            company.phone_source_url = result.get("source", "search")
+            company.phone_confidence = result.get("confidence", "medium")
+        db.commit()
+        flash = f"Website+gevonden+via+{result.get('source','search')}%3A+{website[:60]}"
+    else:
+        flash = "Geen+website+gevonden+via+zoekactie"
+
+    return RedirectResponse(f"/kvk/{company_id}?flash={flash}", status_code=303)
 
 
 @app.post("/kvk/bulk-enrich")
@@ -936,21 +956,21 @@ async def kvk_bulk_enrich(
     if ids_raw:
         company_ids = [int(i) for i in str(ids_raw).split(",") if i.strip().isdigit()]
     else:
-        # Enrich all that have a website and are pending
+        # Enrich up to 30 pending — includes those without websites (will search first)
         company_ids = [
             c.id for c in db.scalars(
                 select(KvkCompany)
-                .where(KvkCompany.website != "", KvkCompany.enrichment_status == "pending")
-                .limit(50)
+                .where(KvkCompany.enrichment_status.in_(["pending", "no_website", "error"]))
+                .where(KvkCompany.already_client_flag.is_(False))
+                .limit(30)
             ).all()
         ]
     for cid in company_ids:
         c = db.get(KvkCompany, cid)
-        if c and c.enrichment_status not in ("running",):
-            c.enrichment_status = "running"
+        if c and c.enrichment_status not in ("running", "searching"):
+            c.enrichment_status = "searching" if not c.website else "running"
     db.commit()
-    for cid in company_ids:
-        Thread(target=_run_kvk_enrichment_job, args=(cid,), daemon=True).start()
+    Thread(target=run_kvk_bulk_enrichment, args=(company_ids,), daemon=True).start()
     return RedirectResponse(f"/kvk?flash={len(company_ids)}+bedrijven+worden+verrijkt", status_code=303)
 
 

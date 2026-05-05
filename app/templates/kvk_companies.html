@@ -204,8 +204,8 @@
         <td>
           {% if c.enrichment_status == 'discovered' %}
           <span class="badge badge-green">Verrijkt</span>
-          {% elif c.enrichment_status == 'running' %}
-          <span class="badge badge-yellow">Bezig…</span>
+          {% elif c.enrichment_status in ['running', 'searching'] %}
+          <span class="badge badge-yellow">{% if c.enrichment_status == 'searching' %}Zoeken…{% else %}Bezig…{% endif %}</span>
           {% elif c.enrichment_status == 'error' %}
           <span class="badge badge-red">Fout</span>
           {% elif c.enrichment_status == 'no_website' %}

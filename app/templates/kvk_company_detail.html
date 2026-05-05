@@ -9,14 +9,19 @@
   </div>
   <div class="page-actions">
     {% if not company.already_client_flag %}
-      {% if company.website %}
-      <form method="post" action="/kvk/{{ company.id }}/enrich" style="display:inline">
-        <button class="btn btn-secondary"
-          {% if company.enrichment_status == 'running' %}disabled{% endif %}>
-          {% if company.enrichment_status == 'running' %}Bezig…{% else %}Contactgegevens ophalen{% endif %}
+      {% set is_busy = company.enrichment_status in ['running', 'searching'] %}
+      {% if not company.website %}
+      <form method="post" action="/kvk/{{ company.id }}/find-website" style="display:inline">
+        <button class="btn btn-secondary" {% if is_busy %}disabled{% endif %}>
+          {% if is_busy %}Bezig zoeken…{% else %}🔍 Website zoeken{% endif %}
         </button>
       </form>
       {% endif %}
+      <form method="post" action="/kvk/{{ company.id }}/enrich" style="display:inline">
+        <button class="btn btn-secondary" {% if is_busy %}disabled{% endif %}>
+          {% if is_busy %}Bezig…{% else %}📧 Contactgegevens ophalen{% endif %}
+        </button>
+      </form>
       <form method="post" action="/kvk/{{ company.id }}/approve" style="display:inline">
         <button class="btn {% if company.approved_for_outreach %}btn-danger{% else %}btn-primary{% endif %}"
           {% if not company.email_public %}disabled title="Geen e-mailadres beschikbaar"{% endif %}>
@@ -229,8 +234,10 @@
         <dd>
           {% if company.enrichment_status == 'discovered' %}
           <span class="badge badge-green">Verrijkt</span>
+          {% elif company.enrichment_status == 'searching' %}
+          <span class="badge badge-yellow">Website zoeken…</span>
           {% elif company.enrichment_status == 'running' %}
-          <span class="badge badge-yellow">Bezig…</span>
+          <span class="badge badge-yellow">Contactgegevens ophalen…</span>
           {% elif company.enrichment_status == 'error' %}
           <span class="badge badge-red">Fout</span>
           {% elif company.enrichment_status == 'no_website' %}
