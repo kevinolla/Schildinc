@@ -1,77 +1,196 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-title-row">
+
+<div class="page-header">
   <div>
     <h2>Dashboard</h2>
-    <p class="muted">A simple operating view for prospect import, contact discovery, review, and safe outreach.</p>
+    <p class="page-subtitle">Schild Inc — Fietsenwinkel Prospecting</p>
   </div>
-  <div class="button-row">
-    <a class="button-link" href="/prospects">Review prospects</a>
-    <a class="button-link button-link-muted" href="/queue">Open queue</a>
+  <div class="page-actions">
+    <a href="/kvk" class="btn btn-primary">KVK Bedrijven →</a>
+    <a href="/prospects" class="btn btn-secondary">Prospects</a>
+    <a href="/queue" class="btn btn-secondary">Queue</a>
   </div>
-</section>
+</div>
 
-<section class="stats-grid stats-grid-compact">
-  <div class="card stat-card"><span>Customers</span><strong>{{ stats.customer_count }}</strong></div>
-  <div class="card stat-card"><span>Prospects</span><strong>{{ stats.prospect_count }}</strong></div>
-  <div class="card stat-card"><span>Need review</span><strong>{{ stats.pending_review_count }}</strong></div>
-  <div class="card stat-card"><span>Emails found</span><strong>{{ stats.discovered_email_count }}</strong></div>
-  <div class="card stat-card"><span>High priority</span><strong>{{ stats.high_priority_count }}</strong></div>
-  <div class="card stat-card"><span>Sent today</span><strong>{{ stats.sent_today_count }}/{{ stats.daily_send_limit }}</strong></div>
-</section>
+{% if stats.flash %}
+<div class="flash flash-success">{{ stats.flash }}</div>
+{% endif %}
 
-<section class="ops-grid">
-  <div class="card">
-    <h3>1. Add prospects</h3>
-    <form method="post" action="/admin/google-places-search" class="stack-form">
-      <input name="query" placeholder="bike stores with repair service" required>
-      <input name="location" placeholder="Netherlands">
-      <div class="button-row">
-        <input class="input-small" type="number" name="limit" value="10" min="1" max="25">
-        <button type="submit" {% if not google_places_enabled %}disabled{% endif %}>Search Google Maps</button>
-      </div>
-    </form>
-    <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="stack-form top-gap">
+<!-- ── KVK Pipeline Stats ── -->
+<div class="pipeline-strip">
+  <a href="/kvk" class="pipeline-step">
+    <span class="pipeline-num">{{ stats.kvk_total }}</span>
+    <span class="pipeline-label">KVK bedrijven</span>
+  </a>
+  <div class="pipeline-arrow">→</div>
+  <a href="/kvk?has_website=1" class="pipeline-step">
+    <span class="pipeline-num {% if stats.kvk_with_website == 0 %}text-muted{% endif %}">{{ stats.kvk_with_website }}</span>
+    <span class="pipeline-label">Hebben website</span>
+  </a>
+  <div class="pipeline-arrow">→</div>
+  <a href="/kvk?has_email=1" class="pipeline-step pipeline-step-highlight">
+    <span class="pipeline-num {% if stats.kvk_with_email == 0 %}text-muted{% endif %}">{{ stats.kvk_with_email }}</span>
+    <span class="pipeline-label">Hebben e-mail</span>
+  </a>
+  <div class="pipeline-arrow">→</div>
+  <a href="/kvk?match=matched" class="pipeline-step pipeline-step-warn">
+    <span class="pipeline-num">{{ stats.kvk_existing_customers }}</span>
+    <span class="pipeline-label">Bestaande klanten</span>
+  </a>
+  <div class="pipeline-arrow">→</div>
+  <a href="/kvk?tier=Good+Tier" class="pipeline-step pipeline-step-green">
+    <span class="pipeline-num">{{ stats.kvk_good_tier }}</span>
+    <span class="pipeline-label">Good Tier</span>
+  </a>
+  <div class="pipeline-arrow">→</div>
+  <a href="/kvk?has_email=1&match=no_match" class="pipeline-step pipeline-step-blue">
+    <span class="pipeline-num">{{ stats.kvk_outreach_ready }}</span>
+    <span class="pipeline-label">Outreach-ready</span>
+  </a>
+</div>
+
+<!-- ── KVK Quick Actions ── -->
+<div class="dash-grid">
+
+  <div class="card dash-action-card">
+    <div class="dash-action-icon">📥</div>
+    <h3>1. Importeer KVK</h3>
+    <p class="text-muted" style="font-size:.85rem;margin:.25rem 0 .75rem">Upload de genormaliseerde KVK CSV met fietsenwinkels.</p>
+    <form method="post" action="/kvk/import-companies" enctype="multipart/form-data" class="dash-upload-form">
       <input type="file" name="file" accept=".csv" required>
-      <button type="submit">Upload prospect CSV</button>
+      <button type="submit" class="btn btn-primary btn-sm">Importeer bedrijven</button>
     </form>
-  </div>
-
-  <div class="card">
-    <h3>2. Import customer data</h3>
-    <p class="muted-large">Keep this updated so existing customers stay blocked from outreach.</p>
-    <form method="post" action="/admin/import/customers" enctype="multipart/form-data" class="stack-form top-gap">
-      <input type="file" name="file" accept=".csv" required>
-      <button type="submit">Upload customer master</button>
-    </form>
-    <form method="post" action="/admin/import/invoices" enctype="multipart/form-data" class="stack-form top-gap">
-      <input type="file" name="file" accept=".csv" required>
-      <button type="submit">Upload invoice history</button>
-    </form>
-  </div>
-
-  <div class="card">
-    <h3>3. Daily workflow</h3>
-    <ol class="ordered-list">
-      <li>Open prospects and run `Find contacts` for new rows.</li>
-      <li>Approve only non-customers with good fit.</li>
-      <li>Preview the outreach queue before sending.</li>
-      <li>Keep LinkedIn and Instagram manual; no auto-messaging.</li>
-    </ol>
-    <div class="button-row top-gap">
-      <a class="button-link" href="/prospects">Prospects</a>
-      <a class="button-link button-link-muted" href="/logs">Logs</a>
+    <div style="margin-top:.5rem">
+      <a href="/kvk" class="btn btn-ghost btn-sm">Bekijk alle KVK →</a>
     </div>
   </div>
-</section>
 
-<section class="card">
-  <h3>Safety rules active</h3>
-  <div class="safety-grid">
-    <div>Existing customer match blocks outreach</div>
-    <div>Suppression and unsubscribe checks stay active</div>
-    <div>Replies go to <strong>sales@schildinc.com</strong></div>
-    <div>Daily send limits protect the account</div>
+  <div class="card dash-action-card">
+    <div class="dash-action-icon">🔍</div>
+    <h3>2. Verrijk contacten</h3>
+    <p class="text-muted" style="font-size:.85rem;margin:.25rem 0 .75rem">
+      Zoek website, e-mail en telefoon op naam en adres via Google Maps of DuckDuckGo.
+      {% if stats.kvk_pending_enrichment > 0 %}
+      <strong>{{ stats.kvk_pending_enrichment }} wachten.</strong>
+      {% endif %}
+    </p>
+    <form method="post" action="/kvk/bulk-enrich">
+      <input type="hidden" name="company_ids" value="">
+      <button type="submit" class="btn btn-primary btn-sm"
+        {% if stats.kvk_total == 0 %}disabled{% endif %}>
+        Verrijk 30 bedrijven
+      </button>
+    </form>
+    <div style="margin-top:.5rem">
+      <a href="/kvk?enrichment=pending" class="btn btn-ghost btn-sm">Bekijk pending →</a>
+    </div>
   </div>
-</section>
+
+  <div class="card dash-action-card">
+    <div class="dash-action-icon">🎯</div>
+    <h3>3. Klantmatching</h3>
+    <p class="text-muted" style="font-size:.85rem;margin:.25rem 0 .75rem">
+      Markeer bestaande klanten automatisch — zij worden uitgesloten van outreach.
+    </p>
+    <form method="post" action="/kvk/run-matching">
+      <button type="submit" class="btn btn-secondary btn-sm"
+        {% if stats.kvk_total == 0 %}disabled{% endif %}>
+        Matching uitvoeren
+      </button>
+    </form>
+    <div style="margin-top:.5rem">
+      <a href="/kvk?match=matched" class="btn btn-ghost btn-sm">{{ stats.kvk_existing_customers }} klanten gevonden →</a>
+    </div>
+  </div>
+
+  <div class="card dash-action-card">
+    <div class="dash-action-icon">✅</div>
+    <h3>4. Outreach review</h3>
+    <p class="text-muted" style="font-size:.85rem;margin:.25rem 0 .75rem">
+      Beoordeel en keur prospects goed. Alleen goedgekeurde contacten worden verstuurd.
+    </p>
+    <a href="/kvk?has_email=1&match=no_match" class="btn btn-primary btn-sm">
+      Beoordeel prospects
+    </a>
+    <div style="margin-top:.5rem">
+      <a href="/queue" class="btn btn-ghost btn-sm">Open queue →</a>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Existing CRM Stats Row ── -->
+<div class="stats-row">
+  <div class="stat-chip">
+    <span class="stat-chip-label">Klanten</span>
+    <a href="/customers" class="stat-chip-value">{{ stats.customer_count }}</a>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">Prospects</span>
+    <a href="/prospects" class="stat-chip-value">{{ stats.prospect_count }}</a>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">Te beoordelen</span>
+    <a href="/prospects?review_filter=pending" class="stat-chip-value {% if stats.pending_review_count > 0 %}stat-chip-warn{% endif %}">{{ stats.pending_review_count }}</a>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">E-mails gevonden</span>
+    <a href="/prospects?discovery_filter=found" class="stat-chip-value">{{ stats.discovered_email_count }}</a>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">Verstuurd vandaag</span>
+    <span class="stat-chip-value">{{ stats.sent_today_count }}/{{ stats.daily_send_limit }}</span>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">Suppressie</span>
+    <a href="/suppression" class="stat-chip-value">{{ stats.suppression_count }}</a>
+  </div>
+</div>
+
+<!-- ── Import customer data ── -->
+<div class="dash-grid dash-grid-2">
+
+  <div class="card">
+    <h3 style="margin-top:0">Klantdata importeren</h3>
+    <p class="text-muted" style="font-size:.85rem;margin:.25rem 0 .75rem">Houd de klantenlijst actueel zodat bestaande klanten geblokkeerd blijven.</p>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+      <form method="post" action="/admin/import/customers" enctype="multipart/form-data" style="display:flex;gap:.5rem;align-items:center">
+        <input type="file" name="file" accept=".csv" required style="font-size:.8rem">
+        <button class="btn btn-secondary btn-sm" type="submit">Klanten</button>
+      </form>
+      <form method="post" action="/admin/import/invoices" enctype="multipart/form-data" style="display:flex;gap:.5rem;align-items:center">
+        <input type="file" name="file" accept=".csv" required style="font-size:.8rem">
+        <button class="btn btn-secondary btn-sm" type="submit">Facturen</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Google Maps zoeken</h3>
+    <p class="text-muted" style="font-size:.85rem;margin:.25rem 0 .75rem">Zoek handmatig naar fietswinkels via Google Places API.</p>
+    <form method="post" action="/admin/google-places-search" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      <input name="query" placeholder="fietswinkel reparatie" required style="padding:.4rem .6rem;border:1px solid #d1d5db;border-radius:6px;font-size:.875rem;flex:1;min-width:140px">
+      <input name="location" placeholder="Nederland" style="padding:.4rem .6rem;border:1px solid #d1d5db;border-radius:6px;font-size:.875rem;width:110px">
+      <input type="number" name="limit" value="10" min="1" max="25" style="padding:.4rem .5rem;border:1px solid #d1d5db;border-radius:6px;font-size:.875rem;width:55px">
+      <button type="submit" class="btn btn-secondary btn-sm" {% if not google_places_enabled %}disabled title="Geen Google Places API key"{% endif %}>Zoeken</button>
+    </form>
+    {% if not google_places_enabled %}
+    <p style="font-size:.78rem;color:#9ca3af;margin:.5rem 0 0">Stel GOOGLE_PLACES_API_KEY in om deze functie te activeren.</p>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- ── Safety rules ── -->
+<div class="card" style="margin-top:1rem">
+  <div class="safety-row">
+    <span>✓ Bestaande klanten geblokkeerd</span>
+    <span>✓ Suppressie actief</span>
+    <span>✓ Replies → sales@schildinc.com</span>
+    <span>✓ Dagelijkse sendlimiet: {{ stats.daily_send_limit }}</span>
+    <span>✓ Alleen publieke contactdata</span>
+  </div>
+</div>
+
 {% endblock %}
