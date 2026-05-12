@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
 import secrets
 from datetime import date
+from io import StringIO
 from threading import Thread
+from urllib.parse import quote_plus
 
 import pandas as pd
 import stripe
@@ -20,8 +23,17 @@ from app.discovery import discover_contacts_for_kvk_company, discover_public_con
 from app.kvk_enrichment import enrich_kvk_company_full, find_website_for_kvk_company, run_kvk_bulk_enrichment, run_kvk_enrichment_job
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
 from app.google_places import place_to_prospect_record, search_google_places
-from app.importers import read_csv_upload, upsert_customers_from_dataframe, upsert_invoices_from_dataframe, upsert_kvk_companies_from_dataframe, upsert_kvk_establishments_from_dataframe, upsert_prospects_from_dataframe
+from app.importers import (
+    prepare_kvk_prospects_dataframe,
+    read_csv_upload,
+    upsert_customers_from_dataframe,
+    upsert_invoices_from_dataframe,
+    upsert_kvk_companies_from_dataframe,
+    upsert_kvk_establishments_from_dataframe,
+    upsert_prospects_from_dataframe,
+)
 from app.jobs import run_daily_queue_build, run_daily_queue_send
+from app.klaviyo import KlaviyoExportError, export_prospects_to_klaviyo
 from app.matching import apply_kvk_matching, apply_matching
 from app.models import (
     Customer,
@@ -49,7 +61,9 @@ templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic(auto_error=False)
 
 TIER_FILTERS = ["Good Tier", "Hard to Reach", "Mid Tier", "Low Tier", "Brand Store", "Low Fit", "Unclassified"]
-DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_socials", "high_confidence", "low_confidence", "found", "partial", "no_contacts", "error", "not_started", "running"]
+DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_socials", "high_confidence", "low_confidence", "found", "partial", "no_contacts", "no_website", "error", "not_started", "running"]
+KVK_SOURCE = "kvk_bike_list"
+SOURCE_FILTERS = [("all", "All sources"), ("kvk", "KVK list"), ("maps", "Google Maps")]
 
 
 def prospect_contact_count(prospect: Prospect) -> int:
@@ -75,6 +89,9 @@ def prospect_reachability_summary(prospect: Prospect) -> dict[str, str | int | N
     elif prospect.email_discovery_status == "running":
         title = "Checking website now"
         detail = "Crawler is scanning the website"
+    elif prospect.email_discovery_status == "no_website":
+        title = "Website still missing"
+        detail = "No company website found yet"
     elif prospect.email_discovery_status == "error":
         title = "Needs retry"
         detail = "Crawler hit an error"
@@ -126,6 +143,11 @@ def redirect_back(request: Request, fallback: str) -> RedirectResponse:
     return RedirectResponse(request.headers.get("referer", fallback), status_code=303)
 
 
+def with_notice(path: str, message: str) -> str:
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}notice={quote_plus(message)}"
+
+
 def _run_contact_discovery_job(prospect_id: int) -> None:
     db = SessionLocal()
     try:
@@ -154,20 +176,234 @@ def _run_contact_discovery_job(prospect_id: int) -> None:
         db.close()
 
 
+def _run_contact_discovery_batch_job(prospect_ids: list[int]) -> None:
+    db = SessionLocal()
+    try:
+        for prospect_id in prospect_ids:
+            try:
+                prospect = db.get(Prospect, prospect_id)
+                if not prospect:
+                    continue
+                discover_public_contacts_for_prospect(db, prospect)
+                db.commit()
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                prospect = db.get(Prospect, prospect_id)
+                if not prospect:
+                    continue
+                prospect.email_discovery_status = "error"
+                prospect.discovery_error = str(exc)
+                db.add(
+                    ProspectActivityLog(
+                        prospect=prospect,
+                        action_type="email_discovery",
+                        status="error",
+                        source_url=prospect.website or prospect.google_maps_url,
+                        detail=str(exc),
+                    )
+                )
+                db.commit()
+    finally:
+        db.close()
+
+
 def _queue_contact_discovery(db: Session, prospect: Prospect) -> None:
-    prospect.email_discovery_status = "running"
-    prospect.discovery_error = ""
-    db.add(
-        ProspectActivityLog(
-            prospect=prospect,
-            action_type="email_discovery",
-            status="running",
-            source_url=prospect.website or prospect.google_maps_url,
-            detail="Discovery queued from admin action.",
+    _queue_contact_discovery_batch(db, [prospect])
+
+
+def _queue_contact_discovery_batch(db: Session, prospects: list[Prospect]) -> None:
+    queued_ids: list[int] = []
+    for prospect in prospects:
+        if prospect.email_discovery_status == "running":
+            continue
+        prospect.email_discovery_status = "running"
+        prospect.discovery_error = ""
+        db.add(
+            ProspectActivityLog(
+                prospect=prospect,
+                action_type="email_discovery",
+                status="running",
+                source_url=prospect.website or prospect.google_maps_url,
+                detail="Discovery queued from admin action.",
+            )
         )
-    )
+        queued_ids.append(prospect.id)
+    if not queued_ids:
+        return
     db.commit()
-    Thread(target=_run_contact_discovery_job, args=(prospect.id,), daemon=True).start()
+    Thread(target=_run_contact_discovery_batch_job, args=(queued_ids,), daemon=True).start()
+
+
+def kvk_dashboard_context(db: Session) -> dict[str, int]:
+    kvk_query = select(Prospect).where(Prospect.source == KVK_SOURCE)
+    return {
+        "total": db.scalar(select(func.count()).select_from(kvk_query.subquery())) or 0,
+        "with_website": db.scalar(select(func.count(Prospect.id)).where(Prospect.source == KVK_SOURCE, Prospect.website != "")) or 0,
+        "with_email": db.scalar(select(func.count(Prospect.id)).where(Prospect.source == KVK_SOURCE, Prospect.email != "")) or 0,
+        "ready": db.scalar(select(func.count(Prospect.id)).where(Prospect.source == KVK_SOURCE, Prospect.email_discovery_status == "found")) or 0,
+    }
+
+
+def build_prospect_query(
+    *,
+    search: str = "",
+    match_filter: str = "",
+    review_filter: str = "",
+    tier_filter: str = "",
+    discovery_filter: str = "all",
+    source_filter: str = "",
+    include_relationships: bool = True,
+):
+    query = select(Prospect)
+    if include_relationships:
+        query = query.options(selectinload(Prospect.matched_customer))
+    query = query.order_by(Prospect.updated_at.desc())
+
+    if search:
+        like_term = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                Prospect.company_name.ilike(like_term),
+                Prospect.website.ilike(like_term),
+                Prospect.email.ilike(like_term),
+                Prospect.whatsapp_number.ilike(like_term),
+                Prospect.city.ilike(like_term),
+                Prospect.kvk_number.ilike(like_term),
+            )
+        )
+    if match_filter:
+        query = query.where(Prospect.match_status == MatchStatus(match_filter))
+    if review_filter:
+        query = query.where(Prospect.review_status == ProspectState(review_filter))
+    if tier_filter:
+        query = query.where(Prospect.bike_shop_tier == tier_filter)
+    if source_filter == "kvk":
+        query = query.where(Prospect.source == KVK_SOURCE)
+    elif source_filter == "maps":
+        query = query.where(Prospect.source.in_(["google_places", "google_maps_csv"]))
+    if discovery_filter == "has_email":
+        query = query.where(Prospect.email != "")
+    elif discovery_filter == "no_email":
+        query = query.where(Prospect.email == "")
+    elif discovery_filter == "has_whatsapp":
+        query = query.where(Prospect.whatsapp_number != "")
+    elif discovery_filter == "has_socials":
+        query = query.where(or_(Prospect.linkedin_url != "", Prospect.instagram_url != ""))
+    elif discovery_filter == "high_confidence":
+        query = query.where(Prospect.email_confidence >= 75)
+    elif discovery_filter == "low_confidence":
+        query = query.where(Prospect.email_confidence < 75)
+    elif discovery_filter in {"found", "partial", "no_contacts", "no_website", "error", "not_started", "running"}:
+        query = query.where(Prospect.email_discovery_status == discovery_filter)
+    return query
+
+
+def exportable_prospects(
+    db: Session,
+    *,
+    search: str = "",
+    match_filter: str = "",
+    review_filter: str = "",
+    tier_filter: str = "",
+    discovery_filter: str = "all",
+    source_filter: str = "",
+    selected_ids: list[int] | None = None,
+    require_email: bool = True,
+    exclude_existing_customers: bool = False,
+) -> list[Prospect]:
+    if selected_ids:
+        query = select(Prospect).where(Prospect.id.in_(selected_ids)).order_by(Prospect.company_name.asc())
+    else:
+        query = build_prospect_query(
+            search=search,
+            match_filter=match_filter,
+            review_filter=review_filter,
+            tier_filter=tier_filter,
+            discovery_filter=discovery_filter,
+            source_filter=source_filter,
+            include_relationships=False,
+        )
+    if require_email:
+        query = query.where(Prospect.email != "")
+    if exclude_existing_customers:
+        query = query.where(Prospect.match_status != MatchStatus.existing_customer)
+    return db.scalars(query).all()
+
+
+def export_prospects_csv_text(prospects: list[Prospect]) -> str:
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "company_name",
+            "email",
+            "website",
+            "website_domain",
+            "phone",
+            "whatsapp_number",
+            "instagram_url",
+            "linkedin_url",
+            "city",
+            "country_code",
+            "bike_shop_tier",
+            "outreach_priority",
+            "match_status",
+            "review_status",
+            "kvk_number",
+            "kvk_establishment_number",
+        ]
+    )
+    for prospect in prospects:
+        writer.writerow(
+            [
+                prospect.company_name,
+                prospect.email,
+                prospect.website,
+                prospect.website_domain,
+                prospect.phone,
+                prospect.whatsapp_number,
+                prospect.instagram_url,
+                prospect.linkedin_url,
+                prospect.city,
+                prospect.country_code,
+                prospect.bike_shop_tier,
+                prospect.outreach_priority,
+                prospect.match_status.value,
+                prospect.review_status.value,
+                prospect.kvk_number,
+                prospect.kvk_establishment_number,
+            ]
+        )
+    return output.getvalue()
+
+
+def _kvk_candidates_for_discovery(db: Session, limit: int) -> list[Prospect]:
+    return db.scalars(
+        select(Prospect)
+        .where(
+            Prospect.source == KVK_SOURCE,
+            Prospect.email_discovery_status.in_(["not_started", "error", "no_website", "no_contacts", "partial"]),
+        )
+        .order_by(Prospect.updated_at.asc(), Prospect.id.asc())
+        .limit(limit)
+    ).all()
+
+
+def _load_recent_touched_prospects(db: Session, source: str, source_references: list[str]) -> list[Prospect]:
+    unique_refs = [item for item in dict.fromkeys(source_references) if item]
+    if not unique_refs:
+        return []
+    return db.scalars(
+        select(Prospect).where(Prospect.source == source, Prospect.source_reference.in_(unique_refs))
+    ).all()
+
+
+def _build_kvk_import_message(summary, queued_count: int) -> str:
+    return (
+        f"/prospects?inserted={summary.inserted}"
+        f"&updated={summary.updated}"
+        f"&kvk_queued={queued_count}"
+    )
 
 
 def dashboard_context(db: Session) -> dict:
@@ -204,6 +440,7 @@ def prospect_filters_context(
     review_filter: str = "",
     tier_filter: str = "",
     discovery_filter: str = "all",
+    source_filter: str = "",
 ) -> dict:
     return {
         "search": search,
@@ -211,8 +448,10 @@ def prospect_filters_context(
         "review_filter": review_filter,
         "tier_filter": tier_filter,
         "discovery_filter": discovery_filter,
+        "source_filter": source_filter,
         "tier_options": TIER_FILTERS,
         "discovery_options": DISCOVERY_FILTERS,
+        "source_options": SOURCE_FILTERS,
         "match_options": [status.value for status in MatchStatus],
         "review_options": [status.value for status in ProspectState],
     }
@@ -279,42 +518,18 @@ def prospects_page(
     review_filter: str = "",
     tier_filter: str = "",
     discovery_filter: str = "all",
+    source_filter: str = "",
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
 ) -> HTMLResponse:
-    query = select(Prospect).options(selectinload(Prospect.matched_customer)).order_by(Prospect.updated_at.desc())
-    if search:
-        like_term = f"%{search.strip()}%"
-        query = query.where(
-            or_(
-                Prospect.company_name.ilike(like_term),
-                Prospect.website.ilike(like_term),
-                Prospect.email.ilike(like_term),
-                Prospect.whatsapp_number.ilike(like_term),
-                Prospect.city.ilike(like_term),
-            )
-        )
-    if match_filter:
-        query = query.where(Prospect.match_status == MatchStatus(match_filter))
-    if review_filter:
-        query = query.where(Prospect.review_status == ProspectState(review_filter))
-    if tier_filter:
-        query = query.where(Prospect.bike_shop_tier == tier_filter)
-    if discovery_filter == "has_email":
-        query = query.where(Prospect.email != "")
-    elif discovery_filter == "no_email":
-        query = query.where(Prospect.email == "")
-    elif discovery_filter == "has_whatsapp":
-        query = query.where(Prospect.whatsapp_number != "")
-    elif discovery_filter == "has_socials":
-        query = query.where(or_(Prospect.linkedin_url != "", Prospect.instagram_url != ""))
-    elif discovery_filter == "high_confidence":
-        query = query.where(Prospect.email_confidence >= 75)
-    elif discovery_filter == "low_confidence":
-        query = query.where(Prospect.email_confidence < 75)
-    elif discovery_filter in {"found", "partial", "no_contacts", "error", "not_started"}:
-        query = query.where(Prospect.email_discovery_status == discovery_filter)
-
+    query = build_prospect_query(
+        search=search,
+        match_filter=match_filter,
+        review_filter=review_filter,
+        tier_filter=tier_filter,
+        discovery_filter=discovery_filter,
+        source_filter=source_filter,
+    )
     prospects = db.scalars(query.limit(300)).all()
     return templates.TemplateResponse(
         request,
@@ -326,12 +541,18 @@ def prospects_page(
             "google_places_enabled": bool(settings.google_places_api_key),
             "prospect_contact_count": prospect_contact_count,
             "prospect_reachability_summary": prospect_reachability_summary,
+            "kvk_stats": kvk_dashboard_context(db),
+            "klaviyo_enabled": bool(settings.klaviyo_private_api_key),
+            "klaviyo_default_list_id": settings.klaviyo_default_list_id,
+            "klaviyo_default_list_name": settings.klaviyo_default_list_name,
+            "flash_message": request.query_params.get("notice", ""),
             **prospect_filters_context(
                 search=search,
                 match_filter=match_filter,
                 review_filter=review_filter,
                 tier_filter=tier_filter,
                 discovery_filter=discovery_filter,
+                source_filter=source_filter,
             ),
         },
     )
@@ -397,6 +618,33 @@ async def import_prospects(
         apply_bike_tier(prospect)
     db.commit()
     return RedirectResponse(f"/prospects?inserted={summary.inserted}&updated={summary.updated}", status_code=303)
+
+
+@app.post("/admin/import/kvk")
+async def import_kvk_prospects(
+    establishments_file: UploadFile = File(...),
+    companies_file: UploadFile = File(...),
+    auto_queue_limit: int = Form(50),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    establishments_df = read_csv_upload(await establishments_file.read())
+    companies_df = read_csv_upload(await companies_file.read())
+    merged_df = prepare_kvk_prospects_dataframe(establishments_df, companies_df)
+    summary = upsert_prospects_from_dataframe(db, merged_df, source=KVK_SOURCE)
+    touched_prospects = _load_recent_touched_prospects(db, KVK_SOURCE, summary.source_references)
+    for prospect in touched_prospects:
+        apply_matching(db, prospect)
+        apply_bike_tier(prospect)
+    db.commit()
+
+    queued_count = 0
+    if auto_queue_limit > 0:
+        candidates = _kvk_candidates_for_discovery(db, auto_queue_limit)
+        if candidates:
+            _queue_contact_discovery_batch(db, candidates)
+            queued_count = len(candidates)
+    return RedirectResponse(_build_kvk_import_message(summary, queued_count), status_code=303)
 
 
 @app.post("/admin/google-places-search")
@@ -477,9 +725,92 @@ def bulk_discover_emails(
         return redirect_back(request, "/prospects")
 
     prospects = db.scalars(select(Prospect).where(Prospect.id.in_(selected_ids)).order_by(Prospect.id.asc())).all()
-    for prospect in prospects:
-        _queue_contact_discovery(db, prospect)
+    _queue_contact_discovery_batch(db, prospects)
     return redirect_back(request, "/prospects")
+
+
+@app.post("/admin/prospects/kvk-discovery")
+def kvk_discovery_batch(
+    request: Request,
+    limit: int = Form(50),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    candidates = _kvk_candidates_for_discovery(db, max(1, min(limit, 250)))
+    _queue_contact_discovery_batch(db, candidates)
+    return redirect_back(request, "/prospects?source_filter=kvk")
+
+
+@app.post("/admin/prospects/export.csv")
+def export_prospects_csv_route(
+    search: str = Form(""),
+    match_filter: str = Form(""),
+    review_filter: str = Form(""),
+    tier_filter: str = Form(""),
+    discovery_filter: str = Form("all"),
+    source_filter: str = Form(""),
+    selected_ids: list[int] = Form([]),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> PlainTextResponse:
+    prospects = exportable_prospects(
+        db,
+        search=search,
+        match_filter=match_filter,
+        review_filter=review_filter,
+        tier_filter=tier_filter,
+        discovery_filter=discovery_filter,
+        source_filter=source_filter,
+        selected_ids=selected_ids,
+        require_email=True,
+        exclude_existing_customers=False,
+    )
+    csv_text = export_prospects_csv_text(prospects)
+    source_label = source_filter or "prospects"
+    headers = {"Content-Disposition": f'attachment; filename="schild-{source_label}-emails.csv"'}
+    return PlainTextResponse(csv_text, media_type="text/csv; charset=utf-8", headers=headers)
+
+
+@app.post("/admin/prospects/export/klaviyo")
+def export_prospects_klaviyo_route(
+    request: Request,
+    list_id: str = Form(""),
+    list_name: str = Form(""),
+    search: str = Form(""),
+    match_filter: str = Form(""),
+    review_filter: str = Form(""),
+    tier_filter: str = Form(""),
+    discovery_filter: str = Form("all"),
+    source_filter: str = Form(""),
+    selected_ids: list[int] = Form([]),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    prospects = exportable_prospects(
+        db,
+        search=search,
+        match_filter=match_filter,
+        review_filter=review_filter,
+        tier_filter=tier_filter,
+        discovery_filter=discovery_filter,
+        source_filter=source_filter,
+        selected_ids=selected_ids,
+        require_email=True,
+        exclude_existing_customers=True,
+    )
+    try:
+        result = export_prospects_to_klaviyo(prospects, list_id=list_id, list_name=list_name)
+    except KlaviyoExportError as exc:
+        fallback = "/prospects"
+        if source_filter:
+            fallback = f"/prospects?source_filter={source_filter}"
+        return RedirectResponse(with_notice(fallback, str(exc)), status_code=303)
+
+    notice = f"Klaviyo export queued: {result.exported_count} profiles to list {result.list_id}."
+    fallback = "/prospects"
+    if source_filter:
+        fallback = f"/prospects?source_filter={source_filter}"
+    return RedirectResponse(with_notice(fallback, notice), status_code=303)
 
 
 @app.post("/admin/prospects/{prospect_id}/review")

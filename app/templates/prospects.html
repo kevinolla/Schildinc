@@ -3,11 +3,115 @@
 <section class="page-title-row">
   <div>
     <h2>Prospects</h2>
-    <p class="muted">Scan leads, find public contacts, block existing customers, then approve only good non-customers.</p>
+    <p class="muted">Work through KVK and Maps leads, find public contact data, and keep exports clean before outreach starts.</p>
   </div>
   <div class="button-row">
     <a class="button-link button-link-muted" href="/queue">Open queue</a>
     <a class="button-link button-link-muted" href="/logs">Logs</a>
+  </div>
+</section>
+
+{% if flash_message %}
+<section class="notice-strip">
+  <strong>Update</strong>
+  <span>{{ flash_message }}</span>
+</section>
+{% endif %}
+
+<section class="kvk-workspace card">
+  <div class="section-head">
+    <div>
+      <h3>KVK Workspace</h3>
+      <p class="muted">Import bike-store companies, enrich them in batches, then download public emails or push vetted records into Klaviyo.</p>
+    </div>
+    <div class="button-row">
+      <a class="button-link button-link-muted" href="/prospects?source_filter=kvk">Open KVK view</a>
+      <a class="button-link button-link-muted" href="/prospects?source_filter=kvk&discovery_filter=has_email">Only rows with email</a>
+    </div>
+  </div>
+
+  <div class="kvk-stats-grid">
+    <a class="kvk-stat-card" href="/prospects?source_filter=kvk">
+      <span>Imported</span>
+      <strong>{{ kvk_stats.total }}</strong>
+    </a>
+    <a class="kvk-stat-card" href="/prospects?source_filter=kvk&discovery_filter=has_email">
+      <span>Has email</span>
+      <strong>{{ kvk_stats.with_email }}</strong>
+    </a>
+    <a class="kvk-stat-card" href="/prospects?source_filter=kvk&discovery_filter=found">
+      <span>Discovery ready</span>
+      <strong>{{ kvk_stats.ready }}</strong>
+    </a>
+    <a class="kvk-stat-card" href="/prospects?source_filter=kvk&discovery_filter=no_website">
+      <span>Website missing</span>
+      <strong>{{ kvk_stats.total - kvk_stats.with_website }}</strong>
+    </a>
+  </div>
+
+  <div class="kvk-action-grid">
+    <div class="tool-block">
+      <h4>Import KVK files</h4>
+      <p class="muted">Upload establishments first and companies second. The app merges them into one prospect list.</p>
+      <form method="post" action="/admin/import/kvk" enctype="multipart/form-data" class="stack-form top-gap-small">
+        <input type="file" name="establishments_file" accept=".csv" required>
+        <input type="file" name="companies_file" accept=".csv" required>
+        <div class="button-row">
+          <input class="input-small" type="number" name="auto_queue_limit" value="50" min="0" max="250">
+          <button type="submit">Import KVK list</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="tool-block">
+      <h4>Enrich next batch</h4>
+      <p class="muted">Run discovery gradually so the crawler can find websites, emails, and socials without flooding the queue.</p>
+      <form method="post" action="/admin/prospects/kvk-discovery" class="stack-form top-gap-small">
+        <div class="button-row">
+          <input class="input-small" type="number" name="limit" value="50" min="1" max="250">
+          <button type="submit">Run next KVK batch</button>
+        </div>
+      </form>
+      <div class="mini-stats">
+        <span><strong>{{ kvk_stats.with_website }}</strong> with website</span>
+        <span><strong>{{ kvk_stats.with_email }}</strong> with public email</span>
+      </div>
+    </div>
+
+    <div class="tool-block">
+      <h4>Download public emails</h4>
+      <p class="muted">Download the current KVK view as CSV. Only rows with a public email are included.</p>
+      <form method="post" action="/admin/prospects/export.csv" class="stack-form top-gap-small">
+        <input type="hidden" name="search" value="{{ search }}">
+        <input type="hidden" name="match_filter" value="{{ match_filter }}">
+        <input type="hidden" name="review_filter" value="{{ review_filter }}">
+        <input type="hidden" name="tier_filter" value="{{ tier_filter }}">
+        <input type="hidden" name="discovery_filter" value="has_email">
+        <input type="hidden" name="source_filter" value="kvk">
+        <button type="submit">Download KVK emails CSV</button>
+      </form>
+    </div>
+
+    <div class="tool-block">
+      <h4>Export to Klaviyo</h4>
+      <p class="muted">Creates or updates profiles in Klaviyo and adds them to a list without changing consent status.</p>
+      <form method="post" action="/admin/prospects/export/klaviyo" class="stack-form top-gap-small">
+        <input type="hidden" name="search" value="{{ search }}">
+        <input type="hidden" name="match_filter" value="{{ match_filter }}">
+        <input type="hidden" name="review_filter" value="{{ review_filter }}">
+        <input type="hidden" name="tier_filter" value="{{ tier_filter }}">
+        <input type="hidden" name="discovery_filter" value="has_email">
+        <input type="hidden" name="source_filter" value="kvk">
+        <input name="list_id" placeholder="Existing Klaviyo list ID" value="{{ klaviyo_default_list_id }}">
+        <input name="list_name" placeholder="Or create a new list name" value="{{ klaviyo_default_list_name }}">
+        <button type="submit" {% if not klaviyo_enabled %}disabled{% endif %}>Export current KVK view</button>
+      </form>
+      {% if not klaviyo_enabled %}
+      <p class="muted top-gap-small">Set `KLAVIYO_PRIVATE_API_KEY` to enable this export.</p>
+      {% elif klaviyo_default_list_id or klaviyo_default_list_name %}
+      <p class="muted top-gap-small">Default Klaviyo target is prefilled so the team can export in one click.</p>
+      {% endif %}
+    </div>
   </div>
 </section>
 
@@ -25,17 +129,32 @@
     {% endif %}
   </div>
   <div class="tool-block">
-    <h3>Upload CSV</h3>
+    <h3>Manual CSV import</h3>
     <form method="post" action="/admin/import/prospects" enctype="multipart/form-data" class="compact-form">
       <input type="file" name="file" accept=".csv" required>
       <button type="submit">Upload</button>
     </form>
+  </div>
+  <div class="tool-block">
+    <h3>What this page is best for</h3>
+    <ul class="ordered-list ordered-list-compact">
+      <li>Import KVK or Maps prospects</li>
+      <li>Run contact discovery in batches</li>
+      <li>Review fit and customer match status</li>
+      <li>Download clean public email lists</li>
+      <li>Push vetted rows into Klaviyo for segmentation</li>
+    </ul>
   </div>
 </section>
 
 <section class="filter-panel">
   <form method="get" action="/prospects" class="filter-form">
     <input name="search" value="{{ search }}" placeholder="Search company, city, website, email">
+    <select name="source_filter">
+      {% for value, label in source_options %}
+      <option value="{{ '' if value == 'all' else value }}" {% if source_filter == ('' if value == 'all' else value) %}selected{% endif %}>Source: {{ label }}</option>
+      {% endfor %}
+    </select>
     <select name="match_filter">
       <option value="">Match: all</option>
       {% for option in match_options %}
@@ -71,7 +190,9 @@
         <h3>Lead review table</h3>
         <p class="muted">Check who is reachable, who is worth outreach, and refresh contact data when needed.</p>
       </div>
-      <button type="submit">Find contacts for selected</button>
+      <div class="button-row">
+        <button type="submit">Find contacts for selected</button>
+      </div>
     </div>
 
     <table class="prospects-table">

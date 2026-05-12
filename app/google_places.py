@@ -5,6 +5,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from app.config import settings
+from app.utils import normalize_domain, normalize_text
 
 
 def search_google_places(query: str, location: str = "", page_size: int = 10) -> list[dict[str, Any]]:
@@ -53,3 +54,48 @@ def place_to_prospect_record(place: dict[str, Any]) -> dict[str, Any]:
         "country_code": address_parts.get("country", ""),
         "google_maps_url": place.get("googleMapsUri", ""),
     }
+
+
+def find_best_place_match(
+    *,
+    company_name: str,
+    city: str = "",
+    country_code: str = "",
+    query: str = "",
+    page_size: int = 5,
+) -> dict[str, Any] | None:
+    search_query = (query or " ".join(part for part in [company_name, city, country_code, "fietswinkel"] if part)).strip()
+    if not search_query:
+        return None
+
+    places = search_google_places(query=search_query, location=country_code or city, page_size=page_size)
+    if not places:
+        return None
+
+    clean_name = normalize_text(company_name)
+    clean_city = normalize_text(city)
+    best_place: dict[str, Any] | None = None
+    best_score = -1
+
+    for place in places:
+        display_name = place.get("displayName", {}).get("text", "")
+        score = 0
+        if normalize_text(display_name) == clean_name:
+            score += 80
+        elif clean_name and clean_name in normalize_text(display_name):
+            score += 60
+
+        address_parts = {item.get("types", [""])[0]: item.get("shortText", "") for item in place.get("addressComponents", [])}
+        place_city = normalize_text(address_parts.get("locality", ""))
+        if clean_city and place_city == clean_city:
+            score += 15
+        if country_code and normalize_text(address_parts.get("country", "")) == normalize_text(country_code):
+            score += 5
+        if normalize_domain(place.get("websiteUri", "")):
+            score += 8
+
+        if score > best_score:
+            best_place = place
+            best_score = score
+
+    return best_place

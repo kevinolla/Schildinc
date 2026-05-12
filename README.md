@@ -7,8 +7,10 @@ Railway-ready FastAPI + Postgres app for Schild Inc prospecting, customer matchi
 - imports the existing Schild customer database from normalized CSVs
 - keeps recent Stripe customers synced through webhooks
 - imports or searches Google Maps prospects
+- imports Dutch KVK bike-store lists and enriches them gradually
 - restores public website-based contact discovery with Playwright
 - finds visible business email, LinkedIn, and Instagram links from prospect websites
+- exports public KVK contact emails to CSV or Klaviyo lists
 - blocks existing customers from outreach using domain, email, canonical geo-name, and fuzzy matching
 - scores bike-shop prospects into Schild-specific tiers
 - gives a review-safe daily outreach queue with preview, export, suppression, cooldowns, and send limits
@@ -122,6 +124,7 @@ app/
   tiering.py
   outreach_templates.py
   emailing.py
+  klaviyo.py
   jobs.py
   main.py
   templates/
@@ -233,6 +236,24 @@ The app uses:
 POST https://places.googleapis.com/v1/places:searchText
 ```
 
+### Option 3: KVK bike-store import
+
+From `/prospects`:
+
+1. Open the `KVK Workspace`
+2. Upload `normalized_kvk_bike_establishments.csv`
+3. Upload `normalized_kvk_bike_companies.csv`
+4. Choose how many rows to auto-queue for enrichment
+5. Run `Run next KVK batch` until the contact coverage is good enough
+
+The KVK workflow keeps:
+
+- `kvk_number`
+- `kvk_establishment_number`
+- `kvk_company_entity_id`
+- `website_search_query`
+- `contact_search_query`
+
 ## How to run email discovery
 
 From the UI:
@@ -254,6 +275,23 @@ What gets stored:
 - `instagram_url`
 - `website_summary`
 - `discovery_highlights`
+
+KVK imports can also use Google Places to fill in a missing website before the website crawler runs.
+
+## KVK export options
+
+From `/prospects` in the `KVK Workspace`:
+
+- `Download KVK emails CSV` downloads the current KVK view with public emails only
+- `Export current KVK view` sends the filtered KVK rows with public emails to Klaviyo
+
+Klaviyo export notes:
+
+- existing customers are excluded from the Klaviyo export route
+- consent status is not changed by this export
+- the Klaviyo bulk import job creates or updates profiles and adds them to a list
+- you can provide an existing `list_id` or a new `list_name`
+- for one-click team exports, set `KLAVIYO_DEFAULT_LIST_ID` and `KLAVIYO_DEFAULT_LIST_NAME`
 
 ## How to queue outreach
 
@@ -363,6 +401,10 @@ PLAYWRIGHT_TIMEOUT_MS=12000
 GOOGLE_PLACES_API_KEY=...
 STRIPE_API_KEY=...
 STRIPE_WEBHOOK_SECRET=...
+KLAVIYO_PRIVATE_API_KEY=...
+KLAVIYO_DEFAULT_LIST_ID=...
+KLAVIYO_DEFAULT_LIST_NAME=...
+KLAVIYO_API_REVISION=2026-04-15
 RESEND_API_KEY=...
 SMTP_HOST=...
 SMTP_PORT=587

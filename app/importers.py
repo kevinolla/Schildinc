@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
 from typing import Any
@@ -28,6 +28,7 @@ def parse_dt(value: Any) -> datetime | None:
 class ImportSummary:
     inserted: int = 0
     updated: int = 0
+    source_references: list[str] = field(default_factory=list)
 
 
 def read_csv_upload(contents: bytes) -> pd.DataFrame:
@@ -181,27 +182,35 @@ def upsert_prospects_from_dataframe(session: Session, df: pd.DataFrame, source: 
             summary.inserted += 1
         else:
             summary.updated += 1
+        if source_reference:
+            summary.source_references.append(source_reference)
 
         prospect.company_name = company_name
+        prospect.kvk_number = str(record.get("kvk_number") or prospect.kvk_number or "")
+        prospect.kvk_establishment_number = str(record.get("kvk_establishment_number") or record.get("establishment_number") or prospect.kvk_establishment_number or "")
+        prospect.kvk_company_entity_id = str(record.get("kvk_company_entity_id") or record.get("company_entity_id") or prospect.kvk_company_entity_id or "")
+        prospect.website_search_query = str(record.get("website_search_query") or record.get("google_maps_query") or prospect.website_search_query or "")
+        prospect.contact_search_query = str(record.get("contact_search_query") or prospect.contact_search_query or "")
         prospect.canonical_company_name_clean = normalize_text(company_name)
-        prospect.email = normalize_email(record.get("email") or record.get("best_email") or "")
+        prospect.email = normalize_email(record.get("email") or record.get("best_email") or record.get("email_public") or prospect.email or "")
         prospect.email_domain = email_domain(prospect.email)
         prospect.whatsapp_number = str(record.get("whatsapp_number") or prospect.whatsapp_number or "")
         prospect.whatsapp_url = str(record.get("whatsapp_url") or prospect.whatsapp_url or "")
         if prospect.email:
             prospect.email_discovery_status = "imported"
-            prospect.email_confidence = max(prospect.email_confidence, 60)
+            imported_confidence = int(record.get("email_confidence", 0) or 0)
+            prospect.email_confidence = max(prospect.email_confidence, imported_confidence or 60)
         elif prospect.whatsapp_number or record.get("linkedin_url") or record.get("instagram_url"):
             prospect.email_discovery_status = "partial"
-        prospect.website = str(record.get("website") or "")
+        prospect.website = str(record.get("website") or prospect.website or "")
         prospect.website_domain = normalize_domain(record.get("website_domain") or prospect.website)
-        prospect.phone = str(record.get("phone") or "")
-        prospect.city = str(record.get("city") or record.get("google_maps_match_city") or "")
-        prospect.state = str(record.get("state") or record.get("google_maps_match_state") or "")
-        prospect.country_code = str(record.get("country_code") or record.get("country") or record.get("google_maps_match_country") or "")
-        prospect.address = str(record.get("address") or record.get("formatted_address") or "")
-        prospect.google_maps_url = str(record.get("google_maps_url") or record.get("maps_url") or "")
-        prospect.company_type = str(record.get("company_type") or record.get("type") or "")
+        prospect.phone = str(record.get("phone") or record.get("phone_public") or prospect.phone or "")
+        prospect.city = str(record.get("city") or record.get("google_maps_match_city") or prospect.city or "")
+        prospect.state = str(record.get("state") or record.get("google_maps_match_state") or prospect.state or "")
+        prospect.country_code = str(record.get("country_code") or record.get("country") or record.get("google_maps_match_country") or prospect.country_code or "")
+        prospect.address = str(record.get("address") or record.get("formatted_address") or prospect.address or "")
+        prospect.google_maps_url = str(record.get("google_maps_url") or record.get("maps_url") or prospect.google_maps_url or "")
+        prospect.company_type = str(record.get("company_type") or record.get("type") or prospect.company_type or "")
         prospect.linkedin_url = str(record.get("linkedin_url") or prospect.linkedin_url or "")
         prospect.instagram_url = str(record.get("instagram_url") or prospect.instagram_url or "")
         prospect.notes = str(record.get("notes") or prospect.notes or "")
@@ -452,3 +461,81 @@ def upsert_kvk_establishments_from_dataframe(session: Session, df: pd.DataFrame,
     log.status = "success"
     log.completed_at = datetime.now(tz=timezone.utc)
     return summary
+
+
+def prepare_kvk_prospects_dataframe(establishments_df: pd.DataFrame, companies_df: pd.DataFrame) -> pd.DataFrame:
+    establishments = establishments_df.fillna("").to_dict(orient="records")
+    companies = {
+        str(record.get("kvk_number", "")).strip(): record
+        for record in companies_df.fillna("").to_dict(orient="records")
+        if str(record.get("kvk_number", "")).strip()
+    }
+    merged_rows: list[dict[str, Any]] = []
+
+    for record in establishments:
+        kvk_number = str(record.get("kvk_number", "")).strip()
+        establishment_number = str(record.get("establishment_number", "")).strip()
+        company_record = companies.get(kvk_number, {})
+        company_name = str(record.get("company_name") or company_record.get("company_name") or "").strip()
+        city = str(record.get("visiting_city") or company_record.get("primary_city") or "").strip()
+        source_reference = f"kvk:{kvk_number}:{establishment_number or company_record.get('primary_establishment_number', '')}".rstrip(":")
+        merged_rows.append(
+            {
+                "source_reference": source_reference,
+                "kvk_number": kvk_number,
+                "kvk_establishment_number": establishment_number,
+                "kvk_company_entity_id": str(company_record.get("company_entity_id") or ""),
+                "company_name": company_name,
+                "website": str(record.get("website") or company_record.get("website") or ""),
+                "website_domain": str(record.get("website_domain") or company_record.get("website_domain") or ""),
+                "email_public": str(record.get("email_public") or company_record.get("email_public") or ""),
+                "phone_public": str(record.get("phone_public") or company_record.get("phone_public") or ""),
+                "email_confidence": str(record.get("email_confidence") or company_record.get("email_confidence") or ""),
+                "city": city,
+                "state": str(record.get("province_code") or company_record.get("province_code") or ""),
+                "country_code": str(record.get("country_code") or company_record.get("country_code") or ""),
+                "address": str(record.get("full_visiting_address") or company_record.get("primary_address") or ""),
+                "company_type": str(record.get("main_activity_description") or company_record.get("main_activity_description") or ""),
+                "website_search_query": str(record.get("google_maps_query") or company_record.get("google_maps_query") or f"{company_name} {city} fietswinkel").strip(),
+                "contact_search_query": str(record.get("contact_search_query") or company_record.get("contact_search_query") or f"{company_name} {city} email telefoon website").strip(),
+                "notes": (
+                    f"KVK {kvk_number}"
+                    f"{' | Establishment ' + establishment_number if establishment_number else ''}"
+                    f"{' | Multiple establishments' if parse_bool(record.get('has_multiple_establishments')) else ''}"
+                ).strip(),
+            }
+        )
+
+    known_references = {row["source_reference"] for row in merged_rows}
+    for record in companies_df.fillna("").to_dict(orient="records"):
+        kvk_number = str(record.get("kvk_number", "")).strip()
+        establishment_number = str(record.get("primary_establishment_number", "")).strip()
+        source_reference = f"kvk:{kvk_number}:{establishment_number}".rstrip(":")
+        if not kvk_number or source_reference in known_references:
+            continue
+        company_name = str(record.get("company_name") or "").strip()
+        city = str(record.get("primary_city") or "").strip()
+        merged_rows.append(
+            {
+                "source_reference": source_reference,
+                "kvk_number": kvk_number,
+                "kvk_establishment_number": establishment_number,
+                "kvk_company_entity_id": str(record.get("company_entity_id") or ""),
+                "company_name": company_name,
+                "website": str(record.get("website") or ""),
+                "website_domain": str(record.get("website_domain") or ""),
+                "email_public": str(record.get("email_public") or ""),
+                "phone_public": str(record.get("phone_public") or ""),
+                "email_confidence": str(record.get("email_confidence") or ""),
+                "city": city,
+                "state": str(record.get("province_code") or ""),
+                "country_code": str(record.get("country_code") or ""),
+                "address": str(record.get("primary_address") or ""),
+                "company_type": str(record.get("main_activity_description") or ""),
+                "website_search_query": str(record.get("google_maps_query") or f"{company_name} {city} fietswinkel").strip(),
+                "contact_search_query": str(record.get("contact_search_query") or f"{company_name} {city} email telefoon website").strip(),
+                "notes": f"KVK {kvk_number}",
+            }
+        )
+
+    return pd.DataFrame(merged_rows).fillna("")

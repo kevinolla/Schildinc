@@ -15,6 +15,7 @@ from playwright.sync_api import sync_playwright
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.google_places import find_best_place_match, place_to_prospect_record
 from app.matching import apply_matching, apply_kvk_matching
 from app.models import KvkCompany, Prospect, ProspectActivityLog
 from app.tiering import apply_bike_tier
@@ -104,6 +105,9 @@ class DiscoveryResult:
 
 
 def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) -> DiscoveryResult:
+    if not (prospect.website or "").strip():
+        _maybe_enrich_website_for_prospect(session, prospect)
+
     base_url = prospect.website or ""
     if not base_url:
         result = DiscoveryResult(
@@ -233,6 +237,8 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
 def prospect_needs_contact_refresh(prospect: Prospect) -> bool:
     if not settings.auto_contact_discovery_enabled:
         return False
+    if not (prospect.website or "").strip() and (prospect.website_search_query or prospect.company_name):
+        return True
     if not (prospect.website or "").strip():
         return False
     if prospect.email_discovery_status in {"not_started", "error", "no_website"}:
@@ -270,6 +276,46 @@ def ensure_prospect_contacts(session: Session, prospect: Prospect, force: bool =
         discover_public_contacts_for_prospect(session, prospect)
         return True
     return False
+
+
+def _maybe_enrich_website_for_prospect(session: Session, prospect: Prospect) -> bool:
+    place = find_best_place_match(
+        company_name=prospect.company_name,
+        city=prospect.city,
+        country_code=prospect.country_code,
+        query=prospect.website_search_query or prospect.contact_search_query,
+    )
+    if not place:
+        return False
+
+    place_record = place_to_prospect_record(place)
+    website = str(place_record.get("website") or "").strip()
+    if website and not (prospect.website or "").strip():
+        prospect.website = website
+        prospect.website_domain = normalize_domain(website)
+    if place_record.get("phone") and not (prospect.phone or "").strip():
+        prospect.phone = str(place_record.get("phone") or "")
+    if place_record.get("google_maps_url") and not (prospect.google_maps_url or "").strip():
+        prospect.google_maps_url = str(place_record.get("google_maps_url") or "")
+    if place_record.get("address") and not (prospect.address or "").strip():
+        prospect.address = str(place_record.get("address") or "")
+    if place_record.get("city") and not (prospect.city or "").strip():
+        prospect.city = str(place_record.get("city") or "")
+    if place_record.get("state") and not (prospect.state or "").strip():
+        prospect.state = str(place_record.get("state") or "")
+    if place_record.get("country_code") and not (prospect.country_code or "").strip():
+        prospect.country_code = str(place_record.get("country_code") or "")
+
+    session.add(
+        ProspectActivityLog(
+            prospect=prospect,
+            action_type="website_lookup",
+            status="found" if website else "partial",
+            source_url=str(place_record.get("google_maps_url") or ""),
+            detail=f"Matched via place search: {place.get('displayName', {}).get('text', prospect.company_name)}",
+        )
+    )
+    return True
 
 
 def _apply_discovery_result(session: Session, prospect: Prospect, result: DiscoveryResult) -> None:
