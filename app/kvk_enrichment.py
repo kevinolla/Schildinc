@@ -22,8 +22,10 @@ from typing import Any
 from urllib.parse import quote_plus, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
+import threading
 
 from app.config import settings
 from app.db import SessionLocal
@@ -31,6 +33,9 @@ from app.google_places import search_google_places
 from app.matching import apply_kvk_matching
 from app.models import KvkCompany
 from app.utils import normalize_domain, normalize_email
+
+_scheduler_started = False
+_scheduler_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Website finder — Google Places first, DuckDuckGo fallback
@@ -270,3 +275,89 @@ def run_kvk_bulk_enrichment(company_ids: list[int], delay_seconds: float = 0.5) 
                     time.sleep(delay_seconds)
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Auto-enrichment scheduler — runs on app startup, no manual action needed
+# ---------------------------------------------------------------------------
+
+def _auto_enrich_loop() -> None:
+    """
+    Background daemon thread.
+    Every KVK_AUTO_ENRICH_INTERVAL seconds it picks up a batch of pending
+    companies and enriches them automatically (website search + contact scrape).
+    Runs until the process exits.
+    """
+    interval = settings.kvk_auto_enrich_interval
+    batch_size = settings.kvk_auto_enrich_batch
+
+    while True:
+        try:
+            time.sleep(interval)
+            db = SessionLocal()
+            try:
+                pending = db.scalars(
+                    select(KvkCompany)
+                    .where(KvkCompany.enrichment_status.in_(["pending", "no_website"]))
+                    .where(KvkCompany.already_client_flag.is_(False))
+                    .order_by(KvkCompany.id)
+                    .limit(batch_size)
+                ).all()
+
+                for company in pending:
+                    try:
+                        company.enrichment_status = "searching" if not company.website else "running"
+                        db.commit()
+                        enrich_kvk_company_full(db, company)
+                        time.sleep(2)  # polite delay between sites
+                    except Exception as exc:
+                        try:
+                            company.enrichment_status = "error"
+                            company.notes = (company.notes or "") + f" | auto: {exc}"
+                            db.commit()
+                        except Exception:
+                            db.rollback()
+            finally:
+                db.close()
+        except Exception:
+            pass  # never crash the daemon
+
+
+def start_auto_enrichment_scheduler() -> None:
+    """Start the background enrichment daemon once (idempotent)."""
+    global _scheduler_started
+    if not settings.kvk_auto_enrich_enabled:
+        return
+    with _scheduler_lock:
+        if _scheduler_started:
+            return
+        _scheduler_started = True
+    t = Thread(target=_auto_enrich_loop, daemon=True, name="kvk-auto-enrich")
+    t.start()
+
+
+def get_enrichment_progress(db) -> dict:
+    """Return live counts for dashboard progress display."""
+    from sqlalchemy import func, select as sa_select
+    total = db.scalar(sa_select(func.count(KvkCompany.id))) or 0
+    pending = db.scalar(sa_select(func.count(KvkCompany.id)).where(
+        KvkCompany.enrichment_status.in_(["pending", "no_website"]))) or 0
+    in_progress = db.scalar(sa_select(func.count(KvkCompany.id)).where(
+        KvkCompany.enrichment_status.in_(["searching", "running"]))) or 0
+    done = db.scalar(sa_select(func.count(KvkCompany.id)).where(
+        KvkCompany.enrichment_status.in_(["discovered", "partial"]))) or 0
+    with_email = db.scalar(sa_select(func.count(KvkCompany.id)).where(
+        KvkCompany.email_public != "")) or 0
+    errors = db.scalar(sa_select(func.count(KvkCompany.id)).where(
+        KvkCompany.enrichment_status == "error")) or 0
+    pct = round(done / total * 100) if total else 0
+    return {
+        "total": total,
+        "pending": pending,
+        "in_progress": in_progress,
+        "done": done,
+        "with_email": with_email,
+        "errors": errors,
+        "pct": pct,
+        "active": _scheduler_started,
+    }

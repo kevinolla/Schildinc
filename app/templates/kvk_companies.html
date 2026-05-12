@@ -4,132 +4,116 @@
 <div class="page-header">
   <div>
     <h2>KVK Bedrijven</h2>
-    <p class="page-subtitle">{{ total }} bedrijven gevonden</p>
+    <p class="page-subtitle">{{ total }} bedrijven · verrijking loopt automatisch op de achtergrond</p>
   </div>
   <div class="page-actions">
-    <button class="btn btn-secondary" onclick="document.getElementById('import-panel').classList.toggle('hidden')">
-      + Importeer CSV
-    </button>
-    <form method="post" action="/kvk/run-matching" style="display:inline">
-      <button class="btn btn-secondary" onclick="return confirm('Klantmatching uitvoeren voor alle onbekende bedrijven?')">
-        Matching uitvoeren
-      </button>
-    </form>
-    <form method="post" action="/kvk/bulk-enrich" style="display:inline">
-      <input type="hidden" name="company_ids" value="">
-      <button class="btn btn-primary">
-        Verrijken (tot 50 pending)
-      </button>
-    </form>
+    <button class="btn btn-ghost btn-sm" onclick="document.getElementById('import-panel').classList.toggle('hidden')">+ Importeer</button>
+    <a href="/kvk/export.csv{% if tier or has_email or match %}?{% if tier %}tier={{ tier }}&{% endif %}{% if has_email %}has_email={{ has_email }}&{% endif %}{% if match %}match={{ match }}{% endif %}{% endif %}" class="btn btn-secondary btn-sm">⬇ CSV export</a>
+    <button class="btn btn-primary btn-sm" id="klaviyo-btn" onclick="pushKlaviyo()">☁ Naar Klaviyo</button>
   </div>
 </div>
 
 {% if request.query_params.get('flash') %}
-<div class="flash flash-success">{{ request.query_params.get('flash') }}</div>
+<div class="flash flash-success">{{ request.query_params.get('flash') | replace('%2C', ',') | replace('+', ' ') }}</div>
 {% endif %}
 
+<!-- Enrichment progress bar -->
+<div class="progress-card" id="progress-card">
+  <div class="progress-header">
+    <span class="progress-title">📧 Email verrijking</span>
+    <span class="progress-meta" id="prog-label">Laden…</span>
+  </div>
+  <div class="progress-track">
+    <div class="progress-fill" id="prog-bar" style="width:0%"></div>
+  </div>
+  <div class="progress-chips">
+    <span class="prog-chip chip-done" id="prog-done">— verrijkt</span>
+    <span class="prog-chip chip-email" id="prog-email">— met e-mail</span>
+    <span class="prog-chip chip-pending" id="prog-pending">— wachtend</span>
+    <span class="prog-chip chip-active" id="prog-active" style="display:none">⚡ actief</span>
+    <span class="prog-chip chip-error" id="prog-error" style="display:none">— fouten</span>
+  </div>
+</div>
+
 <!-- Import panel -->
-<div id="import-panel" class="card hidden" style="margin-bottom:1.5rem">
-  <h3 style="margin-top:0">Importeer KVK bestanden</h3>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+<div id="import-panel" class="card hidden" style="margin-bottom:1rem">
+  <h3 style="margin-top:0;font-size:1rem">Importeer KVK bestanden</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem">
     <div>
-      <p class="label">Bedrijven (normalized_kvk_bike_companies.csv)</p>
-      <form method="post" action="/kvk/import-companies" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".csv" required style="margin-bottom:.5rem;display:block">
-        <button class="btn btn-primary" type="submit">Importeer bedrijven</button>
+      <p class="label">Bedrijven CSV</p>
+      <form method="post" action="/kvk/import-companies" enctype="multipart/form-data" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <input type="file" name="file" accept=".csv" required style="font-size:.8rem">
+        <button class="btn btn-primary btn-sm">Importeer</button>
       </form>
     </div>
     <div>
-      <p class="label">Vestigingen (normalized_kvk_bike_establishments.csv)</p>
-      <form method="post" action="/kvk/import-establishments" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".csv" required style="margin-bottom:.5rem;display:block">
-        <button class="btn btn-secondary" type="submit">Importeer vestigingen</button>
+      <p class="label">Vestigingen CSV</p>
+      <form method="post" action="/kvk/import-establishments" enctype="multipart/form-data" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <input type="file" name="file" accept=".csv" required style="font-size:.8rem">
+        <button class="btn btn-secondary btn-sm">Importeer</button>
       </form>
     </div>
   </div>
   {% if recent_imports %}
-  <div style="margin-top:1rem;border-top:1px solid #e5e7eb;padding-top:1rem">
-    <p class="label">Recente imports</p>
-    <table class="data-table" style="font-size:.8rem">
-      <thead><tr><th>Bestand</th><th>Type</th><th>Rijen</th><th>Succesvol</th><th>Mislukt</th><th>Status</th><th>Datum</th></tr></thead>
-      <tbody>
-        {% for log in recent_imports %}
-        <tr>
-          <td>{{ log.file_name }}</td>
-          <td>{{ log.record_type }}</td>
-          <td>{{ log.row_count }}</td>
-          <td class="text-green">{{ log.successful_upserts }}</td>
-          <td class="{% if log.failed_rows > 0 %}text-red{% endif %}">{{ log.failed_rows }}</td>
-          <td><span class="badge badge-{{ 'green' if log.status == 'success' else 'yellow' }}">{{ log.status }}</span></td>
-          <td>{{ log.started_at.strftime('%d-%m %H:%M') if log.started_at else '-' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div style="margin-top:.75rem;font-size:.8rem;color:#6b7280">
+    Laatste import: <strong>{{ recent_imports[0].file_name }}</strong> —
+    {{ recent_imports[0].successful_upserts }} rijen · {{ recent_imports[0].started_at.strftime('%d-%m %H:%M') }}
   </div>
   {% endif %}
 </div>
 
 <!-- Filters -->
-<div class="card filter-bar">
+<div class="filter-bar">
   <form method="get" action="/kvk" class="filter-form">
-    <input type="text" name="search" placeholder="Zoek op naam, stad of KVK…" value="{{ search }}" class="search-input">
-
+    <input type="text" name="search" placeholder="Naam, stad, KVK…" value="{{ search }}" class="search-input">
     <select name="tier">
       <option value="">Alle tiers</option>
       {% for t in tier_options %}
       <option value="{{ t }}" {% if tier == t %}selected{% endif %}>{{ t }}</option>
       {% endfor %}
     </select>
-
     <select name="enrichment">
       {% for e in enrichment_options %}
       <option value="{{ e }}" {% if enrichment == e %}selected{% endif %}>
-        {% if e == 'all' %}Alle statussen{% else %}{{ e | capitalize }}{% endif %}
+        {% if e == 'all' %}Alle statussen{% else %}{{ e }}{% endif %}
       </option>
       {% endfor %}
     </select>
-
     <select name="match">
-      {% for m in match_options %}
-      <option value="{{ m }}" {% if match == m %}selected{% endif %}>
-        {% if m == 'all' %}Alle matches{% elif m == 'matched' %}Klant gevonden{% elif m == 'no_match' %}Geen klant{% else %}Onbekend{% endif %}
-      </option>
-      {% endfor %}
+      <option value="all" {% if match == 'all' %}selected{% endif %}>Alle matches</option>
+      <option value="no_match" {% if match == 'no_match' %}selected{% endif %}>Nieuwe prospects</option>
+      <option value="matched" {% if match == 'matched' %}selected{% endif %}>Bestaande klanten</option>
+      <option value="unknown" {% if match == 'unknown' %}selected{% endif %}>Onbekend</option>
     </select>
-
     <select name="has_email">
-      <option value="" {% if has_email == '' %}selected{% endif %}>Alle (email)</option>
+      <option value="" {% if has_email == '' %}selected{% endif %}>Alle</option>
       <option value="1" {% if has_email == '1' %}selected{% endif %}>✓ Heeft e-mail</option>
       <option value="0" {% if has_email == '0' %}selected{% endif %}>✗ Geen e-mail</option>
     </select>
+    <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
+    <a href="/kvk" class="btn btn-ghost btn-sm">Wis</a>
+  </form>
+</div>
 
-    <select name="has_website">
-      <option value="" {% if has_website == '' %}selected{% endif %}>Alle (website)</option>
-      <option value="1" {% if has_website == '1' %}selected{% endif %}>✓ Heeft website</option>
-      <option value="0" {% if has_website == '0' %}selected{% endif %}>✗ Geen website</option>
-    </select>
-
-    <button type="submit" class="btn btn-secondary">Filter</button>
-    <a href="/kvk" class="btn btn-ghost">Wis filters</a>
+<!-- Bulk bar -->
+<div class="bulk-bar" id="bulk-bar" style="display:none">
+  <span><strong id="bulk-count">0</strong> geselecteerd</span>
+  <form method="post" action="/kvk/bulk-enrich" style="display:inline" id="bulk-enrich-form">
+    <input type="hidden" name="company_ids" id="bulk-ids">
+    <button class="btn btn-secondary btn-sm">📧 Verrijken</button>
+  </form>
+  <form method="post" action="/kvk/push-klaviyo" style="display:inline" id="bulk-klaviyo-form">
+    <input type="hidden" name="company_ids" id="bulk-klaviyo-ids">
+    <button class="btn btn-primary btn-sm">☁ Klaviyo</button>
   </form>
 </div>
 
 {% if companies %}
-<!-- Bulk actions bar -->
-<div class="bulk-bar" id="bulk-bar" style="display:none">
-  <span id="bulk-count">0</span> geselecteerd
-  <form method="post" action="/kvk/bulk-enrich" style="display:inline" id="bulk-enrich-form">
-    <input type="hidden" name="company_ids" id="bulk-ids">
-    <button class="btn btn-primary btn-sm">Verrijken</button>
-  </form>
-</div>
-
 <div class="table-wrap">
   <table class="data-table kvk-table">
     <thead>
       <tr>
-        <th><input type="checkbox" id="select-all" title="Selecteer alles"></th>
+        <th><input type="checkbox" id="select-all" title="Alles selecteren"></th>
         <th>Bedrijf</th>
         <th>Stad</th>
         <th>Website</th>
@@ -143,84 +127,93 @@
     </thead>
     <tbody>
       {% for c in companies %}
-      <tr class="{% if c.already_client_flag %}row-existing-customer{% endif %}">
+      <tr class="{% if c.already_client_flag %}row-existing-customer{% endif %}" data-id="{{ c.id }}">
         <td><input type="checkbox" class="row-check" value="{{ c.id }}"></td>
+
         <td>
           <a href="/kvk/{{ c.id }}" class="company-link">{{ c.company_name }}</a>
-          {% if c.establishments_count > 1 %}
-          <span class="badge badge-gray" title="{{ c.establishments_count }} vestigingen">{{ c.establishments_count }}×</span>
+          {% if c.establishments_count and c.establishments_count > 1 %}
+          <span class="badge badge-gray" style="font-size:.65rem" title="{{ c.establishments_count }} vestigingen">{{ c.establishments_count }}×</span>
           {% endif %}
         </td>
-        <td>{{ c.primary_city or '-' }}</td>
+
+        <td class="text-muted" style="font-size:.85rem">{{ c.primary_city or '—' }}</td>
+
         <td>
           {% if c.website %}
-          <a href="{{ c.website }}" target="_blank" class="ext-link" title="{{ c.website }}">
-            {{ c.website_domain or c.website[:30] }}
-          </a>
+          <a href="{{ c.website }}" target="_blank" class="ext-link" style="font-size:.82rem" title="{{ c.website }}">{{ c.website_domain or c.website[:28] }}{% if not c.website_domain and c.website|length > 28 %}…{% endif %}</a>
           {% else %}
-          <span class="text-muted">—</span>
+          <span class="text-muted" style="font-size:.82rem">—</span>
           {% endif %}
         </td>
-        <td>
+
+        <!-- Inline email cell with edit-in-place -->
+        <td class="email-cell" id="email-cell-{{ c.id }}">
           {% if c.email_public %}
-          <span class="has-contact" title="{{ c.email_public }}">
-            {{ c.email_public[:30] }}{% if c.email_public|length > 30 %}…{% endif %}
-          </span>
-          {% if c.email_confidence %}
-          <span class="conf-dot conf-{{ c.email_confidence }}" title="Betrouwbaarheid: {{ c.email_confidence }}">●</span>
-          {% endif %}
+          <div class="email-display">
+            <span class="has-contact" title="{{ c.email_public }}" style="font-size:.82rem">
+              {{ c.email_public[:32] }}{% if c.email_public|length > 32 %}…{% endif %}
+            </span>
+            {% if c.email_confidence == 'manual' %}
+            <span class="conf-dot" style="color:#7c3aed" title="Handmatig">●</span>
+            {% elif c.email_confidence == 'high' %}
+            <span class="conf-dot conf-high" title="Hoge betrouwbaarheid">●</span>
+            {% elif c.email_confidence == 'medium' %}
+            <span class="conf-dot conf-medium" title="Gemiddelde betrouwbaarheid">●</span>
+            {% else %}
+            <span class="conf-dot conf-low" title="Lage betrouwbaarheid">●</span>
+            {% endif %}
+            <button class="edit-email-btn" onclick="showEmailEdit({{ c.id }}, '{{ c.email_public }}')" title="E-mail aanpassen">✎</button>
+          </div>
           {% else %}
-          <span class="text-muted">—</span>
+          <div class="email-display">
+            <span class="text-muted" style="font-size:.82rem">—</span>
+            <button class="edit-email-btn add-email-btn" onclick="showEmailEdit({{ c.id }}, '')" title="E-mail toevoegen">+ email</button>
+          </div>
           {% endif %}
+          <div class="email-edit-form hidden" id="email-form-{{ c.id }}">
+            <input type="email" class="email-input" id="email-input-{{ c.id }}" value="{{ c.email_public }}" placeholder="email@bedrijf.nl">
+            <div style="display:flex;gap:.25rem;margin-top:.2rem">
+              <button class="btn btn-primary btn-xs" onclick="saveEmail({{ c.id }})">✓</button>
+              <button class="btn btn-ghost btn-xs" onclick="hideEmailEdit({{ c.id }})">✕</button>
+            </div>
+          </div>
         </td>
-        <td>
-          {% if c.phone_public %}
-          <span class="has-contact">{{ c.phone_public }}</span>
-          {% else %}
-          <span class="text-muted">—</span>
-          {% endif %}
-        </td>
+
+        <td style="font-size:.82rem;color:#374151">{{ c.phone_public or '—' }}</td>
+
         <td>
           {% if c.already_client_flag %}
-          <span class="badge badge-red" title="{% if c.matched_customer %}{{ c.matched_customer.canonical_company_name }}{% endif %}">Klant</span>
+          <span class="badge badge-red" title="Bestaande klant">Klant</span>
           {% elif c.client_match_status == 'no_match' %}
           <span class="badge badge-green">Nieuw</span>
           {% else %}
           <span class="badge badge-gray">?</span>
           {% endif %}
         </td>
+
         <td>
-          {% set tier_class = {
-            'Good Tier': 'green',
-            'Hard to Reach': 'orange',
-            'Mid Tier': 'blue',
-            'Low Tier': 'gray',
-            'Brand Store': 'purple',
-            'Low Fit': 'gray',
-            'Unclassified': 'gray'
-          }[c.bike_shop_tier] | default('gray') %}
-          <span class="badge badge-{{ tier_class }}">{{ c.bike_shop_tier }}</span>
+          {% set tc = {'Good Tier':'green','Hard to Reach':'orange','Mid Tier':'blue','Low Tier':'gray','Brand Store':'purple','Low Fit':'gray','Unclassified':'gray'} %}
+          <span class="badge badge-{{ tc.get(c.bike_shop_tier, 'gray') }}" style="font-size:.72rem">{{ c.bike_shop_tier }}</span>
         </td>
+
         <td>
           {% if c.enrichment_status == 'discovered' %}
-          <span class="badge badge-green">Verrijkt</span>
-          {% elif c.enrichment_status in ['running', 'searching'] %}
-          <span class="badge badge-yellow">{% if c.enrichment_status == 'searching' %}Zoeken…{% else %}Bezig…{% endif %}</span>
-          {% elif c.enrichment_status == 'error' %}
-          <span class="badge badge-red">Fout</span>
-          {% elif c.enrichment_status == 'no_website' %}
-          <span class="badge badge-gray">Geen website</span>
-          {% elif c.enrichment_status == 'no_contacts' %}
-          <span class="badge badge-gray">Geen contact</span>
+          <span class="status-dot status-green" title="Verrijkt">●</span>
           {% elif c.enrichment_status == 'partial' %}
-          <span class="badge badge-blue">Gedeeltelijk</span>
+          <span class="status-dot status-blue" title="Gedeeltelijk">●</span>
+          {% elif c.enrichment_status in ['running', 'searching'] %}
+          <span class="status-dot status-yellow status-pulse" title="Bezig…">●</span>
+          {% elif c.enrichment_status == 'error' %}
+          <span class="status-dot status-red" title="Fout">●</span>
+          {% elif c.enrichment_status == 'no_contacts' %}
+          <span class="status-dot status-gray" title="Geen contact gevonden">●</span>
           {% else %}
-          <span class="badge badge-gray">{{ c.enrichment_status }}</span>
+          <span class="status-dot status-gray" title="Wachtend">○</span>
           {% endif %}
         </td>
-        <td>
-          <a href="/kvk/{{ c.id }}" class="btn btn-ghost btn-xs">→</a>
-        </td>
+
+        <td><a href="/kvk/{{ c.id }}" class="btn btn-ghost btn-xs">→</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -231,48 +224,120 @@
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}
-  <a href="?{{ request.query_params | replace('page=' ~ page, 'page=' ~ (page - 1)) }}&page={{ page - 1 }}" class="btn btn-ghost btn-sm">← Vorige</a>
+  <a href="?{% for k,v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page - 1 }}" class="btn btn-ghost btn-sm">← Vorige</a>
   {% endif %}
-  <span>Pagina {{ page }} van {{ total_pages }}</span>
+  <span style="color:#6b7280;font-size:.875rem">{{ page }} / {{ total_pages }}</span>
   {% if page < total_pages %}
-  <a href="?{% for k, v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page + 1 }}" class="btn btn-ghost btn-sm">Volgende →</a>
+  <a href="?{% for k,v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page + 1 }}" class="btn btn-ghost btn-sm">Volgende →</a>
   {% endif %}
 </div>
 {% endif %}
 
 {% else %}
 <div class="empty-state">
-  <p>Geen bedrijven gevonden.</p>
-  {% if not search and enrichment == 'all' and not tier %}
-  <p>Importeer een KVK CSV om te beginnen.</p>
-  <button class="btn btn-primary" onclick="document.getElementById('import-panel').classList.remove('hidden')">+ Importeer CSV</button>
-  {% endif %}
+  <p style="font-size:1.1rem">📂 Nog geen KVK bedrijven geïmporteerd.</p>
+  <p class="text-muted">Upload de KVK CSV om te beginnen. Verrijking start daarna automatisch.</p>
+  <button class="btn btn-primary" onclick="document.getElementById('import-panel').classList.remove('hidden')">+ Importeer KVK CSV</button>
 </div>
 {% endif %}
 
-<script>
-  // Bulk select logic
-  const selectAll = document.getElementById('select-all');
-  const bulkBar = document.getElementById('bulk-bar');
-  const bulkCount = document.getElementById('bulk-count');
-  const bulkIds = document.getElementById('bulk-ids');
+<!-- Klaviyo push form (hidden) -->
+<form id="klaviyo-all-form" method="post" action="/kvk/push-klaviyo" style="display:none">
+  <input type="hidden" name="tier" value="{{ tier }}">
+</form>
 
-  function updateBulkBar() {
-    const checked = document.querySelectorAll('.row-check:checked');
-    if (checked.length > 0) {
-      bulkBar.style.display = 'flex';
-      bulkCount.textContent = checked.length;
-      bulkIds.value = Array.from(checked).map(c => c.value).join(',');
-    } else {
-      bulkBar.style.display = 'none';
+<script>
+// ── Bulk select ──
+const selectAll = document.getElementById('select-all');
+const bulkBar   = document.getElementById('bulk-bar');
+
+function updateBulk() {
+  const checked = [...document.querySelectorAll('.row-check:checked')];
+  if (checked.length) {
+    bulkBar.style.display = 'flex';
+    document.getElementById('bulk-count').textContent = checked.length;
+    const ids = checked.map(c => c.value).join(',');
+    document.getElementById('bulk-ids').value = ids;
+    document.getElementById('bulk-klaviyo-ids').value = ids;
+  } else {
+    bulkBar.style.display = 'none';
+  }
+}
+selectAll && selectAll.addEventListener('change', () => {
+  document.querySelectorAll('.row-check').forEach(c => c.checked = selectAll.checked);
+  updateBulk();
+});
+document.querySelectorAll('.row-check').forEach(c => c.addEventListener('change', updateBulk));
+
+// ── Klaviyo push (all with email) ──
+function pushKlaviyo() {
+  const checked = [...document.querySelectorAll('.row-check:checked')];
+  if (checked.length) {
+    document.getElementById('bulk-klaviyo-form').submit();
+  } else {
+    if (confirm('Alle bedrijven met e-mail naar Klaviyo sturen (huidige filters)?')) {
+      document.getElementById('klaviyo-all-form').submit();
     }
   }
+}
 
-  selectAll && selectAll.addEventListener('change', () => {
-    document.querySelectorAll('.row-check').forEach(c => c.checked = selectAll.checked);
-    updateBulkBar();
+// ── Inline email edit ──
+function showEmailEdit(id, current) {
+  document.getElementById('email-cell-' + id).querySelector('.email-display').classList.add('hidden');
+  document.getElementById('email-form-' + id).classList.remove('hidden');
+  document.getElementById('email-input-' + id).value = current;
+  document.getElementById('email-input-' + id).focus();
+}
+function hideEmailEdit(id) {
+  document.getElementById('email-form-' + id).classList.add('hidden');
+  document.getElementById('email-cell-' + id).querySelector('.email-display').classList.remove('hidden');
+}
+async function saveEmail(id) {
+  const input = document.getElementById('email-input-' + id);
+  const email = input.value.trim();
+  if (!email || !email.includes('@')) { input.style.borderColor='#dc2626'; return; }
+
+  const resp = await fetch('/kvk/' + id + '/set-email-inline', {
+    method: 'POST',
+    body: new URLSearchParams({ email }),
   });
+  const data = await resp.json();
+  if (data.ok) {
+    // update display in-place
+    const cell = document.getElementById('email-cell-' + id);
+    cell.querySelector('.email-display').innerHTML =
+      `<span class="has-contact" style="font-size:.82rem">${data.email}</span>
+       <span class="conf-dot" style="color:#7c3aed" title="Handmatig">●</span>
+       <button class="edit-email-btn" onclick="showEmailEdit(${id},'${data.email}')" title="Aanpassen">✎</button>`;
+    hideEmailEdit(id);
+  } else {
+    input.style.borderColor = '#dc2626';
+  }
+}
 
-  document.querySelectorAll('.row-check').forEach(c => c.addEventListener('change', updateBulkBar));
+// ── Live enrichment progress ──
+async function refreshProgress() {
+  try {
+    const r = await fetch('/api/kvk/progress');
+    const d = await r.json();
+    document.getElementById('prog-label').textContent =
+      d.pct + '% verrijkt (' + d.done + '/' + d.total + ')';
+    document.getElementById('prog-bar').style.width = d.pct + '%';
+    document.getElementById('prog-done').textContent  = d.done + ' verrijkt';
+    document.getElementById('prog-email').textContent = d.with_email + ' met e-mail';
+    document.getElementById('prog-pending').textContent = d.pending + ' wachtend';
+
+    const activeEl = document.getElementById('prog-active');
+    activeEl.style.display = (d.in_progress > 0) ? '' : 'none';
+
+    const errEl = document.getElementById('prog-error');
+    if (d.errors > 0) { errEl.style.display = ''; errEl.textContent = d.errors + ' fouten'; }
+    else errEl.style.display = 'none';
+
+    // auto-refresh while work is in progress
+    setTimeout(refreshProgress, d.in_progress > 0 ? 4000 : 30000);
+  } catch(e) { setTimeout(refreshProgress, 30000); }
+}
+refreshProgress();
 </script>
 {% endblock %}

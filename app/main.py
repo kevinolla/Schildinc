@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import io
 import secrets
+from contextlib import asynccontextmanager
 from datetime import date
 from io import StringIO
 from threading import Thread
@@ -10,7 +12,7 @@ from urllib.parse import quote_plus
 import pandas as pd
 import stripe
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20,7 +22,12 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.discovery import discover_contacts_for_kvk_company, discover_public_contacts_for_prospect, ensure_prospect_contacts
-from app.kvk_enrichment import enrich_kvk_company_full, find_website_for_kvk_company, run_kvk_bulk_enrichment, run_kvk_enrichment_job
+from app.klaviyo_sync import push_companies_to_klaviyo, test_klaviyo_connection
+from app.kvk_enrichment import (
+    enrich_kvk_company_full, find_website_for_kvk_company,
+    get_enrichment_progress, run_kvk_bulk_enrichment,
+    run_kvk_enrichment_job, start_auto_enrichment_scheduler,
+)
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
 from app.google_places import place_to_prospect_record, search_google_places
 from app.importers import (
@@ -55,7 +62,15 @@ from app.tiering import apply_bike_tier, score_kvk_company_tier
 from app.stripe_sync import sync_stripe_event
 from app.utils import build_unsubscribe_token, normalize_domain, normalize_email
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start auto-enrichment background scheduler on startup
+    start_auto_enrichment_scheduler()
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic(auto_error=False)
@@ -1174,8 +1189,10 @@ async def kvk_import_companies(
     df = read_csv_upload(contents)
     summary = upsert_kvk_companies_from_dataframe(db, df, file_name=file.filename or "upload")
     db.commit()
+    # Run matching immediately after import
+    Thread(target=_run_post_import_matching, daemon=True).start()
     return RedirectResponse(
-        f"/kvk?flash=Geïmporteerd%3A+{summary.inserted}+nieuw%2C+{summary.updated}+bijgewerkt%2C+{summary.failed}+mislukt",
+        f"/kvk?flash=Geïmporteerd%3A+{summary.inserted}+nieuw%2C+{summary.updated}+bijgewerkt.+Verrijking+start+automatisch.",
         status_code=303,
     )
 
@@ -1369,3 +1386,159 @@ def kvk_company_detail(
         "company": company,
         "flash": flash,
     })
+
+
+# -- Post-import background matching --
+def _run_post_import_matching() -> None:
+    db = SessionLocal()
+    try:
+        companies = db.scalars(
+            select(KvkCompany).where(KvkCompany.client_match_status == "unknown")
+        ).all()
+        for company in companies:
+            apply_kvk_matching(db, company)
+        db.commit()
+    finally:
+        db.close()
+
+
+# -- Manual email override --
+@app.post("/kvk/{company_id}/set-email")
+async def kvk_set_email(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    form = await request.form()
+    email = normalize_email(str(form.get("email", "")))
+    if not email or "@" not in email:
+        return RedirectResponse(f"/kvk/{company_id}?flash=Ongeldig+e-mailadres", status_code=303)
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        raise HTTPException(status_code=404)
+    company.email_public = email
+    company.email_source_url = "manual_override"
+    company.email_confidence = "manual"
+    if company.enrichment_status not in ("discovered",):
+        company.enrichment_status = "partial"
+    apply_kvk_matching(db, company)
+    db.commit()
+    return RedirectResponse(f"/kvk/{company_id}?flash=E-mail+opgeslagen%3A+{email}", status_code=303)
+
+
+# -- Inline email update from list (AJAX) --
+@app.post("/kvk/{company_id}/set-email-inline")
+async def kvk_set_email_inline(
+    company_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> JSONResponse:
+    form = await request.form()
+    email = normalize_email(str(form.get("email", "")))
+    if not email or "@" not in email:
+        return JSONResponse({"ok": False, "error": "Ongeldig e-mailadres"}, status_code=400)
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        return JSONResponse({"ok": False, "error": "Niet gevonden"}, status_code=404)
+    company.email_public = email
+    company.email_source_url = "manual_override"
+    company.email_confidence = "manual"
+    if company.enrichment_status not in ("discovered",):
+        company.enrichment_status = "partial"
+    apply_kvk_matching(db, company)
+    db.commit()
+    return JSONResponse({"ok": True, "email": email})
+
+
+# -- Enrichment progress API (for dashboard live counter) --
+@app.get("/api/kvk/progress")
+def kvk_progress(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    return JSONResponse(get_enrichment_progress(db))
+
+
+# -- CSV export --
+@app.get("/kvk/export.csv")
+def kvk_export_csv(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    tier: str = "",
+    has_email: str = "",
+    match: str = "",
+) -> StreamingResponse:
+    q = select(KvkCompany).order_by(KvkCompany.company_name)
+    if tier:
+        q = q.where(KvkCompany.bike_shop_tier == tier)
+    if has_email == "1":
+        q = q.where(KvkCompany.email_public != "")
+    if match:
+        q = q.where(KvkCompany.client_match_status == match)
+    companies = db.scalars(q).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "kvk_number", "company_name", "city", "postal_code", "address",
+        "website", "email", "phone",
+        "bike_shop_tier", "outreach_priority",
+        "already_client", "client_match_status",
+        "enrichment_status", "email_confidence", "email_source",
+    ])
+    for c in companies:
+        writer.writerow([
+            c.kvk_number, c.company_name, c.primary_city, c.primary_postal_code,
+            c.primary_address, c.website, c.email_public, c.phone_public,
+            c.bike_shop_tier, c.outreach_priority,
+            "ja" if c.already_client_flag else "nee",
+            c.client_match_status, c.enrichment_status,
+            c.email_confidence, c.email_source_url,
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=kvk_leads.csv"},
+    )
+
+
+# -- Klaviyo push --
+@app.post("/kvk/push-klaviyo")
+async def kvk_push_klaviyo(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    form = await request.form()
+    ids_raw = str(form.get("company_ids", ""))
+    tier_filter = str(form.get("tier", ""))
+
+    q = select(KvkCompany).where(
+        KvkCompany.email_public != "",
+        KvkCompany.already_client_flag.is_(False),
+    )
+    if ids_raw:
+        ids = [int(i) for i in ids_raw.split(",") if i.strip().isdigit()]
+        q = q.where(KvkCompany.id.in_(ids))
+    elif tier_filter:
+        q = q.where(KvkCompany.bike_shop_tier == tier_filter)
+
+    companies = db.scalars(q).all()
+    if not companies:
+        return RedirectResponse("/kvk?flash=Geen+bedrijven+met+e-mail+gevonden", status_code=303)
+
+    try:
+        success, failed, errors = push_companies_to_klaviyo(companies)
+        msg = f"{success}+profielen+naar+Klaviyo+gestuurd"
+        if failed:
+            msg += f"%2C+{failed}+mislukt"
+    except Exception as exc:
+        msg = f"Klaviyo+fout%3A+{str(exc)[:80]}"
+
+    return RedirectResponse(f"/kvk?flash={msg}", status_code=303)
+
+
+# -- Klaviyo connection test --
+@app.get("/api/klaviyo/test")
+def klaviyo_test(_: str = Depends(require_admin)) -> JSONResponse:
+    return JSONResponse(test_klaviyo_connection())

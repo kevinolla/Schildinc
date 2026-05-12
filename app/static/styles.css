@@ -1254,3 +1254,123 @@ p.label { font-size: .8rem; font-weight: 600; color: #6b7280; margin: 0 0 .4rem;
   color: #374151;
 }
 .safety-row span { display: flex; align-items: center; gap: .3rem; }
+
+/* ── Enrichment Progress Card ────────────────────────────────────────────── */
+.progress-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: .55rem;
+}
+.progress-title {
+  font-weight: 600;
+  font-size: .95rem;
+  color: #111827;
+}
+.progress-meta {
+  font-size: .8rem;
+  color: #6b7280;
+}
+.progress-track {
+  width: 100%;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: .55rem;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb 0%, #10b981 100%);
+  border-radius: 99px;
+  transition: width .6s ease;
+}
+.progress-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+}
+.prog-chip {
+  font-size: .75rem;
+  font-weight: 500;
+  padding: .15rem .55rem;
+  border-radius: 99px;
+}
+.chip-done    { background: #d1fae5; color: #065f46; }
+.chip-email   { background: #dbeafe; color: #1e40af; }
+.chip-pending { background: #f3f4f6; color: #4b5563; }
+.chip-active  { background: #fef9c3; color: #854d0e; }
+.chip-error   { background: #fee2e2; color: #991b1b; }
+
+/* ── Status Dots ──────────────────────────────────────────────────────────── */
+.status-dot {
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-block;
+}
+.status-green  { color: #059669; }
+.status-blue   { color: #2563eb; }
+.status-yellow { color: #d97706; }
+.status-red    { color: #dc2626; }
+.status-gray   { color: #9ca3af; }
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .3; }
+}
+.status-pulse { animation: status-pulse 1.4s ease-in-out infinite; }
+
+/* ── Inline Email Editing ─────────────────────────────────────────────────── */
+.email-cell {
+  min-width: 180px;
+}
+.email-display {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  flex-wrap: nowrap;
+}
+.email-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.email-input {
+  padding: .3rem .5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  font-size: .8rem;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color .15s;
+}
+.email-input:focus { border-color: #2563eb; }
+.edit-email-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: .78rem;
+  padding: 0 .15rem;
+  line-height: 1;
+  transition: color .15s;
+  flex-shrink: 0;
+}
+.edit-email-btn:hover { color: #2563eb; }
+.add-email-btn {
+  font-size: .72rem;
+  color: #6b7280;
+  background: #f3f4f6;
+  border: 1px dashed #d1d5db;
+  border-radius: 4px;
+  padding: .1rem .4rem;
+}
+.add-email-btn:hover { background: #dbeafe; color: #1e40af; border-color: #93c5fd; }
