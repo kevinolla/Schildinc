@@ -57,7 +57,6 @@ class Settings:
     official_instagram_handle: str = os.getenv("OFFICIAL_INSTAGRAM_HANDLE", "@schildinc")
     official_linkedin_url: str = os.getenv("OFFICIAL_LINKEDIN_URL", "https://www.linkedin.com/company/schild-inc/")
     unsubscribe_secret: str = os.getenv("UNSUBSCRIBE_SECRET", "change-me-too")
-    klaviyo_private_api_key: str = os.getenv("KLAVIYO_PRIVATE_API_KEY", "")
     klaviyo_list_id: str = os.getenv("KLAVIYO_LIST_ID", "XHgkXM")
     kvk_auto_enrich_enabled: bool = _as_bool(os.getenv("KVK_AUTO_ENRICH_ENABLED"), True)
     kvk_auto_enrich_batch: int = int(os.getenv("KVK_AUTO_ENRICH_BATCH", "3"))
