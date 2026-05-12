@@ -1,7 +1,7 @@
 """Add KVK import fields to prospects
 
-Revision ID: 0005_kvk_prospect_fields
-Revises: 0004_discovery_lists
+Revision ID: 0006_kvk_prospect_fields
+Revises: 0005_add_kvk_tables
 Create Date: 2026-05-05 00:00:00
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0005_kvk_prospect_fields"
-down_revision = "0004_discovery_lists"
+revision = "0006_kvk_prospect_fields"
+down_revision = "0005_add_kvk_tables"
 branch_labels = None
 depends_on = None
 
