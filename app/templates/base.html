@@ -4,24 +4,28 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ app_name }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <header class="topbar">
+    <aside class="topbar" aria-label="Primary navigation">
       <div class="topbar-copy">
         <h1>{{ app_name }}</h1>
-        <p>Match bestaande klanten, vind publieke contactgegevens, en werk veilig vanuit een eenvoudige outreach flow.</p>
+        <p>B2B Prospect Engine</p>
       </div>
+      {% set path = request.url.path if request else '/' %}
       <nav class="topnav">
-        <a href="/">Dashboard</a>
-        <a href="/customers">Customers</a>
-        <a href="/kvk">KVK Bedrijven</a>
-        <a href="/prospects">Prospects</a>
-        <a href="/queue">Queue</a>
-        <a href="/suppression">Suppression</a>
-        <a href="/logs">Logs</a>
+        <a href="/"            {% if path == '/' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
+        <a href="/customers"   {% if path.startswith('/customers') %}class="active" aria-current="page"{% endif %}>Customers</a>
+        <a href="/kvk"         {% if path.startswith('/kvk') %}class="active" aria-current="page"{% endif %}>KVK Bedrijven</a>
+        <a href="/prospects"   {% if path.startswith('/prospects') %}class="active" aria-current="page"{% endif %}>Prospects</a>
+        <a href="/queue"       {% if path.startswith('/queue') %}class="active" aria-current="page"{% endif %}>Queue</a>
+        <a href="/suppression" {% if path.startswith('/suppression') %}class="active" aria-current="page"{% endif %}>Suppression</a>
+        <a href="/logs"        {% if path.startswith('/logs') %}class="active" aria-current="page"{% endif %}>Logs</a>
       </nav>
-    </header>
+    </aside>
     <main class="page-shell">
       {% block content %}{% endblock %}
     </main>
