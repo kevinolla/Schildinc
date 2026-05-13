@@ -524,18 +524,14 @@ def _auto_enrich_loop() -> None:
     if reset_count:
         print(f"[kvk-auto-enrich] Reset {reset_count} stuck records to 'pending'")
 
-    batches_since_cleanup = 0
-
     while True:
         try:
-            # Periodic stuck-cleanup: every 5 batches, free any record that
-            # has been 'running'/'searching' for > 5 minutes (dead worker).
-            batches_since_cleanup += 1
-            if batches_since_cleanup >= 5:
-                stale = _reset_stuck_running_records(stale_after_minutes=5)
-                if stale:
-                    print(f"[kvk-auto-enrich] Reset {stale} stale in-flight records")
-                batches_since_cleanup = 0
+            # Per-batch stuck-cleanup: free any record that has been
+            # 'running'/'searching' for > 2 minutes (dead worker). Aggressive
+            # because Playwright crashes are frequent on shared infra.
+            stale = _reset_stuck_running_records(stale_after_minutes=2)
+            if stale:
+                print(f"[kvk-auto-enrich] Reset {stale} stale in-flight records")
 
             db = SessionLocal()
             try:

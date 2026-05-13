@@ -50,7 +50,7 @@ class Settings:
     send_window_end: str = os.getenv("SEND_WINDOW_END", "17:30")
     outreach_cooldown_days: int = int(os.getenv("OUTREACH_COOLDOWN_DAYS", "14"))
     preview_contact_count: int = int(os.getenv("PREVIEW_CONTACT_COUNT", "20"))
-    playwright_timeout_ms: int = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "12000"))
+    playwright_timeout_ms: int = int(os.getenv("PLAYWRIGHT_TIMEOUT_MS", "6000"))
     auto_contact_discovery_enabled: bool = _as_bool(os.getenv("AUTO_CONTACT_DISCOVERY_ENABLED"), True)
     auto_contact_refresh_days: int = int(os.getenv("AUTO_CONTACT_REFRESH_DAYS", "14"))
     auto_contact_refresh_batch_size: int = int(os.getenv("AUTO_CONTACT_REFRESH_BATCH_SIZE", "20"))
@@ -61,7 +61,7 @@ class Settings:
     kvk_auto_enrich_enabled: bool = _as_bool(os.getenv("KVK_AUTO_ENRICH_ENABLED"), True)
     kvk_auto_enrich_batch: int = int(os.getenv("KVK_AUTO_ENRICH_BATCH", "12"))
     kvk_auto_enrich_interval: int = int(os.getenv("KVK_AUTO_ENRICH_INTERVAL", "30"))
-    kvk_auto_enrich_workers: int = int(os.getenv("KVK_AUTO_ENRICH_WORKERS", "6"))
+    kvk_auto_enrich_workers: int = int(os.getenv("KVK_AUTO_ENRICH_WORKERS", "3"))
 
 
 settings = Settings()
