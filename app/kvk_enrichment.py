@@ -448,19 +448,24 @@ def run_kvk_bulk_enrichment(company_ids: list[int], delay_seconds: float = 0.5) 
 # Auto-enrichment scheduler — runs on app startup, no manual action needed
 # ---------------------------------------------------------------------------
 
-def _reset_stuck_running_records() -> int:
+def _reset_stuck_running_records(stale_after_minutes: int | None = None) -> int:
     """
-    On scheduler startup, reset records that were left in 'running' or
-    'searching' state because a previous container died mid-crawl.
+    Reset records left in 'running' or 'searching' state by a dead worker.
+    - At scheduler startup: reset ALL such records (stale_after_minutes=None)
+    - Between batches: reset only ones older than `stale_after_minutes`
     Returns the count of reset rows.
     """
     db = SessionLocal()
     try:
-        result = db.execute(
+        stmt = (
             update(KvkCompany)
             .where(KvkCompany.enrichment_status.in_(["running", "searching"]))
             .values(enrichment_status="pending")
         )
+        if stale_after_minutes is not None:
+            cutoff = datetime.now(tz=timezone.utc) - __import__("datetime").timedelta(minutes=stale_after_minutes)
+            stmt = stmt.where(KvkCompany.last_enrichment_attempt_at < cutoff)
+        result = db.execute(stmt)
         db.commit()
         return result.rowcount or 0
     except Exception:
@@ -519,8 +524,19 @@ def _auto_enrich_loop() -> None:
     if reset_count:
         print(f"[kvk-auto-enrich] Reset {reset_count} stuck records to 'pending'")
 
+    batches_since_cleanup = 0
+
     while True:
         try:
+            # Periodic stuck-cleanup: every 5 batches, free any record that
+            # has been 'running'/'searching' for > 5 minutes (dead worker).
+            batches_since_cleanup += 1
+            if batches_since_cleanup >= 5:
+                stale = _reset_stuck_running_records(stale_after_minutes=5)
+                if stale:
+                    print(f"[kvk-auto-enrich] Reset {stale} stale in-flight records")
+                batches_since_cleanup = 0
+
             db = SessionLocal()
             try:
                 pending_ids = [
