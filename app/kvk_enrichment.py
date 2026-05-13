@@ -101,42 +101,170 @@ def _ddg_search_urls(query: str, max_results: int = 5) -> list[str]:
         return []
 
 
-def _google_places_lookup(company: KvkCompany) -> dict[str, str]:
+def _score_place_match(place: dict, company: KvkCompany) -> dict[str, Any]:
     """
-    Search Google Places API using the pre-built google_maps_query.
-    Returns {website, phone, place_name, confidence}.
+    Score a Google Places result against a KVK company using BOTH the name
+    and the postal address. Returns a dict with separate name/address scores
+    plus a combined total — the caller uses these to decide whether to
+    trust the website AND whether to rename the KVK record.
+    """
+    from rapidfuzz import fuzz
+
+    display_name = (place.get("displayName") or {}).get("text", "") or ""
+    formatted_addr = (place.get("formattedAddress") or "").lower()
+    components = {
+        (item.get("types") or [""])[0]: item.get("shortText", "")
+        for item in place.get("addressComponents", [])
+    }
+
+    company_name = (company.company_name or "")
+    name_score = int(fuzz.WRatio(company_name.lower(), display_name.lower())) if display_name else 0
+
+    address_score = 0
+    postal = (company.primary_postal_code or "").strip()
+    if postal and len(postal) >= 5:
+        # Dutch postal codes are 4-digit + 2-letter — match the leading 4 digits
+        postal_digits = re.sub(r"\s+", "", postal)[:4]
+        if postal_digits and postal_digits in formatted_addr.replace(" ", ""):
+            address_score += 40
+
+    company_city = (company.primary_city or "").strip().lower()
+    place_city = (components.get("locality", "") or "").strip().lower()
+    if company_city and place_city and company_city == place_city:
+        address_score += 20
+    elif company_city and company_city in formatted_addr:
+        address_score += 12
+
+    primary_addr = (company.primary_address or "").strip().lower()
+    if primary_addr:
+        addr_tokens = {t for t in re.split(r"[^a-z0-9]+", primary_addr) if len(t) >= 2}
+        formatted_tokens = {t for t in re.split(r"[^a-z0-9]+", formatted_addr) if len(t) >= 2}
+        # Generic words shouldn't count toward an address match
+        addr_tokens -= {"the", "van", "de", "het", "een", "and", "and-"}
+        overlap = addr_tokens & formatted_tokens
+        if len(overlap) >= 3:
+            address_score += 25
+        elif len(overlap) >= 2:
+            address_score += 15
+        elif len(overlap) >= 1:
+            address_score += 6
+
+    address_score = min(60, address_score)
+    has_website = bool(place.get("websiteUri"))
+
+    # Combined: address-heavy (we want correct location)
+    total = int(name_score * 0.45) + address_score + (5 if has_website else 0)
+
+    return {
+        "place": place,
+        "display_name": display_name,
+        "website": place.get("websiteUri", "") or "",
+        "phone": place.get("nationalPhoneNumber", "") or "",
+        "formatted_address": place.get("formattedAddress", "") or "",
+        "google_maps_url": place.get("googleMapsUri", "") or "",
+        "name_score": name_score,
+        "address_score": address_score,
+        "total_score": total,
+        "has_website": has_website,
+    }
+
+
+def _google_places_lookup(company: KvkCompany) -> dict[str, Any]:
+    """
+    Advanced Google Places lookup — searches by name AND address, scores
+    candidates across multiple queries, and returns the best match by
+    combined name+address fit.
+
+    Returned dict keys:
+      website, phone, place_name, place_address, google_maps_url,
+      name_score, address_score, total_score, source, confidence,
+      rename_suggested (bool — True when address strongly matches but
+      the KVK name disagrees with what Google shows)
     """
     if not settings.google_places_api_key:
         return {}
 
-    query = company.google_maps_query or f"{company.company_name} {company.primary_city or ''} fietswinkel"
-    try:
-        results = search_google_places(query)
+    # Build a ranked list of queries — most-specific first
+    name = (company.company_name or "").strip()
+    city = (company.primary_city or "").strip()
+    addr = (company.primary_address or "").strip()
+    postal = (company.primary_postal_code or "").strip()
+
+    queries: list[str] = []
+    if name and addr and city:
+        queries.append(f"{name} {addr} {city}")
+    if name and postal and city:
+        queries.append(f"{name} {postal} {city}")
+    if name and city:
+        queries.append(f"{name} {city} fietswinkel")
+    if company.google_maps_query:
+        queries.append(company.google_maps_query)
+    if name and city:
+        queries.append(f"{name} {city}")
+
+    seen_query: set[str] = set()
+    queries = [q for q in queries if q.strip() and not (q in seen_query or seen_query.add(q))]
+
+    best: dict[str, Any] | None = None
+    # Cap at 2 Places calls per record to control API spend (~$0.064/record max).
+    # First query is the most specific (name+address+city), so good matches stop early.
+    for query in queries[:2]:
+        try:
+            results = search_google_places(query, page_size=5)
+        except Exception:
+            continue
         if not results:
-            return {}
+            continue
+        for place in results:
+            scored = _score_place_match(place, company)
+            if best is None or scored["total_score"] > best["total_score"]:
+                best = scored
+        if best and best["total_score"] >= 70:
+            # Acceptable match — stop refining to save API budget
+            break
 
-        place = results[0]
-        website = place.get("websiteUri", "")
-        phone = place.get("nationalPhoneNumber", "")
-        place_name = place.get("displayName", {}).get("text", "")
-
-        # Simple name-similarity check to avoid wrong-store matches
-        from rapidfuzz import fuzz
-        name_score = fuzz.WRatio(
-            (company.company_name or "").lower(),
-            (place_name or "").lower(),
-        )
-        confidence = "high" if name_score >= 80 else "medium" if name_score >= 60 else "low"
-
-        return {
-            "website": website,
-            "phone": phone,
-            "place_name": place_name,
-            "source": "google_places",
-            "confidence": confidence,
-        }
-    except Exception:
+    if not best:
         return {}
+
+    # Reject anything with very weak signal
+    if best["total_score"] < 30:
+        return {}
+
+    # Confidence comes from BOTH signals
+    name_score = best["name_score"]
+    addr_score = best["address_score"]
+    if addr_score >= 40 and name_score >= 70:
+        confidence = "high"
+    elif addr_score >= 40:  # address solid, even if name differs
+        confidence = "high"
+    elif name_score >= 75:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    # Rename suggestion: address confirms the location is right, but the
+    # KVK name doesn't match what Google calls it (e.g., trade name vs.
+    # legal name). Caller should swap the KVK name for the Google name.
+    rename_suggested = (
+        addr_score >= 40
+        and name_score < 70
+        and bool(best["display_name"])
+        and best["display_name"].strip().lower() != (company.company_name or "").strip().lower()
+    )
+
+    return {
+        "website": best["website"],
+        "phone": best["phone"],
+        "place_name": best["display_name"],
+        "place_address": best["formatted_address"],
+        "google_maps_url": best["google_maps_url"],
+        "name_score": name_score,
+        "address_score": addr_score,
+        "total_score": best["total_score"],
+        "source": "google_places",
+        "confidence": confidence,
+        "rename_suggested": rename_suggested,
+    }
 
 
 def _ddg_lookup(company: KvkCompany) -> dict[str, str]:
@@ -200,7 +328,7 @@ def enrich_kvk_company_full(session: Session, company: KvkCompany) -> None:
 
     company.last_enrichment_attempt_at = datetime.now(tz=timezone.utc)
 
-    # Step 1: find website if missing
+    # Step 1: find website if missing — Google Places (name+address) → DDG fallback
     if not company.website:
         company.enrichment_status = "searching"
         session.commit()
@@ -218,6 +346,26 @@ def enrich_kvk_company_full(session: Session, company: KvkCompany) -> None:
                 company.phone_public = search_result["phone"]
                 company.phone_source_url = search_result.get("source", "search")
                 company.phone_confidence = search_result.get("confidence", "medium")
+
+            # Step 1b: name override when Google Places address confirms the
+            # location but the KVK legal name disagrees with the trade name.
+            # Example: KVK lists "Joh. de Vries Beheer B.V." but Google
+            # calls the same address "Joop Harmans Cycling XL" — we adopt
+            # the Google name (the customer-facing brand) and stash the
+            # original in notes for audit.
+            if search_result.get("rename_suggested"):
+                google_name = (search_result.get("place_name") or "").strip()
+                if google_name and google_name.lower() != (company.company_name or "").strip().lower():
+                    original = company.company_name or ""
+                    company.company_name = google_name
+                    # Audit trail in notes
+                    rename_note = (
+                        f"renamed_from='{original}' to='{google_name}' "
+                        f"(addr_score={search_result.get('address_score')}, "
+                        f"name_score={search_result.get('name_score')})"
+                    )
+                    company.notes = ((company.notes or "") + " | " + rename_note).lstrip(" |")
+
             session.commit()
 
     # Step 2: scrape email + phone from website
