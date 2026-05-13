@@ -27,6 +27,13 @@ class Settings:
     admin_username: str = os.getenv("ADMIN_USERNAME", "schild")
     admin_password: str = os.getenv("ADMIN_PASSWORD", "")
     google_places_api_key: str = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    # Google Custom Search JSON API — used as primary input for Stage 0
+    # snippet-based email extraction. CSE_API_KEY falls back to the Places
+    # key (same Cloud project usually). CSE_CX is the Search Engine ID,
+    # required (no fallback) — get it from
+    # https://programmablesearchengine.google.com/
+    google_cse_api_key: str = os.getenv("GOOGLE_CSE_API_KEY", "")
+    google_cse_cx: str = os.getenv("GOOGLE_CSE_CX", "")
     stripe_api_key: str = os.getenv("STRIPE_API_KEY", "")
     stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     klaviyo_private_api_key: str = os.getenv("KLAVIYO_PRIVATE_API_KEY", "")

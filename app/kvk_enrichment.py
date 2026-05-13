@@ -86,17 +86,61 @@ _REJECT_EMAIL_DOMAINS = {
 } | _SKIP_DOMAINS
 
 
+def _filter_emails_from_text(text: str, max_emails: int = 10) -> list[str]:
+    """
+    Run the email regex over any text blob (search snippets, HTML pages,
+    etc.) and return only candidates that look like real business emails
+    after filtering out vendor noise, placeholders, and image extensions.
+    Order preserved so the first-found wins downstream ranking ties.
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for em in _EMAIL_RE.findall(text):
+        em = em.strip(".,;:!?\"')(<>").lower()
+        if em in seen:
+            continue
+        seen.add(em)
+        local, _, dom = em.partition("@")
+        if not dom or "." not in dom:
+            continue
+        if local in _REJECT_EMAIL_LOCAL:
+            continue
+        if any(dom == d or dom.endswith("." + d) for d in _REJECT_EMAIL_DOMAINS):
+            continue
+        if any(local.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".svg")):
+            continue
+        if len(local) < 2 or local.isdigit():
+            continue
+        found.append(em)
+        if len(found) >= max_emails:
+            break
+    return found
+
+
 def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     """
-    Search DuckDuckGo HTML and extract email addresses found anywhere in
-    the search results page (titles, URLs, snippets). Faster than crawling
-    because Google/DDG have already indexed contact pages and surface the
-    email right in the snippet.
+    Extract email addresses from search-engine result snippets. Tries
+    Google Custom Search JSON API first (rich snippets, often contain
+    the email directly in the meta-description) and falls back to
+    DuckDuckGo HTML scraping if CSE isn't configured or returned nothing.
 
     Used as the first-stage email finder (before Playwright) in the KVK
-    enrichment pipeline. Filters out vendor/noise emails (noreply,
-    placeholders, hosting-provider domains).
+    enrichment pipeline.
     """
+    # ── Source A: Google Custom Search (preferred — rich snippets) ─────────
+    try:
+        from app.google_search import cse_snippet_text, is_enabled as _cse_on
+        if _cse_on():
+            text = cse_snippet_text(query, num=5)
+            emails = _filter_emails_from_text(text, max_emails=max_emails)
+            if emails:
+                return emails
+    except Exception:
+        pass
+
+    # ── Source B: DuckDuckGo HTML (free fallback) ──────────────────────────
     try:
         from html import unescape
         from urllib.parse import unquote
@@ -111,31 +155,7 @@ def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     # most snippet bodies contain HTML entities. Decode both so emails like
     # `info%40bikecity.nl` or `info&#64;…` get matched.
     readable = unquote(unescape(html))
-
-    found: list[str] = []
-    seen: set[str] = set()
-    for em in _EMAIL_RE.findall(readable):
-        em = em.strip(".,;:!?\"')(<>").lower()
-        if em in seen:
-            continue
-        seen.add(em)
-        local, _, dom = em.partition("@")
-        if not dom or "." not in dom:
-            continue
-        if local in _REJECT_EMAIL_LOCAL:
-            continue
-        if any(dom == d or dom.endswith("." + d) for d in _REJECT_EMAIL_DOMAINS):
-            continue
-        if any(local.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".svg")):
-            continue
-        # Reject pure-numeric or super-short local parts (CDN cache busters)
-        if len(local) < 2 or local.isdigit():
-            continue
-        found.append(em)
-        if len(found) >= max_emails:
-            return found
-
-    return found
+    return _filter_emails_from_text(readable, max_emails=max_emails)
 
 
 def _rank_snippet_emails(emails: list[str], company: KvkCompany) -> str:
@@ -806,6 +826,11 @@ def get_enrichment_progress(db) -> dict:
     errors = db.scalar(sa_select(func.count(KvkCompany.id)).where(
         KvkCompany.enrichment_status == "error")) or 0
     pct = round(done / total * 100) if total else 0
+    try:
+        from app.google_search import is_enabled as _cse_enabled
+        cse_on = _cse_enabled()
+    except Exception:
+        cse_on = False
     return {
         "total": total,
         "pending": pending,
@@ -815,4 +840,6 @@ def get_enrichment_progress(db) -> dict:
         "errors": errors,
         "pct": pct,
         "active": _scheduler_started,
+        "google_cse_enabled": cse_on,
+        "google_places_enabled": bool(settings.google_places_api_key),
     }
