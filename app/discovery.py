@@ -1224,10 +1224,19 @@ def clean_snippet(value: str) -> str:
 def discover_contacts_for_kvk_company(session: Session, company: KvkCompany) -> None:
     """
     Run public contact discovery for a KvkCompany.
-    Reuses the same Playwright crawler as prospect discovery.
-    Updates enrichment_status, email_public, phone_public, and source fields in-place.
+
+    Uses an isolated inner session so the temporary Prospect object the
+    crawler needs as a vehicle for its state never persists to the real
+    prospects table. We pull the DiscoveryResult dataclass back across
+    the boundary (pure data — no SQLAlchemy references) and apply the
+    fields directly to the KvkCompany on the outer session.
+
+    This fixes the UniqueViolation 'uq_prospect_source_reference' crashes
+    we saw when multiple workers created temp prospects with the default
+    empty source / source_reference pair.
     """
     from datetime import datetime, timezone
+    from app.db import SessionLocal as _SessionLocal
 
     company.last_enrichment_attempt_at = datetime.now(tz=timezone.utc)
 
@@ -1239,48 +1248,78 @@ def discover_contacts_for_kvk_company(session: Session, company: KvkCompany) -> 
     company.enrichment_status = "running"
     session.commit()
 
-    # Build a temporary Prospect-like object so we can reuse the crawler
-    temp_prospect = Prospect(
-        company_name=company.company_name,
-        website=company.website,
-        website_domain=company.website_domain or normalize_domain(company.website),
-        city=company.primary_city,
-        country_code=company.country_code,
-        email=company.email_public or "",
-        phone=company.phone_public or "",
-        email_discovery_status="not_started",
-        email_confidence=0,
-    )
+    # Snapshot the fields the crawler needs before going into the inner txn
+    co_name = company.company_name
+    co_website = company.website
+    co_domain = company.website_domain or normalize_domain(company.website)
+    co_city = company.primary_city
+    co_country = company.country_code
+    co_email = company.email_public or ""
+    co_phone = company.phone_public or ""
 
+    result: DiscoveryResult | None = None
+    error_msg = ""
+
+    inner = _SessionLocal()
     try:
-        result = discover_public_contacts_for_prospect(session, temp_prospect)
+        temp_prospect = Prospect(
+            # Unique values so concurrent workers don't collide on the
+            # (source, source_reference) unique constraint. Inner session
+            # rolls back anyway so these never persist.
+            source="kvk_temp",
+            source_reference=f"kvk-temp-{company.id}",
+            company_name=co_name,
+            website=co_website,
+            website_domain=co_domain,
+            city=co_city,
+            country_code=co_country,
+            email=co_email,
+            phone=co_phone,
+            email_discovery_status="not_started",
+            email_confidence=0,
+        )
+        try:
+            result = discover_public_contacts_for_prospect(inner, temp_prospect)
+        except Exception as exc:
+            error_msg = str(exc)
+    finally:
+        # Throw away the inner txn — the temp prospect never reaches DB
+        try:
+            inner.rollback()
+        except Exception:
+            pass
+        inner.close()
 
-        if result.email:
-            company.email_public = result.email
-            company.email_source_url = result.source_page
-            company.email_confidence = _confidence_label(result.confidence)
-        if result.phone_number and not company.phone_public:
-            company.phone_public = result.phone_number
-            company.phone_source_url = result.source_page
-            company.phone_confidence = "medium"
-
-        if result.email or result.phone_number:
-            company.enrichment_status = "discovered"
-        elif result.status == "no_contacts":
-            company.enrichment_status = "no_contacts"
-        elif result.status == "error":
+    # Apply the result back onto the KvkCompany in the OUTER session
+    try:
+        if error_msg:
             company.enrichment_status = "error"
-            company.notes = (company.notes or "") + f" | discovery error: {result.error}"
-        else:
-            company.enrichment_status = "partial"
+            company.notes = (company.notes or "") + f" | discovery exception: {error_msg}"
+        elif result is not None:
+            if result.email:
+                company.email_public = result.email
+                company.email_source_url = result.source_page
+                company.email_confidence = _confidence_label(result.confidence)
+            if result.phone_number and not company.phone_public:
+                company.phone_public = result.phone_number
+                company.phone_source_url = result.source_page
+                company.phone_confidence = "medium"
+
+            if result.email or result.phone_number:
+                company.enrichment_status = "discovered"
+            elif result.status == "no_contacts":
+                company.enrichment_status = "no_contacts"
+            elif result.status == "error":
+                company.enrichment_status = "error"
+                company.notes = (company.notes or "") + f" | discovery error: {result.error}"
+            else:
+                company.enrichment_status = "partial"
 
         # Re-run customer matching after discovering email/domain
         apply_kvk_matching(session, company)
-
     except Exception as exc:
         company.enrichment_status = "error"
-        company.notes = (company.notes or "") + f" | discovery exception: {exc}"
-
+        company.notes = (company.notes or "") + f" | apply error: {exc}"
     finally:
         session.commit()
 
