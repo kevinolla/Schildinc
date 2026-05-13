@@ -59,8 +59,9 @@ class Settings:
     unsubscribe_secret: str = os.getenv("UNSUBSCRIBE_SECRET", "change-me-too")
     klaviyo_list_id: str = os.getenv("KLAVIYO_LIST_ID", "XHgkXM")
     kvk_auto_enrich_enabled: bool = _as_bool(os.getenv("KVK_AUTO_ENRICH_ENABLED"), True)
-    kvk_auto_enrich_batch: int = int(os.getenv("KVK_AUTO_ENRICH_BATCH", "3"))
-    kvk_auto_enrich_interval: int = int(os.getenv("KVK_AUTO_ENRICH_INTERVAL", "90"))
+    kvk_auto_enrich_batch: int = int(os.getenv("KVK_AUTO_ENRICH_BATCH", "12"))
+    kvk_auto_enrich_interval: int = int(os.getenv("KVK_AUTO_ENRICH_INTERVAL", "30"))
+    kvk_auto_enrich_workers: int = int(os.getenv("KVK_AUTO_ENRICH_WORKERS", "4"))
 
 
 settings = Settings()

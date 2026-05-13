@@ -209,6 +209,24 @@ def discover_public_contacts_for_prospect(session: Session, prospect: Prospect) 
         return result
 
     best = max(email_candidates, key=lambda item: item.confidence, default=None)
+
+    # ── Fallback: MX-validated pattern guess (info@domain et al.) ───────────
+    # Triggered only when scraping found no email on any page. For Dutch SMBs,
+    # `info@<their-domain>` is the canonical mailbox ~80% of the time.
+    if not best and domain:
+        try:
+            from app.email_guesser import best_guess
+            guessed = best_guess(domain, require_mx=True)
+            if guessed:
+                best = DiscoveryEmailCandidate(
+                    email=guessed.email,
+                    source_page=f"pattern:{guessed.pattern}@ (MX:{guessed.mx_host[:40]})",
+                    confidence=guessed.confidence,
+                )
+                email_candidates.append(best)
+        except Exception:
+            pass
+
     best_phone_number = _pick_best_phone_number(phone_numbers, prospect.phone)
     best_whatsapp_number = _pick_best_whatsapp_number(whatsapp_numbers, prospect.phone)
     best_whatsapp_url = _pick_best_whatsapp_url(whatsapp_links, best_whatsapp_number)
