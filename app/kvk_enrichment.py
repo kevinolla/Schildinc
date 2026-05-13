@@ -69,6 +69,165 @@ def _is_skip_domain(url: str) -> bool:
         return True
 
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.I)
+_SEARCH_SNIPPET_BLOCK_RE = re.compile(
+    r'class="result__(?:title|snippet|url)[^>]*>([\s\S]*?)</a>', re.I
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+_REJECT_EMAIL_LOCAL = {
+    "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon",
+    "support-ticket", "webmaster", "postmaster", "abuse", "admin",
+}
+_REJECT_EMAIL_DOMAINS = {
+    "sentry.io", "wixsite.com", "shopify.com", "mailchimp.com",
+    "klaviyo.com", "google.com", "googlemail.com", "wordpress.com",
+    "example.com", "example.org", "domain.com", "yourdomain.com",
+    "company.com", "test.com", "email.com",
+} | _SKIP_DOMAINS
+
+
+def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
+    """
+    Search DuckDuckGo HTML and extract email addresses found anywhere in
+    the search results page (titles, URLs, snippets). Faster than crawling
+    because Google/DDG have already indexed contact pages and surface the
+    email right in the snippet.
+
+    Used as the first-stage email finder (before Playwright) in the KVK
+    enrichment pipeline. Filters out vendor/noise emails (noreply,
+    placeholders, hosting-provider domains).
+    """
+    try:
+        from html import unescape
+        url = _DDG_URL.format(query=quote_plus(query))
+        req = Request(url, headers=_DDG_HEADERS)
+        with urlopen(req, timeout=8) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return []
+
+    # Just unescape entities and scan the whole response — DDG's snippet
+    # structure changes between layouts, and our skip-domain/local-part
+    # filters are strong enough to reject the inevitable noise.
+    readable = unescape(html)
+
+    found: list[str] = []
+    seen: set[str] = set()
+    for em in _EMAIL_RE.findall(readable):
+        em = em.strip(".,;:!?\"')(<>").lower()
+        if em in seen:
+            continue
+        seen.add(em)
+        local, _, dom = em.partition("@")
+        if not dom or "." not in dom:
+            continue
+        if local in _REJECT_EMAIL_LOCAL:
+            continue
+        if any(dom == d or dom.endswith("." + d) for d in _REJECT_EMAIL_DOMAINS):
+            continue
+        if any(local.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".svg")):
+            continue
+        # Reject pure-numeric or super-short local parts (CDN cache busters)
+        if len(local) < 2 or local.isdigit():
+            continue
+        found.append(em)
+        if len(found) >= max_emails:
+            return found
+
+    return found
+
+
+def _rank_snippet_emails(emails: list[str], company: KvkCompany) -> str:
+    """
+    Pick the most likely company email from snippet candidates by scoring
+    each on local-part type (info@ wins for SMBs) and how well the email
+    domain matches the company name tokens.
+    """
+    if not emails:
+        return ""
+
+    name = (company.company_name or "").lower()
+    name_tokens = {t for t in re.split(r"[^a-z0-9]+", name) if len(t) >= 3}
+    generic_drop = {"the", "van", "de", "het", "een", "and", "fiets", "fietsen", "bike", "bikes", "store", "shop"}
+    name_tokens -= generic_drop
+
+    best_email = ""
+    best_score = -1
+    GENERIC_LOCALS = {"info", "contact", "hello", "sales", "verkoop", "winkel", "shop", "klantenservice", "office"}
+
+    for em in emails:
+        local, _, dom = em.partition("@")
+        score = 0
+        # Local-part: prefer generic info@/contact@ for SMBs (most reliable)
+        if local in GENERIC_LOCALS:
+            score += 30
+        # Domain overlap with company name tokens = strong signal
+        dom_tokens = {t for t in re.split(r"[^a-z0-9]+", dom.replace(".", " ")) if len(t) >= 3}
+        overlap = name_tokens & dom_tokens
+        if overlap:
+            score += 40 + min(20, 10 * len(overlap))
+        # Penalize free webmail (gmail/hotmail/etc) — owners often list these
+        # but they're a weaker signal than a real domain email
+        if dom in {"gmail.com", "hotmail.com", "outlook.com", "yahoo.com",
+                   "ziggo.nl", "kpnmail.nl", "live.nl", "icloud.com"}:
+            score -= 30
+        # Prefer .nl for Dutch businesses
+        if dom.endswith(".nl"):
+            score += 8
+        if score > best_score:
+            best_score = score
+            best_email = em
+
+    return best_email if best_score >= 20 else ""
+
+
+def _snippet_email_lookup(company: KvkCompany) -> dict[str, str]:
+    """
+    Fast first-stage email finder: search DDG with `"name" city email` and
+    pick a high-quality email from the result snippets. Returns dict with
+    keys: email, website (derived from email domain), source, confidence.
+    Returns {} if nothing reliable found.
+    """
+    name = (company.company_name or "").strip()
+    city = (company.primary_city or "").strip()
+    if not name:
+        return {}
+
+    queries = []
+    if city:
+        queries.append(f'"{name}" {city} email')
+        queries.append(f'{name} {city} contact email')
+    else:
+        queries.append(f'"{name}" email')
+        queries.append(f"{name} contact email")
+
+    all_candidates: list[str] = []
+    for q in queries[:2]:
+        all_candidates.extend(_emails_from_snippets(q, max_emails=10))
+        if all_candidates:
+            break  # first query already gave us something — don't burn DDG quota
+
+    if not all_candidates:
+        return {}
+
+    # Dedupe preserving order
+    seen: set[str] = set()
+    unique = [e for e in all_candidates if not (e in seen or seen.add(e))]
+
+    best = _rank_snippet_emails(unique, company)
+    if not best:
+        return {}
+
+    _, _, dom = best.partition("@")
+    return {
+        "email": best,
+        "website": f"https://{dom}",
+        "website_domain": dom,
+        "source": "search_snippet",
+        "confidence": "high",  # snippet-found emails are usually accurate
+    }
+
+
 def _ddg_search_urls(query: str, max_results: int = 5) -> list[str]:
     """Search DuckDuckGo HTML (no API key) and return the top result URLs."""
     try:
@@ -319,14 +478,41 @@ def find_website_for_kvk_company(company: KvkCompany) -> dict[str, str]:
 def enrich_kvk_company_full(session: Session, company: KvkCompany) -> None:
     """
     Full pipeline:
+    0. Fast snippet search — pulls emails directly from DDG/Google result
+       snippets (often returns `info@<domain>` in <2s without crawling)
     1. Find website if missing (Places API or DuckDuckGo)
     2. Scrape email + phone from website (Playwright)
-    3. Re-run customer matching
-    4. Update enrichment_status
+    3. MX-validated `info@<domain>` fallback if no email found
+    4. Re-run customer matching, update enrichment_status
     """
     from app.discovery import discover_contacts_for_kvk_company
 
     company.last_enrichment_attempt_at = datetime.now(tz=timezone.utc)
+
+    # ── Step 0: Fast email pull from search snippets ────────────────────────
+    # Mirror the manual workflow: Google/DDG `"company name" city email`
+    # very often shows the email right in the meta-description snippet —
+    # no crawl needed. Try this FIRST so we skip the slow Playwright
+    # pipeline whenever possible.
+    if not (company.email_public or "").strip():
+        try:
+            snippet = _snippet_email_lookup(company)
+            if snippet.get("email"):
+                company.email_public = snippet["email"]
+                company.email_source_url = snippet.get("source", "search_snippet")
+                company.email_confidence = snippet.get("confidence", "high")
+                # Adopt website from the email domain if we don't have one
+                if not company.website:
+                    derived = snippet.get("website", "")
+                    if derived:
+                        company.website = derived
+                        company.website_domain = snippet.get("website_domain", "")
+                company.enrichment_status = "discovered"
+                apply_kvk_matching(session, company)
+                session.commit()
+                return  # Found email fast — done.
+        except Exception:
+            pass
 
     # Step 1: find website if missing — Google Places (name+address) → DDG fallback
     if not company.website:
