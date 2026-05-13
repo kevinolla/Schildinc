@@ -99,6 +99,7 @@ def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     """
     try:
         from html import unescape
+        from urllib.parse import unquote
         url = _DDG_URL.format(query=quote_plus(query))
         req = Request(url, headers=_DDG_HEADERS)
         with urlopen(req, timeout=8) as resp:
@@ -106,10 +107,10 @@ def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     except Exception:
         return []
 
-    # Just unescape entities and scan the whole response — DDG's snippet
-    # structure changes between layouts, and our skip-domain/local-part
-    # filters are strong enough to reject the inevitable noise.
-    readable = unescape(html)
+    # DDG encodes redirect URLs as `uddg=<percent-encoded>` query params, and
+    # most snippet bodies contain HTML entities. Decode both so emails like
+    # `info%40bikecity.nl` or `info&#64;…` get matched.
+    readable = unquote(unescape(html))
 
     found: list[str] = []
     seen: set[str] = set()
