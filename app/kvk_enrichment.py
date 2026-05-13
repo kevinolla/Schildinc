@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait, as_completed
 from datetime import datetime, timezone
 from threading import Thread
 from typing import Any
@@ -667,8 +667,13 @@ def _enrich_one_company(company_id: int) -> str:
     Worker function — opens its own DB session, runs full enrichment on a
     single company, and returns a short status string. Safe to call from a
     ThreadPoolExecutor.
+
+    Self-timeout: the function emits log lines around each pipeline stage
+    so we can pinpoint hangs in production. Playwright already has its
+    own 6s timeout via settings.playwright_timeout_ms.
     """
     db = SessionLocal()
+    started = time.monotonic()
     try:
         company = db.get(KvkCompany, company_id)
         if not company:
@@ -678,6 +683,9 @@ def _enrich_one_company(company_id: int) -> str:
         company.enrichment_status = "searching" if not company.website else "running"
         db.commit()
         enrich_kvk_company_full(db, company)
+        elapsed = time.monotonic() - started
+        if elapsed > 30:
+            print(f"[kvk-enrich] {company_id} took {elapsed:.1f}s status={company.enrichment_status}")
         return f"{company_id}:{company.enrichment_status}"
     except Exception as exc:
         try:
@@ -688,6 +696,7 @@ def _enrich_one_company(company_id: int) -> str:
                 db.commit()
         except Exception:
             db.rollback()
+        print(f"[kvk-enrich] {company_id} ERROR after {time.monotonic()-started:.1f}s: {exc}")
         return f"{company_id}:error"
     finally:
         db.close()
@@ -735,17 +744,33 @@ def _auto_enrich_loop() -> None:
                 db.close()
 
             if not pending_ids:
+                print(f"[kvk-auto-enrich] No pending records — sleeping {interval}s")
                 time.sleep(interval)
                 continue
 
-            # Run the batch in parallel — each worker manages its own session
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="kvk-enrich") as pool:
-                futures = [pool.submit(_enrich_one_company, cid) for cid in pending_ids]
-                for fut in as_completed(futures):
-                    try:
-                        fut.result()
-                    except Exception:
-                        pass
+            print(f"[kvk-auto-enrich] Starting batch of {len(pending_ids)} ({workers} workers)")
+            batch_start = time.monotonic()
+
+            # Run the batch in parallel — each worker manages its own session.
+            # Hard cap: BATCH_TIMEOUT seconds total. Any worker still running
+            # after that is abandoned; its record will be re-picked up by the
+            # 2-min stuck-cleanup. This prevents a single hung Playwright tab
+            # from freezing the entire scheduler forever.
+            BATCH_TIMEOUT = 180  # 3 min per batch hard cap
+            pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="kvk-enrich")
+            futures = [pool.submit(_enrich_one_company, cid) for cid in pending_ids]
+            done, not_done = wait(futures, timeout=BATCH_TIMEOUT)
+            for fut in done:
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+            # Abandon hung workers — don't wait on shutdown.
+            # cancel_futures=True cancels queued (not-yet-started) tasks.
+            pool.shutdown(wait=False, cancel_futures=True)
+
+            elapsed = time.monotonic() - batch_start
+            print(f"[kvk-auto-enrich] Batch done in {elapsed:.1f}s — {len(done)}/{len(futures)} completed, {len(not_done)} abandoned")
 
             # Short cool-down between batches, not after each company
             time.sleep(max(5, interval // 6))
