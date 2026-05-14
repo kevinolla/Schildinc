@@ -123,28 +123,42 @@ def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     """
     Extract email addresses from search-engine result snippets.
 
-    Tries three backends in order of snippet quality:
-      A. Brave Search API (rich snippets, paid but cheap, 2K free/mo)
-      B. Google CSE (rich snippets, but Google deprecated the "search
-         entire web" toggle for new engines — only useful if user
-         configured one before May 2026)
-      C. DuckDuckGo HTML scrape (free, sparse snippets, last resort)
+    Tries multiple backends, free sources FIRST:
+      A. Bing HTML scrape (free, rich snippets, no key)
+      B. DuckDuckGo HTML scrape (free, sparse snippets)
+      C. Google CSE (rich, but the 'entire web' toggle is deprecated)
+      D. Brave Search API (paid, only used if all free sources missed)
 
     Used as the first-stage email finder (before Playwright) in the KVK
     enrichment pipeline.
     """
-    # ── Source A: Brave Search (preferred — best snippets, no setup quirks)
+    # ── Source A: Bing (free, rich snippets — like Chrome) ────────────────
     try:
-        from app.brave_search import brave_snippet_text, is_enabled as _brave_on
-        if _brave_on():
-            text = brave_snippet_text(query, count=5)
+        from app.bing_search import bing_snippet_text
+        text = bing_snippet_text(query, count=10)
+        if text:
             emails = _filter_emails_from_text(text, max_emails=max_emails)
             if emails:
                 return emails
     except Exception:
         pass
 
-    # ── Source B: Google Custom Search (only useful with legacy CSE) ──────
+    # ── Source B: DuckDuckGo HTML (free, but snippets often sparse) ───────
+    try:
+        from html import unescape
+        from urllib.parse import unquote
+        url = _DDG_URL.format(query=quote_plus(query))
+        req = Request(url, headers=_DDG_HEADERS)
+        with urlopen(req, timeout=8) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        readable = unquote(unescape(html))
+        emails = _filter_emails_from_text(readable, max_emails=max_emails)
+        if emails:
+            return emails
+    except Exception:
+        pass
+
+    # ── Source C: Google CSE (only useful if user configured a legacy one) ─
     try:
         from app.google_search import cse_snippet_text, is_enabled as _cse_on
         if _cse_on():
@@ -155,22 +169,18 @@ def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     except Exception:
         pass
 
-    # ── Source C: DuckDuckGo HTML (free fallback) ──────────────────────────
+    # ── Source D: Brave Search (PAID — last resort to save credit) ────────
     try:
-        from html import unescape
-        from urllib.parse import unquote
-        url = _DDG_URL.format(query=quote_plus(query))
-        req = Request(url, headers=_DDG_HEADERS)
-        with urlopen(req, timeout=8) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+        from app.brave_search import brave_snippet_text, is_enabled as _brave_on
+        if _brave_on():
+            text = brave_snippet_text(query, count=5)
+            emails = _filter_emails_from_text(text, max_emails=max_emails)
+            if emails:
+                return emails
     except Exception:
-        return []
+        pass
 
-    # DDG encodes redirect URLs as `uddg=<percent-encoded>` query params, and
-    # most snippet bodies contain HTML entities. Decode both so emails like
-    # `info%40bikecity.nl` or `info&#64;…` get matched.
-    readable = unquote(unescape(html))
-    return _filter_emails_from_text(readable, max_emails=max_emails)
+    return []
 
 
 def _rank_snippet_emails(emails: list[str], company: KvkCompany) -> str:
@@ -508,16 +518,42 @@ def find_website_for_kvk_company(company: KvkCompany) -> dict[str, str]:
 def enrich_kvk_company_full(session: Session, company: KvkCompany) -> None:
     """
     Full pipeline (ordered cheapest → most expensive):
-    1. Find website (Places API → DuckDuckGo) — free except $0.032/Places call
+    0. Free Bing/DDG snippet search — mirrors the manual Chrome workflow,
+       finds the email in result meta-descriptions in <2s. No key, no cost.
+       Skipped only if we already have an email_public value.
+    1. Find website (Places API → DuckDuckGo) — Places costs $0.032/call
     2. Scrape email from website via Playwright — free
     3. MX-validated `info@<domain>` guess — free
-    4. LAST RESORT: paid snippet search (Brave) — only when stages 1-3
-       couldn't resolve the record AND we have no website at all
+    4. LAST RESORT: paid Brave snippet search — only if every free
+       stage missed AND we still have no website
     5. Re-run customer matching, update enrichment_status
     """
     from app.discovery import discover_contacts_for_kvk_company
 
     company.last_enrichment_attempt_at = datetime.now(tz=timezone.utc)
+
+    # ── Step 0: Free snippet email search (Bing → DDG → CSE) ──────────────
+    # Runs first because it's the fastest path when it works. The function
+    # itself only calls Brave if every free source returned nothing, so
+    # this stage is effectively free for most records.
+    if not (company.email_public or "").strip():
+        try:
+            snippet = _snippet_email_lookup(company)
+            if snippet.get("email"):
+                company.email_public = snippet["email"]
+                company.email_source_url = snippet.get("source", "search_snippet")
+                company.email_confidence = snippet.get("confidence", "high")
+                if not company.website:
+                    derived = snippet.get("website", "")
+                    if derived:
+                        company.website = derived
+                        company.website_domain = snippet.get("website_domain", "")
+                company.enrichment_status = "discovered"
+                apply_kvk_matching(session, company)
+                session.commit()
+                return  # Fast win — done.
+        except Exception:
+            pass
 
     # Step 1: find website if missing — Google Places (name+address) → DDG fallback
     if not company.website:
@@ -583,31 +619,6 @@ def enrich_kvk_company_full(session: Session, company: KvkCompany) -> None:
         company.enrichment_status = "no_website"
         apply_kvk_matching(session, company)
         session.commit()
-
-    # ── Step 4 (LAST RESORT): paid snippet search ───────────────────────────
-    # Fires ONLY when the free stages couldn't get us anything — i.e. we
-    # have no website AND no email after Places + DDG + Playwright + MX.
-    # Skipping records that already have a website (where MX-guess works
-    # for free) keeps Brave usage to roughly 1 query per truly-hard
-    # record. For 3990 KVK records this caps cost around $2-5.
-    has_email = bool((company.email_public or "").strip())
-    has_website = bool((company.website or "").strip())
-    if not has_email and not has_website:
-        try:
-            snippet = _snippet_email_lookup(company)
-            if snippet.get("email"):
-                company.email_public = snippet["email"]
-                company.email_source_url = snippet.get("source", "search_snippet")
-                company.email_confidence = snippet.get("confidence", "high")
-                derived = snippet.get("website", "")
-                if derived:
-                    company.website = derived
-                    company.website_domain = snippet.get("website_domain", "")
-                company.enrichment_status = "discovered"
-                apply_kvk_matching(session, company)
-                session.commit()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +858,11 @@ def get_enrichment_progress(db) -> dict:
     except Exception:
         brave_on = False
         brave_usage = {"used_today": 0, "daily_limit": 0, "remaining": 0}
+    try:
+        from app.bing_search import is_enabled as _bing_enabled
+        bing_on = _bing_enabled()
+    except Exception:
+        bing_on = False
     return {
         "total": total,
         "pending": pending,
@@ -856,6 +872,7 @@ def get_enrichment_progress(db) -> dict:
         "errors": errors,
         "pct": pct,
         "active": _scheduler_started,
+        "bing_search_enabled": bing_on,
         "brave_search_enabled": brave_on,
         "brave_usage": brave_usage,
         "google_cse_enabled": cse_on,
