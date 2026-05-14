@@ -38,6 +38,9 @@ class Settings:
     # deprecated their "Search the entire web" toggle for CSEs. Sign up at
     # https://api.search.brave.com/  (2000 free queries/month).
     brave_api_key: str = os.getenv("BRAVE_API_KEY", "")
+    # Hard ceiling on Brave queries per UTC day — safety net so credit
+    # can't be blown overnight. Default 300 ≈ ~$1.50/day at $5/1000.
+    brave_daily_limit: int = int(os.getenv("BRAVE_DAILY_LIMIT", "300"))
     stripe_api_key: str = os.getenv("STRIPE_API_KEY", "")
     stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     klaviyo_private_api_key: str = os.getenv("KLAVIYO_PRIVATE_API_KEY", "")

@@ -25,6 +25,8 @@ restrictions, no deprecation traps.
 from __future__ import annotations
 
 import json
+import threading
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus
@@ -34,6 +36,45 @@ from app.config import settings
 
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+
+# ── Daily query cap (safety net) ────────────────────────────────────────────
+# Hard ceiling on Brave calls per UTC day. With the free $5 monthly credit
+# = ~1000 requests/month at $5/1000, the safe cap is 1000/30 ≈ 33/day. Set
+# higher (default 500) to allow burst on initial run; the budget alarm is
+# the user's main protection. Tunable via BRAVE_DAILY_LIMIT env var.
+_cap_lock = threading.Lock()
+_cap_state = {"date": None, "count": 0}
+
+
+def _check_and_increment_cap() -> bool:
+    """
+    Returns True if this call is permitted (under the daily cap).
+    Resets the counter at UTC midnight.
+    """
+    limit = max(0, getattr(settings, "brave_daily_limit", 500))
+    if limit <= 0:
+        return False
+    today = datetime.now(tz=timezone.utc).date()
+    with _cap_lock:
+        if _cap_state["date"] != today:
+            _cap_state["date"] = today
+            _cap_state["count"] = 0
+        if _cap_state["count"] >= limit:
+            return False
+        _cap_state["count"] += 1
+        return True
+
+
+def get_brave_usage() -> dict[str, int]:
+    """Daily usage counter for visibility on the dashboard."""
+    limit = max(0, getattr(settings, "brave_daily_limit", 500))
+    with _cap_lock:
+        today = datetime.now(tz=timezone.utc).date()
+        if _cap_state["date"] != today:
+            count = 0
+        else:
+            count = _cap_state["count"]
+    return {"used_today": count, "daily_limit": limit, "remaining": max(0, limit - count)}
 
 
 def is_enabled() -> bool:
@@ -55,6 +96,12 @@ def brave_search(query: str, count: int = 5, country: str = "NL") -> list[dict[s
     quota). Caller never has to think about exceptions.
     """
     if not is_enabled() or not (query or "").strip():
+        return []
+
+    if not _check_and_increment_cap():
+        # Daily cap reached — skip silently. Pipeline falls through to the
+        # next stage (DDG / nothing). User can raise BRAVE_DAILY_LIMIT
+        # if they want more headroom.
         return []
 
     params = {

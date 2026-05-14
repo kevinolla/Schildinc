@@ -219,38 +219,32 @@ def _rank_snippet_emails(emails: list[str], company: KvkCompany) -> str:
 
 def _snippet_email_lookup(company: KvkCompany) -> dict[str, str]:
     """
-    Fast first-stage email finder: search DDG with `"name" city email` and
-    pick a high-quality email from the result snippets. Returns dict with
-    keys: email, website (derived from email domain), source, confidence.
-    Returns {} if nothing reliable found.
+    Last-resort email finder. Used ONLY when the free pipeline stages
+    (Places + Playwright + MX-guess) couldn't resolve a record — i.e.
+    we have no website at all. Runs exactly ONE Brave query per record
+    to control cost.
+
+    Returns dict with: email, website (from email domain), source,
+    confidence.  Returns {} if nothing reliable found.
     """
     name = (company.company_name or "").strip()
     city = (company.primary_city or "").strip()
     if not name:
         return {}
 
-    queries = []
+    # Most-specific single query: `"Exact Name" City contact email`. Quoted
+    # name + "contact" keyword biases Brave toward the contact page snippet
+    # where emails live. Just one shot — no fallback second query.
     if city:
-        queries.append(f'"{name}" {city} email')
-        queries.append(f'{name} {city} contact email')
+        query = f'"{name}" {city} contact email'
     else:
-        queries.append(f'"{name}" email')
-        queries.append(f"{name} contact email")
+        query = f'"{name}" contact email'
 
-    all_candidates: list[str] = []
-    for q in queries[:2]:
-        all_candidates.extend(_emails_from_snippets(q, max_emails=10))
-        if all_candidates:
-            break  # first query already gave us something — don't burn DDG quota
-
-    if not all_candidates:
+    candidates = _emails_from_snippets(query, max_emails=10)
+    if not candidates:
         return {}
 
-    # Dedupe preserving order
-    seen: set[str] = set()
-    unique = [e for e in all_candidates if not (e in seen or seen.add(e))]
-
-    best = _rank_snippet_emails(unique, company)
+    best = _rank_snippet_emails(candidates, company)
     if not best:
         return {}
 
@@ -513,42 +507,17 @@ def find_website_for_kvk_company(company: KvkCompany) -> dict[str, str]:
 
 def enrich_kvk_company_full(session: Session, company: KvkCompany) -> None:
     """
-    Full pipeline:
-    0. Fast snippet search — pulls emails directly from DDG/Google result
-       snippets (often returns `info@<domain>` in <2s without crawling)
-    1. Find website if missing (Places API or DuckDuckGo)
-    2. Scrape email + phone from website (Playwright)
-    3. MX-validated `info@<domain>` fallback if no email found
-    4. Re-run customer matching, update enrichment_status
+    Full pipeline (ordered cheapest → most expensive):
+    1. Find website (Places API → DuckDuckGo) — free except $0.032/Places call
+    2. Scrape email from website via Playwright — free
+    3. MX-validated `info@<domain>` guess — free
+    4. LAST RESORT: paid snippet search (Brave) — only when stages 1-3
+       couldn't resolve the record AND we have no website at all
+    5. Re-run customer matching, update enrichment_status
     """
     from app.discovery import discover_contacts_for_kvk_company
 
     company.last_enrichment_attempt_at = datetime.now(tz=timezone.utc)
-
-    # ── Step 0: Fast email pull from search snippets ────────────────────────
-    # Mirror the manual workflow: Google/DDG `"company name" city email`
-    # very often shows the email right in the meta-description snippet —
-    # no crawl needed. Try this FIRST so we skip the slow Playwright
-    # pipeline whenever possible.
-    if not (company.email_public or "").strip():
-        try:
-            snippet = _snippet_email_lookup(company)
-            if snippet.get("email"):
-                company.email_public = snippet["email"]
-                company.email_source_url = snippet.get("source", "search_snippet")
-                company.email_confidence = snippet.get("confidence", "high")
-                # Adopt website from the email domain if we don't have one
-                if not company.website:
-                    derived = snippet.get("website", "")
-                    if derived:
-                        company.website = derived
-                        company.website_domain = snippet.get("website_domain", "")
-                company.enrichment_status = "discovered"
-                apply_kvk_matching(session, company)
-                session.commit()
-                return  # Found email fast — done.
-        except Exception:
-            pass
 
     # Step 1: find website if missing — Google Places (name+address) → DDG fallback
     if not company.website:
@@ -614,6 +583,31 @@ def enrich_kvk_company_full(session: Session, company: KvkCompany) -> None:
         company.enrichment_status = "no_website"
         apply_kvk_matching(session, company)
         session.commit()
+
+    # ── Step 4 (LAST RESORT): paid snippet search ───────────────────────────
+    # Fires ONLY when the free stages couldn't get us anything — i.e. we
+    # have no website AND no email after Places + DDG + Playwright + MX.
+    # Skipping records that already have a website (where MX-guess works
+    # for free) keeps Brave usage to roughly 1 query per truly-hard
+    # record. For 3990 KVK records this caps cost around $2-5.
+    has_email = bool((company.email_public or "").strip())
+    has_website = bool((company.website or "").strip())
+    if not has_email and not has_website:
+        try:
+            snippet = _snippet_email_lookup(company)
+            if snippet.get("email"):
+                company.email_public = snippet["email"]
+                company.email_source_url = snippet.get("source", "search_snippet")
+                company.email_confidence = snippet.get("confidence", "high")
+                derived = snippet.get("website", "")
+                if derived:
+                    company.website = derived
+                    company.website_domain = snippet.get("website_domain", "")
+                company.enrichment_status = "discovered"
+                apply_kvk_matching(session, company)
+                session.commit()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -847,10 +841,12 @@ def get_enrichment_progress(db) -> dict:
     except Exception:
         cse_on = False
     try:
-        from app.brave_search import is_enabled as _brave_enabled
+        from app.brave_search import is_enabled as _brave_enabled, get_brave_usage
         brave_on = _brave_enabled()
+        brave_usage = get_brave_usage()
     except Exception:
         brave_on = False
+        brave_usage = {"used_today": 0, "daily_limit": 0, "remaining": 0}
     return {
         "total": total,
         "pending": pending,
@@ -861,6 +857,7 @@ def get_enrichment_progress(db) -> dict:
         "pct": pct,
         "active": _scheduler_started,
         "brave_search_enabled": brave_on,
+        "brave_usage": brave_usage,
         "google_cse_enabled": cse_on,
         "google_places_enabled": bool(settings.google_places_api_key),
     }
