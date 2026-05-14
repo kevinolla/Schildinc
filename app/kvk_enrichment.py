@@ -121,15 +121,30 @@ def _filter_emails_from_text(text: str, max_emails: int = 10) -> list[str]:
 
 def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     """
-    Extract email addresses from search-engine result snippets. Tries
-    Google Custom Search JSON API first (rich snippets, often contain
-    the email directly in the meta-description) and falls back to
-    DuckDuckGo HTML scraping if CSE isn't configured or returned nothing.
+    Extract email addresses from search-engine result snippets.
+
+    Tries three backends in order of snippet quality:
+      A. Brave Search API (rich snippets, paid but cheap, 2K free/mo)
+      B. Google CSE (rich snippets, but Google deprecated the "search
+         entire web" toggle for new engines — only useful if user
+         configured one before May 2026)
+      C. DuckDuckGo HTML scrape (free, sparse snippets, last resort)
 
     Used as the first-stage email finder (before Playwright) in the KVK
     enrichment pipeline.
     """
-    # ── Source A: Google Custom Search (preferred — rich snippets) ─────────
+    # ── Source A: Brave Search (preferred — best snippets, no setup quirks)
+    try:
+        from app.brave_search import brave_snippet_text, is_enabled as _brave_on
+        if _brave_on():
+            text = brave_snippet_text(query, count=5)
+            emails = _filter_emails_from_text(text, max_emails=max_emails)
+            if emails:
+                return emails
+    except Exception:
+        pass
+
+    # ── Source B: Google Custom Search (only useful with legacy CSE) ──────
     try:
         from app.google_search import cse_snippet_text, is_enabled as _cse_on
         if _cse_on():
@@ -140,7 +155,7 @@ def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     except Exception:
         pass
 
-    # ── Source B: DuckDuckGo HTML (free fallback) ──────────────────────────
+    # ── Source C: DuckDuckGo HTML (free fallback) ──────────────────────────
     try:
         from html import unescape
         from urllib.parse import unquote
@@ -831,6 +846,11 @@ def get_enrichment_progress(db) -> dict:
         cse_on = _cse_enabled()
     except Exception:
         cse_on = False
+    try:
+        from app.brave_search import is_enabled as _brave_enabled
+        brave_on = _brave_enabled()
+    except Exception:
+        brave_on = False
     return {
         "total": total,
         "pending": pending,
@@ -840,6 +860,7 @@ def get_enrichment_progress(db) -> dict:
         "errors": errors,
         "pct": pct,
         "active": _scheduler_started,
+        "brave_search_enabled": brave_on,
         "google_cse_enabled": cse_on,
         "google_places_enabled": bool(settings.google_places_api_key),
     }

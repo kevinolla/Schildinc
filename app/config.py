@@ -34,6 +34,10 @@ class Settings:
     # https://programmablesearchengine.google.com/
     google_cse_api_key: str = os.getenv("GOOGLE_CSE_API_KEY", "")
     google_cse_cx: str = os.getenv("GOOGLE_CSE_CX", "")
+    # Brave Search API — used as primary Stage 0 source after Google
+    # deprecated their "Search the entire web" toggle for CSEs. Sign up at
+    # https://api.search.brave.com/  (2000 free queries/month).
+    brave_api_key: str = os.getenv("BRAVE_API_KEY", "")
     stripe_api_key: str = os.getenv("STRIPE_API_KEY", "")
     stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     klaviyo_private_api_key: str = os.getenv("KLAVIYO_PRIVATE_API_KEY", "")
