@@ -81,11 +81,16 @@ def brave_search(query: str, count: int = 5, country: str = "NL") -> list[dict[s
                 raw = gzip.decompress(raw)
             data = json.loads(raw.decode("utf-8", errors="replace"))
     except HTTPError as exc:
+        # Brave returns gzipped error bodies too — decompress before printing
         try:
-            body = exc.read().decode("utf-8", errors="replace")[:200]
+            raw_body = exc.read()
+            if exc.headers.get("Content-Encoding", "").lower() == "gzip":
+                import gzip
+                raw_body = gzip.decompress(raw_body)
+            body = raw_body.decode("utf-8", errors="replace")[:200]
         except Exception:
             body = ""
-        # 429 = rate limit, 403 = key invalid, 402 = quota. Don't crash.
+        # 402 = no active subscription, 403 = key invalid, 429 = rate limit
         print(f"[brave-search] HTTP {exc.code} for query={query!r}: {body}")
         return []
     except (URLError, TimeoutError, Exception):
