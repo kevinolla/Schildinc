@@ -45,6 +45,13 @@ _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _cap_lock = threading.Lock()
 _cap_state = {"date": None, "count": 0}
 
+# Circuit breaker: after N consecutive 402/403 errors we assume the
+# subscription is over budget or revoked and stop calling the API until
+# next UTC day. Stops the log spam and saves the latency cost of every
+# `_emails_from_snippets` round-tripping a doomed request.
+_BRAVE_BREAKER_TRIP_AT = 5
+_breaker_state = {"date": None, "consecutive_402": 0, "tripped": False}
+
 
 def _check_and_increment_cap() -> bool:
     """
@@ -65,7 +72,7 @@ def _check_and_increment_cap() -> bool:
         return True
 
 
-def get_brave_usage() -> dict[str, int]:
+def get_brave_usage() -> dict[str, Any]:
     """Daily usage counter for visibility on the dashboard."""
     limit = max(0, getattr(settings, "brave_daily_limit", 500))
     with _cap_lock:
@@ -74,12 +81,57 @@ def get_brave_usage() -> dict[str, int]:
             count = 0
         else:
             count = _cap_state["count"]
-    return {"used_today": count, "daily_limit": limit, "remaining": max(0, limit - count)}
+        tripped = (
+            _breaker_state["date"] == today and _breaker_state["tripped"]
+        )
+    return {
+        "used_today": count,
+        "daily_limit": limit,
+        "remaining": max(0, limit - count),
+        "circuit_breaker_tripped": tripped,
+    }
+
+
+def _record_402(query: str) -> None:
+    """Track consecutive 402/403 errors; trip the breaker at threshold."""
+    today = datetime.now(tz=timezone.utc).date()
+    with _cap_lock:
+        if _breaker_state["date"] != today:
+            _breaker_state["date"] = today
+            _breaker_state["consecutive_402"] = 0
+            _breaker_state["tripped"] = False
+        _breaker_state["consecutive_402"] += 1
+        if _breaker_state["consecutive_402"] >= _BRAVE_BREAKER_TRIP_AT and not _breaker_state["tripped"]:
+            _breaker_state["tripped"] = True
+            print(
+                f"[brave-search] CIRCUIT BREAKER TRIPPED after "
+                f"{_breaker_state['consecutive_402']} consecutive 402s — "
+                f"disabling Brave for the rest of today (UTC). Resets at midnight."
+            )
+
+
+def _record_success() -> None:
+    """A successful call resets the consecutive-error counter."""
+    with _cap_lock:
+        _breaker_state["consecutive_402"] = 0
+
+
+def _is_breaker_tripped() -> bool:
+    """True when Brave should be skipped because credit is exhausted."""
+    today = datetime.now(tz=timezone.utc).date()
+    with _cap_lock:
+        if _breaker_state["date"] != today:
+            return False
+        return bool(_breaker_state["tripped"])
 
 
 def is_enabled() -> bool:
-    """True when an API key is configured."""
-    return bool(getattr(settings, "brave_api_key", ""))
+    """True when an API key is configured AND breaker hasn't tripped."""
+    if not getattr(settings, "brave_api_key", ""):
+        return False
+    if _is_breaker_tripped():
+        return False
+    return True
 
 
 def brave_search(query: str, count: int = 5, country: str = "NL") -> list[dict[str, Any]]:
@@ -139,11 +191,17 @@ def brave_search(query: str, count: int = 5, country: str = "NL") -> list[dict[s
             body = ""
         # 402 = no active subscription, 403 = key invalid, 429 = rate limit
         print(f"[brave-search] HTTP {exc.code} for query={query!r}: {body}")
+        # 402/403 = budget/auth issue. Trip the breaker so we stop hitting
+        # the API for the rest of the day (saves latency and log spam).
+        if exc.code in (402, 403):
+            _record_402(query)
         return []
     except (URLError, TimeoutError, Exception):
         return []
 
     web = (data.get("web") or {}).get("results") or []
+    if web:
+        _record_success()
     return list(web)
 
 
