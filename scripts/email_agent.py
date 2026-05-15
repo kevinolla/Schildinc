@@ -75,16 +75,16 @@ def auth_header() -> dict[str, str]:
     return {"Authorization": "Basic " + b64encode(raw).decode()}
 
 
-def api_get(path: str, params: dict[str, Any] | None = None) -> Any:
+def api_get(path: str, params: dict[str, Any] | None = None, timeout: int = 45) -> Any:
     url = f"{API_BASE}{path}"
     if params:
         url += "?" + urlencode(params)
     req = Request(url, headers=auth_header())
-    with urlopen(req, timeout=15) as resp:
+    with urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def api_post(path: str, data: dict[str, str]) -> Any:
+def api_post(path: str, data: dict[str, str], timeout: int = 45) -> Any:
     body = urlencode(data).encode()
     req = Request(
         f"{API_BASE}{path}",
@@ -93,7 +93,7 @@ def api_post(path: str, data: dict[str, str]) -> Any:
         headers={**auth_header(), "Content-Type": "application/x-www-form-urlencoded"},
     )
     try:
-        with urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except HTTPError as exc:
         return {"ok": False, "error": f"HTTP {exc.code}", "body": exc.read().decode("utf-8", errors="replace")[:200]}
