@@ -84,12 +84,12 @@ def bing_search_html(query: str, count: int = 10, market: str = "nl-NL") -> str:
         with urlopen(req, timeout=8) as resp:
             raw = resp.read()
             html = raw.decode("utf-8", errors="replace")
-            # Bing returns ~5KB pages when it serves a captcha / interstitial
-            # rather than real results — detect that and log it so we know
-            # the cloud IP got flagged.
-            if len(html) < 8000 or "b_algo" not in html:
-                snippet = html[:200].replace("\n", " ")
-                print(f"[bing-search] Suspicious response (len={len(html)}) for query={query!r}: {snippet}")
+            # From cloud-host IPs Bing serves a JS-driven results layout
+            # without any inline snippets — the b_algo blocks only show
+            # up after client-side render. If we detect that pattern,
+            # quietly give up (caller falls through to next source).
+            if "b_algo" not in html:
+                return ""
             return html
     except HTTPError as exc:
         # 429 / 403 means Bing flagged the request. Don't crash — caller
