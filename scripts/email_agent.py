@@ -72,6 +72,26 @@ REJECT_DOMAINS = {
 GENERIC_LOCALS = {"info", "contact", "hello", "sales", "verkoop", "winkel",
                   "shop", "klantenservice", "office"}
 
+# ── Phone / WhatsApp / Social regex ─────────────────────────────────────────
+# Dutch phones come in many shapes: 0612345678, 020-1234567, +31 6 12 34 56 78
+# Match anything with the right digit count after stripping spaces/punct.
+PHONE_RE = re.compile(
+    r"(?:\+?31[\s\-\.]?|0)(?:\d[\s\-\.]?){8,10}\d"
+)
+# WhatsApp URLs (wa.me, api.whatsapp.com) — caller phone is in the URL
+WHATSAPP_URL_RE = re.compile(
+    r"https?://(?:wa\.me/\+?\d[\d\-]{6,}|api\.whatsapp\.com/send\?[^\s\"'<>]+)",
+    re.I,
+)
+INSTAGRAM_URL_RE = re.compile(
+    r"https?://(?:www\.)?instagram\.com/(?!p/|reel/|stories/|explore/|accounts/|share/)([A-Za-z0-9._\-]+)/?",
+    re.I,
+)
+LINKEDIN_URL_RE = re.compile(
+    r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/(?:company|in|showcase|school)/[A-Za-z0-9._\-%]+",
+    re.I,
+)
+
 
 def auth_header() -> dict[str, str]:
     raw = f"{USERNAME}:{PASSWORD}".encode()
@@ -320,6 +340,81 @@ def _collect_text_from_page(page) -> str:
     return " ".join(parts)
 
 
+def _normalize_phone(raw: str) -> str:
+    """Normalize a Dutch phone string. Returns '' if it doesn't look real."""
+    if not raw:
+        return ""
+    digits = re.sub(r"[^\d+]", "", raw)
+    # Reject too short / too long
+    if not digits:
+        return ""
+    # Accept +31xxxxxxxxx or 0xxxxxxxxx with 9-10 trailing digits
+    if digits.startswith("+31"):
+        return digits if 11 <= len(digits) <= 13 else ""
+    if digits.startswith("31") and len(digits) in (11, 12):
+        return "+" + digits
+    if digits.startswith("0") and 10 <= len(digits) <= 11:
+        return digits
+    return ""
+
+
+def _extract_phone(text: str) -> str:
+    """Find the first plausible Dutch phone number in text."""
+    if not text:
+        return ""
+    for m in PHONE_RE.finditer(text):
+        normalized = _normalize_phone(m.group(0))
+        if normalized:
+            return normalized
+    return ""
+
+
+def _extract_whatsapp(text: str) -> tuple[str, str]:
+    """
+    Find first WhatsApp URL + extract the embedded phone.
+    Returns (number, url), either may be empty.
+    """
+    if not text:
+        return "", ""
+    m = WHATSAPP_URL_RE.search(text)
+    if not m:
+        return "", ""
+    url = m.group(0).strip(".,;'\")")
+    # Extract phone from wa.me/<phone> or api.whatsapp.com/send?phone=<phone>
+    num = ""
+    wa_phone = re.search(r"wa\.me/\+?(\d{8,})", url)
+    if wa_phone:
+        num = "+" + wa_phone.group(1)
+    else:
+        api_phone = re.search(r"[?&]phone=\+?(\d{8,})", url)
+        if api_phone:
+            num = "+" + api_phone.group(1)
+    return num, url
+
+
+def _extract_instagram(text: str) -> str:
+    """First Instagram profile URL (excludes posts/reels/stories)."""
+    if not text:
+        return ""
+    m = INSTAGRAM_URL_RE.search(text)
+    if not m:
+        return ""
+    handle = m.group(1).strip("._-").lower()
+    if not handle or handle in {"explore", "accounts", "p", "reel", "stories", "share"}:
+        return ""
+    return f"https://www.instagram.com/{handle}/"
+
+
+def _extract_linkedin(text: str) -> str:
+    """First LinkedIn company / person / school URL."""
+    if not text:
+        return ""
+    m = LINKEDIN_URL_RE.search(text)
+    if not m:
+        return ""
+    return m.group(0).strip(".,;'\")")
+
+
 def _attempt_extract(page, company_name: str) -> tuple[str, str, list[str], str]:
     """One extraction pass. Returns (best_email, website, all_candidates, full_text)."""
     full_text = _collect_text_from_page(page)
@@ -332,44 +427,50 @@ def _attempt_extract(page, company_name: str) -> tuple[str, str, list[str], str]
     return best, website, candidates, full_text
 
 
-def search_one(page, company_name: str, city: str, debug: bool = False) -> tuple[str, str]:
-    """
-    Open Google in the Playwright page, search "{name}" {city} email,
-    return (email, source_url).
+def _empty_result() -> dict:
+    """Default empty result dict."""
+    return {
+        "email": "", "website": "", "phone": "",
+        "whatsapp_number": "", "whatsapp_url": "",
+        "instagram_url": "", "linkedin_url": "",
+    }
 
-    Aggressively waits for late-rendered content (AI Overview takes
-    several seconds to appear after initial load) and polls the page
-    multiple times in case more results stream in.
 
-    Returns:
-      (email, website_url) — match found
-      ("", "")             — searched OK but no email in snippet
-      (CAPTCHA_BLOCKED, "")— Google challenged us; caller should pause
+def search_one(page, company_name: str, city: str, debug: bool = False) -> dict | str:
     """
-    query = f'"{company_name}" {city} email'.strip()
+    Open Google in the Playwright page, search "{name}" {city} contact,
+    return a dict with everything we could extract:
+      {email, website, phone, whatsapp_number, whatsapp_url,
+       instagram_url, linkedin_url}
+
+    Returns CAPTCHA_BLOCKED (the string) when Google challenges us;
+    caller should pause for the user.
+
+    Empty strings for fields nothing was found. The query asks for
+    'contact' instead of just 'email' so Google surfaces the
+    Knowledge Panel which often shows phone + socials too.
+    """
+    # Broader query — 'contact' surfaces Knowledge Panel with all channels
+    query = f'"{company_name}" {city} contact'.strip()
     url = "https://www.google.com/search?q=" + urlencode({"q": query})[2:]
+    result = _empty_result()
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=20000)
         if is_captcha_page(page):
-            return CAPTCHA_BLOCKED, ""
+            return CAPTCHA_BLOCKED
 
-        # Wait for main results container
         try:
             page.wait_for_selector("div#search, div#rso, div#main", timeout=8000)
         except Exception:
             pass
-        # Wait for network quiet — AI Overview loads via XHR after this
         try:
             page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:
             pass
-
         if is_captcha_page(page):
-            return CAPTCHA_BLOCKED, ""
+            return CAPTCHA_BLOCKED
 
-        # Trigger lazy-loaded widgets (AI Overview, "More results"
-        # cards, Knowledge Panel) by scrolling down — Google won't
-        # render them for a "user" who never moved the page.
+        # Trigger lazy widgets via scroll
         try:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
             page.wait_for_timeout(1200)
@@ -378,33 +479,45 @@ def search_one(page, company_name: str, city: str, debug: bool = False) -> tuple
         except Exception:
             pass
 
-        # Multi-pass extraction: try every 1.5s up to 4 times so AI
-        # Overview / Knowledge Panel content that streams in late still
-        # gets captured. Stop early on the first valid match.
-        best, website, candidates, full_text = "", "", [], ""
-        for attempt in range(4):
-            best, website, candidates, full_text = _attempt_extract(page, company_name)
-            if best:
-                return best, website
+        # Multi-pass: AI Overview / Knowledge Panel content trickles in
+        best_email, website, candidates, full_text = "", "", [], ""
+        for _ in range(4):
+            best_email, website, candidates, full_text = _attempt_extract(page, company_name)
+            # Extract all other channels every pass — early-stop only on email
+            if best_email and full_text:
+                break
             try:
                 page.wait_for_timeout(1500)
             except Exception:
                 break
 
-        # Nothing found after 4 polls + scroll
-        if debug:
+        # Make sure we have full_text even if early-broke without it
+        if not full_text:
+            try:
+                full_text = _collect_text_from_page(page)
+            except Exception:
+                full_text = ""
+
+        # Pull every contact channel we can find
+        result["email"] = best_email
+        result["website"] = website
+        result["phone"] = _extract_phone(full_text)
+        wa_num, wa_url = _extract_whatsapp(full_text)
+        result["whatsapp_number"] = wa_num
+        result["whatsapp_url"] = wa_url
+        result["instagram_url"] = _extract_instagram(full_text)
+        result["linkedin_url"] = _extract_linkedin(full_text)
+
+        if debug and not any(result.values()):
             sample = full_text[:800].replace("\n", " ")
             print()
-            print(f"     DEBUG (no email found). Page text sample (first 800 chars):")
+            print(f"     DEBUG (no contacts found). Page text sample (first 800 chars):")
             print(f"     {sample!r}")
-            if candidates:
-                print(f"     Raw candidates that didn't pass ranking: {candidates[:8]}")
-            else:
-                print(f"     No emails matched in extracted text at all.")
-        return "", ""
+
+        return result
     except Exception as exc:
         print(f"  ! search error: {exc}")
-        return "", ""
+        return result
 
 
 def prompt_manual_email(company_name: str, city: str) -> str:
@@ -510,73 +623,94 @@ def main() -> int:
                     # for the user, then retrying the SAME record once.
                     captcha_retries_left = 1
                     skipped_due_to_captcha = False
-                    email, website = "", ""
+                    extract: dict = _empty_result()
                     while True:
-                        email, website = search_one(page, name, city, debug=args.debug)
-                        if email == CAPTCHA_BLOCKED:
+                        out = search_one(page, name, city, debug=args.debug)
+                        if out == CAPTCHA_BLOCKED:
                             if captcha_retries_left <= 0:
-                                # Give up on this record without poisoning it —
-                                # leaves status alone so it stays in /agent/pending
                                 if not args.quiet:
                                     print("⚠ still blocked, skipping (record left pending)")
                                 captcha_count += 1
                                 skipped_due_to_captcha = True
-                                email, website = "", ""
                                 break
                             captcha_retries_left -= 1
-                            print()  # break the trailing "…"
+                            print()
                             wait_for_human(page, label=f"Google CAPTCHA on #{cid} {name}")
                             print(f"  retrying #{cid} {name} … ", end="", flush=True)
                             continue
+                        extract = out  # type: ignore[assignment]
                         break
 
                     processed += 1
 
                     if skipped_due_to_captcha:
-                        # Don't write back — record stays in /agent/pending for retry
                         time.sleep(args.delay)
                         continue
 
-                    # Interactive fallback: if extraction missed but the
-                    # user CAN see an email in the visible Chrome window,
-                    # let them paste it. Confidence stays "high" since
-                    # they verified it personally.
+                    # Interactive fallback: if extraction missed email but
+                    # user can see one, paste it manually
                     manual_source = "browser_agent"
-                    if not email and args.interactive:
+                    if not extract["email"] and args.interactive:
                         print("✗ not auto-detected", end="", flush=True)
                         typed = prompt_manual_email(name, city)
                         if typed:
-                            email = typed
+                            extract["email"] = typed
                             _, _, dom = typed.partition("@")
-                            website = f"https://{dom}"
+                            extract["website"] = f"https://{dom}"
                             manual_source = "browser_agent_manual"
 
-                    if email:
-                        result = api_post("/api/kvk/agent/result", {
-                            "company_id": str(cid),
-                            "email": email,
-                            "website": website,
-                            "source": manual_source,
-                            "confidence": "high",
-                        })
-                        if result.get("ok"):
-                            found_count += 1
-                            tag = " (manual)" if manual_source.endswith("_manual") else ""
-                            if not args.quiet:
-                                print(f"✓ {email}{tag}")
-                        else:
-                            print(f"✗ save failed: {result}")
+                    found_any = any([
+                        extract["email"], extract["phone"],
+                        extract["whatsapp_number"], extract["whatsapp_url"],
+                        extract["instagram_url"], extract["linkedin_url"],
+                    ])
+
+                    # Always post — even an empty result marks the record
+                    # as "checked but nothing useful found"
+                    payload = {
+                        "company_id": str(cid),
+                        "email": extract["email"],
+                        "website": extract["website"],
+                        "phone": extract["phone"],
+                        "whatsapp_number": extract["whatsapp_number"],
+                        "whatsapp_url": extract["whatsapp_url"],
+                        "instagram_url": extract["instagram_url"],
+                        "linkedin_url": extract["linkedin_url"],
+                        "source": manual_source,
+                        "confidence": "high",
+                    }
+                    if not found_any:
+                        payload["note"] = "no_contacts_in_snippet"
+
+                    result = api_post("/api/kvk/agent/result", payload)
+
+                    if not result.get("ok"):
+                        print(f"  ✗ save failed: {result}")
+                        time.sleep(args.delay)
+                        continue
+
+                    # Format compact one-line summary of what we got
+                    bits = []
+                    if extract["email"]:
+                        tag = " (M)" if manual_source.endswith("_manual") else ""
+                        bits.append(f"📧 {extract['email']}{tag}")
+                    if extract["phone"]:
+                        bits.append(f"📞 {extract['phone']}")
+                    if extract["whatsapp_number"]:
+                        bits.append(f"💬 {extract['whatsapp_number']}")
+                    if extract["instagram_url"]:
+                        bits.append("📷")
+                    if extract["linkedin_url"]:
+                        bits.append("💼")
+
+                    if found_any:
+                        found_count += 1
+                        if not args.quiet:
+                            print("✓ " + "  ".join(bits))
                     else:
-                        # Mark as no-result so we don't re-process it next batch
-                        api_post("/api/kvk/agent/result", {
-                            "company_id": str(cid),
-                            "email": "",
-                            "source": "browser_agent",
-                            "note": "no_email_in_snippet",
-                        })
                         miss_count += 1
                         if not args.quiet:
-                            print("✗ not found")
+                            print("✗ nothing found")
 
                     time.sleep(args.delay)
 

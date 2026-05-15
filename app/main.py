@@ -1499,21 +1499,35 @@ def kvk_agent_result(
     company_id: int = Form(...),
     email: str = Form(""),
     website: str = Form(""),
+    phone: str = Form(""),
+    whatsapp_number: str = Form(""),
+    whatsapp_url: str = Form(""),
+    instagram_url: str = Form(""),
+    linkedin_url: str = Form(""),
     source: str = Form("browser_agent"),
     confidence: str = Form("high"),
     note: str = Form(""),
 ) -> JSONResponse:
     """
-    Save an email/website discovered by the local browser agent.
-    Empty `email` is allowed — the agent uses it to mark "not found"
-    so we don't keep handing the same record back to it.
+    Save email + any social/phone contacts discovered by the local
+    browser agent. Empty `email` is allowed and used to mark
+    "checked but nothing found" so we don't keep handing the same
+    record back to it. If the agent found ANY contact channel
+    (phone/WhatsApp/Instagram/LinkedIn even with no email) the record
+    flips to 'partial' instead of 'no_contacts'.
     """
     company = db.get(KvkCompany, company_id)
     if not company:
         return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
 
     company.last_enrichment_attempt_at = datetime.now(timezone.utc)
-    if email and "@" in email:
+
+    has_email = bool(email and "@" in email)
+    has_any_contact = bool(
+        has_email or phone or whatsapp_number or whatsapp_url or instagram_url or linkedin_url
+    )
+
+    if has_email:
         company.email_public = email.strip().lower()
         company.email_source_url = source
         company.email_confidence = confidence or "high"
@@ -1523,20 +1537,49 @@ def kvk_agent_result(
             company.website_domain = _nd(website)
         if not company.website_domain:
             company.website_domain = email.split("@", 1)[1]
+
+    # Social / phone — only overwrite when empty so a manual entry is
+    # never clobbered by an automated find.
+    if phone and not (company.phone_public or "").strip():
+        company.phone_public = phone.strip()
+        company.phone_source_url = source
+        company.phone_confidence = confidence or "high"
+    if whatsapp_number and not (company.whatsapp_number or "").strip():
+        company.whatsapp_number = whatsapp_number.strip()
+    if whatsapp_url and not (company.whatsapp_url or "").strip():
+        company.whatsapp_url = whatsapp_url.strip()
+    if instagram_url and not (company.instagram_url or "").strip():
+        company.instagram_url = instagram_url.strip()
+    if linkedin_url and not (company.linkedin_url or "").strip():
+        company.linkedin_url = linkedin_url.strip()
+
+    if note:
+        company.notes = ((company.notes or "") + " | agent: " + note).lstrip(" |")
+
+    if has_email:
         company.enrichment_status = "discovered"
-        if note:
-            company.notes = ((company.notes or "") + " | agent: " + note).lstrip(" |")
         from app.matching import apply_kvk_matching
         apply_kvk_matching(db, company)
+    elif has_any_contact:
+        # Found phone / socials but no email — keep it active for later
+        # email finds, don't flip to no_contacts
+        if company.enrichment_status not in ("discovered", "no_website"):
+            company.enrichment_status = "partial"
     else:
-        # Mark as agent-checked-with-no-result so it isn't re-queued forever
         if company.enrichment_status not in ("discovered", "no_website"):
             company.enrichment_status = "no_contacts"
-        if note:
-            company.notes = ((company.notes or "") + " | agent: " + note).lstrip(" |")
 
     db.commit()
-    return JSONResponse({"ok": True, "id": company.id, "email": company.email_public, "status": company.enrichment_status})
+    return JSONResponse({
+        "ok": True,
+        "id": company.id,
+        "email": company.email_public,
+        "phone": company.phone_public,
+        "whatsapp": company.whatsapp_number,
+        "instagram": company.instagram_url,
+        "linkedin": company.linkedin_url,
+        "status": company.enrichment_status,
+    })
 
 
 # -- CSV export --

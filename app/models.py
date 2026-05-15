@@ -304,6 +304,13 @@ class KvkCompany(Base):
     email_confidence: Mapped[str] = mapped_column(Text, default="")
     phone_confidence: Mapped[str] = mapped_column(Text, default="")
 
+    # Populated by the local browser agent (scripts/email_agent.py) when
+    # it scrapes Google results — same shape as Prospect's social fields.
+    whatsapp_number: Mapped[str] = mapped_column(Text, default="")
+    whatsapp_url: Mapped[str] = mapped_column(Text, default="")
+    instagram_url: Mapped[str] = mapped_column(Text, default="")
+    linkedin_url: Mapped[str] = mapped_column(Text, default="")
+
     enrichment_status: Mapped[str] = mapped_column(Text, default="pending", index=True)
     google_maps_query: Mapped[str] = mapped_column(Text, default="")
     contact_search_query: Mapped[str] = mapped_column(Text, default="")
