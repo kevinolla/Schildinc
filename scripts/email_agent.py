@@ -522,31 +522,36 @@ def search_one(page, company_name: str, city: str, debug: bool = False) -> dict 
     """
     result = _empty_result()
 
-    # Run ALL targeted queries every record — no per-channel skip. Each
-    # query's keyword steers Google toward a different snippet pattern,
-    # so even when the email query already filled some fields, the
-    # follow-ups regularly surface phones / socials we'd otherwise miss.
-    base = f'"{company_name}" {city}'.strip()
-    plan = [
-        f'{base} email',                  # contact pages with email
-        f'{base} telefoon contact',       # NL "telephone" — Knowledge Panel
-        f'{base} instagram',              # IG profile
-        f'{base} linkedin',               # LI page
-    ]
+    # ── SMART SINGLE-QUERY MODE ──────────────────────────────────────────
+    # One Google search per record with a multi-channel keyword query.
+    # This biases Google toward results that mention multiple channels,
+    # which is exactly what a business's Knowledge Panel + contact page
+    # snippet contain. The extractors run over the full rendered page
+    # (innerText + shadow DOM + iframes + anchor hrefs), so one rich
+    # snippet often yields email + phone + IG + LinkedIn at once.
+    #
+    # 4x faster than the per-channel mode; only marginally lower hit
+    # rate on the harder channels (Instagram, LinkedIn) in practice.
+    query = f'"{company_name}" {city} email telefoon contact instagram linkedin'.strip()
 
-    last_text = ""
-    for query in plan:
-        text, status = _do_google_query(page, query)
-        if status == "captcha":
-            return CAPTCHA_BLOCKED
-        last_text = text or last_text
-        if text:
-            # _merge_extracted is no-clobber — it fills empty fields
-            # while leaving already-found values untouched. So running
-            # every query unconditionally still yields the same data
-            # as the first hit for each channel; we just see more of
-            # the channels light up.
-            _merge_extracted(result, text, company_name)
+    text, status = _do_google_query(page, query)
+    if status == "captcha":
+        return CAPTCHA_BLOCKED
+    last_text = text
+    if text:
+        _merge_extracted(result, text, company_name)
+
+    # Second pass on the same page — Knowledge Panel + AI Overview
+    # sometimes finish rendering after the first extraction. Cheap
+    # since there's no new navigation.
+    try:
+        page.wait_for_timeout(1200)
+        text2 = _collect_text_from_page(page)
+        if text2:
+            _merge_extracted(result, text2, company_name)
+            last_text = text2
+    except Exception:
+        pass
 
     if debug and not any(result.values()):
         sample = (last_text or "")[:800].replace("\n", " ")
