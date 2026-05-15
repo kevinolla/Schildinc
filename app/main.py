@@ -492,12 +492,135 @@ def dashboard(request: Request, db: Session = Depends(get_db), _: str = Depends(
 
 
 @app.get("/customers", response_class=HTMLResponse)
-def customers_page(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
-    customers = db.scalars(select(Customer).order_by(Customer.updated_at.desc()).limit(100)).all()
+def customers_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    page: int = 1,
+    per_page: int = 50,
+    search: str = "",
+    match: str = "",
+) -> HTMLResponse:
+    """
+    Paginated customers list with KVK + Prospect match status per row.
+
+    For each customer on the visible page, we check whether they appear
+    in the KVK or Prospect tables — matched by primary email OR by
+    canonical_company_name_clean. The result is one of:
+      - 'kvk_only'        → already in KVK, no prospect
+      - 'prospect_only'   → already in prospects, no KVK
+      - 'kvk_and_prospect'→ in both
+      - 'new'             → not in either (this customer hasn't been
+                            cross-referenced — treat as a new lead)
+    Showing this lets the user audit gaps in coverage.
+    """
+    page = max(1, page)
+    per_page = max(10, min(200, per_page))
+
+    base = select(Customer)
+    if search:
+        like = f"%{search.lower()}%"
+        base = base.where(
+            or_(
+                func.lower(Customer.canonical_company_name).like(like),
+                func.lower(Customer.customer_email_primary).like(like),
+                func.lower(Customer.website_domain_candidate).like(like),
+                func.lower(Customer.match_key_domain).like(like),
+                func.lower(Customer.city).like(like),
+            )
+        )
+
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+
+    customers = db.scalars(
+        base.order_by(Customer.lifetime_amount_paid.desc().nullslast(), Customer.updated_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    ).all()
+
+    # ── Cross-reference batch: one query each to KVK and Prospects ───────
+    # Compare on BOTH email and clean company name. Email match is stronger
+    # (a unique identifier); name match is the fallback when emails diverge.
+    emails = {(c.customer_email_primary or "").lower() for c in customers if c.customer_email_primary}
+    names = {(c.canonical_company_name_clean or "").lower() for c in customers if c.canonical_company_name_clean}
+
+    kvk_by_email: dict[str, KvkCompany] = {}
+    kvk_by_name: dict[str, KvkCompany] = {}
+    prospect_by_email: dict[str, Prospect] = {}
+    prospect_by_name: dict[str, Prospect] = {}
+
+    if emails:
+        for k in db.scalars(select(KvkCompany).where(func.lower(KvkCompany.email_public).in_(emails))).all():
+            kvk_by_email[(k.email_public or "").lower()] = k
+        for p in db.scalars(select(Prospect).where(func.lower(Prospect.email).in_(emails))).all():
+            prospect_by_email[(p.email or "").lower()] = p
+    if names:
+        for k in db.scalars(select(KvkCompany).where(func.lower(KvkCompany.canonical_company_name_clean).in_(names))).all():
+            kvk_by_name[(k.canonical_company_name_clean or "").lower()] = k
+        for p in db.scalars(select(Prospect).where(func.lower(Prospect.canonical_company_name_clean).in_(names))).all():
+            prospect_by_name[(p.canonical_company_name_clean or "").lower()] = p
+
+    enriched: list[dict] = []
+    for c in customers:
+        email_lc = (c.customer_email_primary or "").lower()
+        name_lc = (c.canonical_company_name_clean or "").lower()
+
+        kvk = kvk_by_email.get(email_lc) or (kvk_by_name.get(name_lc) if name_lc else None)
+        prospect = prospect_by_email.get(email_lc) or (prospect_by_name.get(name_lc) if name_lc else None)
+
+        if kvk and prospect:
+            status = "kvk_and_prospect"
+        elif kvk:
+            status = "kvk_only"
+        elif prospect:
+            status = "prospect_only"
+        else:
+            status = "new"
+
+        # Why did we match? Helps the user audit
+        why = []
+        if kvk and email_lc and (kvk.email_public or "").lower() == email_lc:
+            why.append("kvk:email")
+        elif kvk and name_lc:
+            why.append("kvk:name")
+        if prospect and email_lc and (prospect.email or "").lower() == email_lc:
+            why.append("prospect:email")
+        elif prospect and name_lc:
+            why.append("prospect:name")
+
+        enriched.append({
+            "customer": c,
+            "status": status,
+            "kvk": kvk,
+            "prospect": prospect,
+            "match_reason": ", ".join(why) if why else "no_match",
+        })
+
+    # Filter by match status if requested (post-query — small enough to be cheap)
+    if match in ("kvk_only", "prospect_only", "kvk_and_prospect", "new"):
+        enriched = [row for row in enriched if row["status"] == match]
+
+    # Summary counts across ALL customers (cheap aggregate queries)
+    customer_total = db.scalar(select(func.count(Customer.id))) or 0
+
     return templates.TemplateResponse(
         request,
         "customers.html",
-        {"request": request, "customers": customers, "app_name": settings.app_name},
+        {
+            "request": request,
+            "rows": enriched,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages,
+            "total": total,
+            "customer_total": customer_total,
+            "search": search,
+            "match": match,
+            "app_name": settings.app_name,
+        },
     )
 
 

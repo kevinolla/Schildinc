@@ -1,32 +1,138 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card table-card">
-  <h2>Customers</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Company</th>
-        <th>Primary email</th>
-        <th>Domain</th>
-        <th>City</th>
-        <th>Country</th>
-        <th>Invoices</th>
-        <th>Lifetime paid</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for customer in customers %}
-      <tr>
-        <td>{{ customer.canonical_company_name }}</td>
-        <td>{{ customer.customer_email_primary }}</td>
-        <td>{{ customer.website_domain_candidate or customer.match_key_domain }}</td>
-        <td>{{ customer.city }}</td>
-        <td>{{ customer.country_code }}</td>
-        <td>{{ customer.invoice_count }}</td>
-        <td>{{ customer.lifetime_amount_paid }}</td>
-      </tr>
+
+<div class="page-header">
+  <div>
+    <h2>Customers</h2>
+    <p class="page-subtitle">
+      {{ total }} match{{ '' if total == 1 else 'es' }} of {{ customer_total }} total
+      &middot; cross-referenced against KVK and Prospects by email + name
+    </p>
+  </div>
+  <div class="page-actions">
+    <a href="/customers" class="btn btn-ghost btn-sm">Reset</a>
+  </div>
+</div>
+
+<!-- Search + filters -->
+<form method="get" action="/customers" class="filter-bar">
+  <div class="filter-form" style="grid-template-columns: minmax(240px, 2fr) minmax(150px, 1fr) minmax(120px, auto) auto;">
+    <input type="text" name="search" value="{{ search }}"
+           placeholder="Search company, email, domain, city…" class="search-input">
+    <select name="match">
+      <option value="" {% if not match %}selected{% endif %}>All match types</option>
+      <option value="new" {% if match == 'new' %}selected{% endif %}>🆕 New (not in KVK or Prospects)</option>
+      <option value="kvk_only" {% if match == 'kvk_only' %}selected{% endif %}>🟢 In KVK only</option>
+      <option value="prospect_only" {% if match == 'prospect_only' %}selected{% endif %}>🔵 In Prospects only</option>
+      <option value="kvk_and_prospect" {% if match == 'kvk_and_prospect' %}selected{% endif %}>✅ In both</option>
+    </select>
+    <select name="per_page">
+      {% for size in [25, 50, 100, 200] %}
+      <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}/page</option>
       {% endfor %}
-    </tbody>
-  </table>
-</section>
+    </select>
+    <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+  </div>
+</form>
+
+{% if rows %}
+<div class="card table-card prospects-table-card">
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Company</th>
+          <th>Primary email</th>
+          <th>City</th>
+          <th>Invoices</th>
+          <th>Lifetime paid</th>
+          <th>KVK / Prospect match</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set c = row.customer %}
+        <tr>
+          <td style="min-width:200px">
+            <div class="company-link" title="{{ c.full_address or '' }}">{{ c.canonical_company_name }}</div>
+            {% if c.website_domain_candidate or c.match_key_domain %}
+            <div class="muted" style="font-size:.8rem">{{ c.website_domain_candidate or c.match_key_domain }}</div>
+            {% endif %}
+          </td>
+          <td style="font-size:.82rem">
+            {{ c.customer_email_primary or '—' }}
+          </td>
+          <td class="text-muted" style="font-size:.85rem">
+            {{ c.city or '—' }}
+            {% if c.country_code %}<span style="color:#9ca3af">· {{ c.country_code }}</span>{% endif %}
+          </td>
+          <td style="text-align:right">{{ c.invoice_count or 0 }}</td>
+          <td style="text-align:right;font-weight:600">
+            {% if c.lifetime_amount_paid %}€{{ "%.0f"|format(c.lifetime_amount_paid|float) }}{% else %}—{% endif %}
+          </td>
+          <td style="font-size:.82rem">
+            {% if row.kvk %}
+            <a href="/kvk/{{ row.kvk.id }}" class="ext-link" title="View KVK record">
+              KVK: {{ row.kvk.company_name[:28] }}{% if row.kvk.company_name|length > 28 %}…{% endif %}
+            </a><br>
+            {% endif %}
+            {% if row.prospect %}
+            <a href="/prospects/{{ row.prospect.id }}" class="ext-link" title="View Prospect record">
+              Prospect: {{ row.prospect.company_name[:28] }}{% if row.prospect.company_name|length > 28 %}…{% endif %}
+            </a><br>
+            {% endif %}
+            {% if not row.kvk and not row.prospect %}
+            <span class="text-muted">—</span>
+            {% endif %}
+            <span class="muted" style="font-size:.72rem">{{ row.match_reason }}</span>
+          </td>
+          <td>
+            {% if row.status == 'kvk_and_prospect' %}
+            <span class="badge badge-green" title="In both KVK and Prospects">✅ Both</span>
+            {% elif row.status == 'kvk_only' %}
+            <span class="badge badge-blue" title="Found in KVK">🟢 KVK</span>
+            {% elif row.status == 'prospect_only' %}
+            <span class="badge badge-purple" title="Found in Prospects">🔵 Prospect</span>
+            {% else %}
+            <span class="badge badge-orange" title="Not found in KVK or Prospects — new lead">🆕 New</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% set base_qs = '' %}
+  {% if search %}{% set base_qs = base_qs + 'search=' + search + '&' %}{% endif %}
+  {% if match %}{% set base_qs = base_qs + 'match=' + match + '&' %}{% endif %}
+  {% set base_qs = base_qs + 'per_page=' + per_page|string %}
+
+  {% if page > 1 %}
+  <a href="?{{ base_qs }}&page=1" class="btn btn-ghost btn-sm">« First</a>
+  <a href="?{{ base_qs }}&page={{ page - 1 }}" class="btn btn-ghost btn-sm">‹ Previous</a>
+  {% endif %}
+
+  <span style="font-weight:500">Page {{ page }} / {{ total_pages }}</span>
+
+  {% if page < total_pages %}
+  <a href="?{{ base_qs }}&page={{ page + 1 }}" class="btn btn-ghost btn-sm">Next ›</a>
+  <a href="?{{ base_qs }}&page={{ total_pages }}" class="btn btn-ghost btn-sm">Last »</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <p style="font-size:1.1rem">No customers match the current filters.</p>
+  <p class="text-muted">Try widening the search or clear the filter.</p>
+  <a href="/customers" class="btn btn-primary btn-sm" style="margin-top:1rem">Clear filters</a>
+</div>
+{% endif %}
+
 {% endblock %}
