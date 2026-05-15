@@ -19,6 +19,7 @@
       <nav class="topnav">
         <a href="/"            {% if path == '/' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
         <a href="/customers"   {% if path.startswith('/customers') %}class="active" aria-current="page"{% endif %}>Customers</a>
+        <a href="/leads"       {% if path.startswith('/leads') %}class="active" aria-current="page"{% endif %}>Leads</a>
         <a href="/kvk"         {% if path.startswith('/kvk') %}class="active" aria-current="page"{% endif %}>KVK Bedrijven</a>
         <a href="/prospects"   {% if path.startswith('/prospects') %}class="active" aria-current="page"{% endif %}>Prospects</a>
         <a href="/queue"       {% if path.startswith('/queue') %}class="active" aria-current="page"{% endif %}>Queue</a>

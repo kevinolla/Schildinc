@@ -66,8 +66,13 @@ from app.utils import build_unsubscribe_token, normalize_domain, normalize_email
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start auto-enrichment background scheduler on startup
+    # Background schedulers — both daemons, idempotent
     start_auto_enrichment_scheduler()
+    try:
+        from app.facebook_leads import start_facebook_leads_scheduler
+        start_facebook_leads_scheduler()
+    except Exception as exc:
+        print(f"[lifespan] FB leads scheduler not started: {exc}")
     yield
 
 
@@ -749,29 +754,64 @@ def customers_analytics(
     )
 
 
-# ── Facebook Lead Ads import (from the team's Google Sheet) ────────────────
+# ── Leads (Facebook + historical CSV) ──────────────────────────────────────
 @app.post("/admin/facebook-leads/import")
+@app.post("/leads/sync")
 def facebook_leads_import(
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
 ) -> RedirectResponse:
-    """One-click pull from the Google Sheet, dedupes by fb_lead_id."""
+    """One-click pull from the live Google Sheet, dedupes by fb_lead_id."""
     from app.facebook_leads import import_facebook_leads
     try:
         summary = import_facebook_leads(db)
         flash = (
-            f"FB leads: {summary['inserted']} new, "
+            f"FB leads sync: {summary['inserted']} new, "
             f"{summary['updated']} updated, "
-            f"{summary['existing_customer_matches']} matched existing customers, "
+            f"{summary['existing_customer_matches']} matched customers, "
             f"{summary['known_prospect_matches']} matched KVK"
         )
     except Exception as exc:
         flash = f"FB import failed: {exc}"
-    return RedirectResponse(f"/customers/facebook-leads?flash={quote_plus(flash)}", status_code=303)
+    return RedirectResponse(f"/leads?flash={quote_plus(flash)}", status_code=303)
 
 
-@app.get("/customers/facebook-leads", response_class=HTMLResponse)
-def facebook_leads_page(
+@app.post("/leads/import-csv")
+async def leads_import_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    """
+    Upload the historical Marketing Lead CSV (or any FB Lead Ads-shaped CSV).
+    Streams + batch-commits so 50k+ row files don't blow memory.
+    """
+    from app.facebook_leads import import_facebook_leads_from_csv
+    try:
+        raw = await file.read()
+        # CSVs from Excel sometimes have a BOM — strip it
+        text = raw.decode("utf-8-sig", errors="replace")
+        summary = import_facebook_leads_from_csv(
+            db, text, source_url=f"upload:{file.filename}", batch_size=500
+        )
+        flash = (
+            f"CSV import ({file.filename}): {summary['inserted']} new, "
+            f"{summary['updated']} updated, {summary['skipped']} skipped"
+        )
+    except Exception as exc:
+        flash = f"CSV import failed: {exc}"
+    return RedirectResponse(f"/leads?flash={quote_plus(flash)}", status_code=303)
+
+
+# Top-level /leads route — also redirected from legacy /customers/facebook-leads
+@app.get("/customers/facebook-leads")
+def facebook_leads_legacy_redirect() -> RedirectResponse:
+    """Old URL kept alive for bookmarks."""
+    return RedirectResponse("/leads", status_code=308)
+
+
+@app.get("/leads", response_class=HTMLResponse)
+def leads_page(
     request: Request,
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
@@ -780,7 +820,7 @@ def facebook_leads_page(
     match: str = "",
     search: str = "",
 ) -> HTMLResponse:
-    """Paginated FB Lead Ads results with match status."""
+    """Top-level Leads inbox: every FB lead from the live sheet + historical CSV."""
     page = max(1, page)
     per_page = max(10, min(200, per_page))
 

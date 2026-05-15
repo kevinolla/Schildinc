@@ -1,40 +1,92 @@
 """
-Facebook Lead Ads Importer
-==========================
-Pulls leads from the team's Google Sheet (CSV export endpoint is public,
-no OAuth needed) and upserts them into `facebook_leads`. After import
-each row is cross-referenced against the existing `customers` and
-`kvk_companies` tables so we can tell apart:
+Facebook Lead Ads + Historical Marketing Lead CSV
+=================================================
+Two input shapes flow into the same `facebook_leads` table:
 
-  - 'existing_customer'  → email or company name already a paying customer
-  - 'known_prospect'     → already enriched in the KVK pipeline
-  - 'new'                → genuinely fresh lead — gets fed into prospects
+  A. The team's live Google Sheet (Lead Ads sync) — 20 columns,
+     industry-survey style. Pulled every N minutes by a background
+     scheduler.
+  B. The historical Marketing Lead CSV the team exported from FB —
+     34 columns with sales-side annotations (Quality Score, Progress,
+     PIC, Customer Segmentation, Total Amount of order, etc.).
 
-Run via the /admin/facebook-leads/import endpoint or directly from a
-shell with `python -m app.facebook_leads`.
+Both are upserted by `fb_lead_id`. The importer is column-name
+flexible so adding/removing survey questions in the sheet doesn't
+break the pipeline.
 """
 from __future__ import annotations
 
 import csv
 import io
+import re
+import threading
+import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 from urllib.request import Request, urlopen
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
+from app.db import SessionLocal
 from app.models import Customer, FacebookLead, KvkCompany
 
 
-# Public CSV-export URL of the team's spreadsheet (gid is the worksheet
-# tab id from the share URL). Change here if the spreadsheet ever moves.
+# Public CSV-export URL of the live Lead Ads sheet (no OAuth needed for
+# a sheet shared with "anyone with link can view").
 GOOGLE_SHEET_ID = "10k2UB3qefKvskF1YemikhVCPk0JI8xmScH2dj_I7h5g"
 GOOGLE_SHEET_GID = "1219149797"
 SHEET_CSV_URL = (
     f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}"
     f"/export?format=csv&gid={GOOGLE_SHEET_GID}"
 )
+
+
+# ── Column name aliases ────────────────────────────────────────────────────
+# Source CSVs use long question-style column names that drift over time
+# (and differ between the live sheet and the historical export). We
+# look up each model field against a list of candidate header names —
+# first match wins. New question wordings can be added here.
+_ALIAS: dict[str, list[str]] = {
+    "industry": [
+        "which_industry_best_describes_your_business?",
+        "which_industry_best_describes_your_business",
+        "industry",
+    ],
+    "estimated_order_size": [
+        # Live Lead Ads form
+        "the_moq_is_250_pieces._how_many_do_you_think_you'll_need?",
+        "the_moq_is_250_pieces._how_many_do_you_think_you_ll_need",
+        # Historical form
+        "estimate_your_annual_metal_label_requirements",
+        "estimated_order_size",
+    ],
+    "detailed_information": [
+        "Detailed Information",
+        "detailed_information",
+        "could_you_specify_your_product_and_how_you_intend_to_use_schild_inc's_metal_labels_on_it?",
+    ],
+    "country":               ["Country", "country"],
+    "email_quality":         ["Email Quality", "email_quality"],
+    "quality_score":         ["Quality Score", "quality_score"],
+    "leads_quality":         ["Leads Quality", "leads_quality"],
+    "progress":              ["Progress", "progress"],
+    "pic":                   ["PIC", "pic"],
+    "customer_segmentation": ["Customer Segmentation", "customer_segmentation"],
+    "total_order_amount":    ["Total Amount of order", "total_order_amount"],
+    "email_marketing_consent":["Email Marketing Consent", "email_marketing_consent"],
+    "lead_status":           ["lead_status", "Followup?"],
+}
+
+
+def _pick(row: dict[str, str], field: str) -> str:
+    """Look up a model field's value by trying every alias header."""
+    for header in _ALIAS.get(field, [field]):
+        val = row.get(header)
+        if val is not None and str(val).strip() != "":
+            return str(val).strip()
+    return ""
 
 
 def _fetch_sheet_csv() -> str:
@@ -48,7 +100,6 @@ def _parse_created_time(raw: str) -> datetime | None:
     if not raw:
         return None
     try:
-        # Python <3.11 needs the colon-in-offset normalized
         clean = raw.strip()
         if len(clean) >= 6 and clean[-3] == ":":
             clean = clean[:-3] + clean[-2:]
@@ -58,11 +109,7 @@ def _parse_created_time(raw: str) -> datetime | None:
 
 
 def _classify_lead(db: Session, lead: FacebookLead) -> str:
-    """
-    Cross-reference this lead against customers + KVK by email and by
-    company name. Returns 'existing_customer' / 'known_prospect' / 'new'.
-    Also sets matched_customer_id / matched_kvk_company_id when found.
-    """
+    """Cross-reference vs customers + KVK. Returns match_status."""
     email = (lead.email or "").strip().lower()
     company = (lead.company_name or "").strip().lower()
 
@@ -88,7 +135,6 @@ def _classify_lead(db: Session, lead: FacebookLead) -> str:
 
     lead.matched_customer_id = customer.id if customer else None
     lead.matched_kvk_company_id = kvk.id if kvk else None
-
     if customer:
         return "existing_customer"
     if kvk:
@@ -96,12 +142,55 @@ def _classify_lead(db: Session, lead: FacebookLead) -> str:
     return "new"
 
 
-def import_facebook_leads(db: Session) -> dict[str, int]:
+def _populate_lead(lead: FacebookLead, row: dict[str, str], source_url: str) -> None:
+    """Set every column on the FacebookLead from a CSV row."""
+    lead.created_time_utc = _parse_created_time(row.get("created_time", ""))
+    lead.ad_name = (row.get("ad_name") or "").strip()
+    lead.adset_name = (row.get("adset_name") or "").strip()
+    lead.campaign_name = (row.get("campaign_name") or "").strip()
+    lead.form_name = (row.get("form_name") or "").strip()
+    lead.platform = (row.get("platform") or "").strip()
+    lead.is_organic = (row.get("is_organic", "") or "").strip().lower() == "true"
+
+    lead.full_name = (row.get("full_name") or "").strip()
+    lead.email = (row.get("email") or "").strip().lower()
+    phone = (row.get("phone_number") or "").strip()
+    if phone.lower().startswith("p:"):
+        phone = phone[2:].strip()
+    lead.phone_number = phone
+    lead.company_name = (row.get("company_name") or "").strip()
+
+    # Survey + sales annotations — flexible column lookup
+    lead.industry = _pick(row, "industry")
+    lead.estimated_order_size = _pick(row, "estimated_order_size")
+    lead.lead_status = _pick(row, "lead_status")
+    lead.country = _pick(row, "country")
+    lead.email_quality = _pick(row, "email_quality")
+    lead.quality_score = _pick(row, "quality_score")
+    lead.leads_quality = _pick(row, "leads_quality")
+    lead.progress = _pick(row, "progress")
+    lead.pic = _pick(row, "pic")
+    lead.customer_segmentation = _pick(row, "customer_segmentation")
+    lead.total_order_amount = _pick(row, "total_order_amount")
+    lead.detailed_information = _pick(row, "detailed_information")
+    lead.email_marketing_consent = _pick(row, "email_marketing_consent")
+
+    lead.source_url = source_url
+    lead.raw_row = " | ".join(f"{k}={v}" for k, v in row.items() if v)[:2000]
+
+
+def import_facebook_leads_from_csv(
+    db: Session,
+    csv_text: str,
+    source_url: str,
+    *,
+    batch_size: int = 500,
+    progress_print: bool = False,
+) -> dict[str, int]:
     """
-    Fetch the Google Sheet, upsert every row by fb_lead_id, classify
-    each. Returns a count summary the route hands back to the UI.
+    Stream-parse a CSV blob and upsert every row by fb_lead_id.
+    Commits in batches so huge files (50k+ rows) don't blow up RAM.
     """
-    csv_text = _fetch_sheet_csv()
     reader = csv.DictReader(io.StringIO(csv_text))
 
     inserted = 0
@@ -110,6 +199,7 @@ def import_facebook_leads(db: Session) -> dict[str, int]:
     matched_customer = 0
     matched_kvk = 0
     new_leads = 0
+    seen_in_batch = 0
 
     for row in reader:
         fb_id = (row.get("id") or "").strip()
@@ -123,39 +213,7 @@ def import_facebook_leads(db: Session) -> dict[str, int]:
         is_new = existing is None
         lead = existing or FacebookLead(fb_lead_id=fb_id)
 
-        lead.created_time_utc = _parse_created_time(row.get("created_time", ""))
-        lead.ad_name = (row.get("ad_name") or "").strip()
-        lead.adset_name = (row.get("adset_name") or "").strip()
-        lead.campaign_name = (row.get("campaign_name") or "").strip()
-        lead.form_name = (row.get("form_name") or "").strip()
-        lead.platform = (row.get("platform") or "").strip()
-        lead.is_organic = (row.get("is_organic", "") or "").strip().lower() == "true"
-
-        lead.full_name = (row.get("full_name") or "").strip()
-        lead.email = (row.get("email") or "").strip().lower()
-        # Phone is prefixed with 'p:' in the sheet ("p:+31612345678") — strip
-        phone = (row.get("phone_number") or "").strip()
-        if phone.lower().startswith("p:"):
-            phone = phone[2:].strip()
-        lead.phone_number = phone
-        lead.company_name = (row.get("company_name") or "").strip()
-
-        # Survey columns have long question-style names — match flexibly
-        lead.industry = (
-            row.get("which_industry_best_describes_your_business?")
-            or row.get("which_industry_best_describes_your_business")
-            or ""
-        ).strip()
-        lead.estimated_order_size = (
-            row.get("the_moq_is_250_pieces._how_many_do_you_think_you'll_need?")
-            or row.get("the_moq_is_250_pieces._how_many_do_you_think_you_ll_need")
-            or ""
-        ).strip()
-        lead.lead_status = (row.get("lead_status") or "").strip()
-
-        lead.source_url = SHEET_CSV_URL
-        # Keep a compact debug copy of the original row
-        lead.raw_row = " | ".join(f"{k}={v}" for k, v in row.items() if v)[:2000]
+        _populate_lead(lead, row, source_url)
 
         if is_new:
             db.add(lead)
@@ -163,7 +221,6 @@ def import_facebook_leads(db: Session) -> dict[str, int]:
         else:
             updated += 1
 
-        # Classify (needs the lead's email / company set above)
         lead.match_status = _classify_lead(db, lead)
         if lead.match_status == "existing_customer":
             matched_customer += 1
@@ -171,6 +228,13 @@ def import_facebook_leads(db: Session) -> dict[str, int]:
             matched_kvk += 1
         else:
             new_leads += 1
+
+        seen_in_batch += 1
+        if seen_in_batch >= batch_size:
+            db.commit()
+            if progress_print:
+                print(f"[fb-import] committed batch, total so far: {inserted+updated}")
+            seen_in_batch = 0
 
     db.commit()
     return {
@@ -184,9 +248,49 @@ def import_facebook_leads(db: Session) -> dict[str, int]:
     }
 
 
+def import_facebook_leads(db: Session) -> dict[str, int]:
+    """Convenience wrapper that fetches the live sheet and imports it."""
+    csv_text = _fetch_sheet_csv()
+    return import_facebook_leads_from_csv(db, csv_text, SHEET_CSV_URL)
+
+
+# ── Background auto-sync scheduler ─────────────────────────────────────────
+_fb_sync_started = False
+_fb_sync_lock = threading.Lock()
+
+
+def _fb_sync_loop() -> None:
+    """Pull the live sheet every N seconds. Idempotent — safe to repeat."""
+    interval = getattr(settings, "fb_leads_auto_sync_interval", 900)
+    while True:
+        try:
+            time.sleep(interval)
+            db = SessionLocal()
+            try:
+                summary = import_facebook_leads(db)
+                print(
+                    f"[fb-leads-sync] {summary['inserted']} new, "
+                    f"{summary['updated']} updated"
+                )
+            finally:
+                db.close()
+        except Exception as exc:
+            print(f"[fb-leads-sync] error (will retry next cycle): {exc}")
+
+
+def start_facebook_leads_scheduler() -> None:
+    """Idempotent — only spawns the daemon once."""
+    global _fb_sync_started
+    if not getattr(settings, "fb_leads_auto_sync_enabled", True):
+        return
+    with _fb_sync_lock:
+        if _fb_sync_started:
+            return
+        _fb_sync_started = True
+    threading.Thread(target=_fb_sync_loop, daemon=True, name="fb-leads-sync").start()
+
+
 if __name__ == "__main__":
-    # Allow running directly: `python -m app.facebook_leads`
-    from app.db import SessionLocal
     db = SessionLocal()
     try:
         summary = import_facebook_leads(db)

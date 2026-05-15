@@ -76,6 +76,11 @@ class Settings:
     kvk_auto_enrich_batch: int = int(os.getenv("KVK_AUTO_ENRICH_BATCH", "12"))
     kvk_auto_enrich_interval: int = int(os.getenv("KVK_AUTO_ENRICH_INTERVAL", "30"))
     kvk_auto_enrich_workers: int = int(os.getenv("KVK_AUTO_ENRICH_WORKERS", "3"))
+    # Facebook Lead Ads auto-sync from the public Google Sheet. Every
+    # FB_LEADS_AUTO_SYNC_INTERVAL seconds we re-pull the sheet and
+    # idempotently upsert any new rows. Default 15 min.
+    fb_leads_auto_sync_enabled: bool = _as_bool(os.getenv("FB_LEADS_AUTO_SYNC_ENABLED"), True)
+    fb_leads_auto_sync_interval: int = int(os.getenv("FB_LEADS_AUTO_SYNC_INTERVAL", "900"))
 
 
 settings = Settings()

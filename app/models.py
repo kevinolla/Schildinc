@@ -461,6 +461,20 @@ class FacebookLead(Base):
     estimated_order_size: Mapped[str] = mapped_column(Text, default="")
     lead_status: Mapped[str] = mapped_column(Text, default="", index=True)
 
+    # Sales-side annotations (from the historical Marketing Lead CSV).
+    # Empty for leads from the live Lead Ads sheet that don't have these
+    # fields yet.
+    country: Mapped[str] = mapped_column(Text, default="", index=True)
+    email_quality: Mapped[str] = mapped_column(Text, default="")
+    quality_score: Mapped[str] = mapped_column(Text, default="")
+    leads_quality: Mapped[str] = mapped_column(Text, default="", index=True)
+    progress: Mapped[str] = mapped_column(Text, default="", index=True)
+    pic: Mapped[str] = mapped_column(Text, default="")
+    customer_segmentation: Mapped[str] = mapped_column(Text, default="")
+    total_order_amount: Mapped[str] = mapped_column(Text, default="")
+    detailed_information: Mapped[str] = mapped_column(Text, default="")
+    email_marketing_consent: Mapped[str] = mapped_column(Text, default="")
+
     matched_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True, index=True)
     matched_kvk_company_id: Mapped[int | None] = mapped_column(ForeignKey("kvk_companies.id"), nullable=True, index=True)
     match_status: Mapped[str] = mapped_column(Text, default="new", index=True)
