@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
@@ -45,6 +45,7 @@ from app.matching import apply_kvk_matching, apply_matching
 from app.models import (
     Customer,
     EmailLog,
+    FacebookLead,
     KvkCompany,
     KvkEstablishment,
     KvkImportLog,
@@ -622,6 +623,266 @@ def customers_page(
             "app_name": settings.app_name,
         },
     )
+
+
+# ── Customer analytics ─────────────────────────────────────────────────────
+@app.get("/customers/analytics", response_class=HTMLResponse)
+def customers_analytics(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    """
+    Aggregate views of the customer base — by country, by sector
+    (derived from KVK match or domain TLD), and by LTV bucket.
+    Cheap to render: every chart uses one GROUP BY query.
+    """
+    # ── Country breakdown
+    country_rows = db.execute(
+        select(
+            Customer.country_code,
+            func.count(Customer.id).label("n"),
+            func.coalesce(func.sum(Customer.lifetime_amount_paid), 0).label("ltv"),
+        )
+        .group_by(Customer.country_code)
+        .order_by(func.count(Customer.id).desc())
+    ).all()
+    country_breakdown = [
+        {"label": r[0] or "(unknown)", "count": r[1], "ltv": float(r[2] or 0)}
+        for r in country_rows
+    ]
+
+    # ── LTV bucket distribution
+    ltv_buckets = [
+        ("€0",            0,     0),
+        ("€1–500",        0.01,  500),
+        ("€500–2k",       500,   2000),
+        ("€2k–10k",       2000,  10000),
+        ("€10k+",         10000, 99999999),
+    ]
+    ltv_breakdown = []
+    for label, lo, hi in ltv_buckets:
+        if lo == 0 and hi == 0:
+            cnt = db.scalar(
+                select(func.count(Customer.id)).where(
+                    func.coalesce(Customer.lifetime_amount_paid, 0) == 0
+                )
+            ) or 0
+            sub = 0.0
+        else:
+            cnt = db.scalar(
+                select(func.count(Customer.id)).where(
+                    Customer.lifetime_amount_paid >= lo,
+                    Customer.lifetime_amount_paid < hi,
+                )
+            ) or 0
+            sub_raw = db.scalar(
+                select(func.coalesce(func.sum(Customer.lifetime_amount_paid), 0)).where(
+                    Customer.lifetime_amount_paid >= lo,
+                    Customer.lifetime_amount_paid < hi,
+                )
+            ) or 0
+            sub = float(sub_raw)
+        ltv_breakdown.append({"label": label, "count": cnt, "ltv": sub})
+
+    # ── Sector: prefer the bike_shop_segment / tier from matched KVK
+    # rows. For customers without a KVK match, fall back to a coarse
+    # bucket from the email/website TLD ("nl" / "de" / "us" / "other").
+    sector_rows = db.execute(
+        select(
+            KvkCompany.bike_shop_segment,
+            func.count(Customer.id).label("n"),
+            func.coalesce(func.sum(Customer.lifetime_amount_paid), 0).label("ltv"),
+        )
+        .join(Customer, Customer.id == KvkCompany.matched_customer_id)
+        .where(Customer.already_client_flag.is_(True))
+        .group_by(KvkCompany.bike_shop_segment)
+        .order_by(func.count(Customer.id).desc())
+    ).all()
+    kvk_sector_breakdown = [
+        {"label": r[0] or "(unsegmented)", "count": r[1], "ltv": float(r[2] or 0)}
+        for r in sector_rows
+    ]
+
+    # ── Facebook leads — count + industry breakdown if any imported
+    fb_total = db.scalar(select(func.count(FacebookLead.id))) or 0
+    fb_industry_rows = db.execute(
+        select(
+            FacebookLead.industry,
+            func.count(FacebookLead.id).label("n"),
+        )
+        .group_by(FacebookLead.industry)
+        .order_by(func.count(FacebookLead.id).desc())
+        .limit(20)
+    ).all() if fb_total else []
+    fb_industry_breakdown = [
+        {"label": (r[0] or "(unspecified)").replace("_", " ").title(), "count": r[1]}
+        for r in fb_industry_rows
+    ]
+    fb_match_rows = db.execute(
+        select(FacebookLead.match_status, func.count(FacebookLead.id))
+        .group_by(FacebookLead.match_status)
+    ).all() if fb_total else []
+    fb_match_breakdown = {r[0] or "new": r[1] for r in fb_match_rows}
+
+    # ── Headline counters
+    customer_total = db.scalar(select(func.count(Customer.id))) or 0
+    total_ltv = db.scalar(select(func.coalesce(func.sum(Customer.lifetime_amount_paid), 0))) or 0
+    median_ltv_proxy = float(total_ltv) / max(1, customer_total)
+
+    return templates.TemplateResponse(
+        request,
+        "customer_analytics.html",
+        {
+            "request": request,
+            "customer_total": customer_total,
+            "total_ltv": float(total_ltv),
+            "median_ltv_proxy": median_ltv_proxy,
+            "country_breakdown": country_breakdown,
+            "ltv_breakdown": ltv_breakdown,
+            "kvk_sector_breakdown": kvk_sector_breakdown,
+            "fb_total": fb_total,
+            "fb_industry_breakdown": fb_industry_breakdown,
+            "fb_match_breakdown": fb_match_breakdown,
+            "app_name": settings.app_name,
+        },
+    )
+
+
+# ── Facebook Lead Ads import (from the team's Google Sheet) ────────────────
+@app.post("/admin/facebook-leads/import")
+def facebook_leads_import(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    """One-click pull from the Google Sheet, dedupes by fb_lead_id."""
+    from app.facebook_leads import import_facebook_leads
+    try:
+        summary = import_facebook_leads(db)
+        flash = (
+            f"FB leads: {summary['inserted']} new, "
+            f"{summary['updated']} updated, "
+            f"{summary['existing_customer_matches']} matched existing customers, "
+            f"{summary['known_prospect_matches']} matched KVK"
+        )
+    except Exception as exc:
+        flash = f"FB import failed: {exc}"
+    return RedirectResponse(f"/customers/facebook-leads?flash={quote_plus(flash)}", status_code=303)
+
+
+@app.get("/customers/facebook-leads", response_class=HTMLResponse)
+def facebook_leads_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    page: int = 1,
+    per_page: int = 50,
+    match: str = "",
+    search: str = "",
+) -> HTMLResponse:
+    """Paginated FB Lead Ads results with match status."""
+    page = max(1, page)
+    per_page = max(10, min(200, per_page))
+
+    base = select(FacebookLead)
+    if search:
+        like = f"%{search.lower()}%"
+        base = base.where(
+            or_(
+                func.lower(FacebookLead.full_name).like(like),
+                func.lower(FacebookLead.email).like(like),
+                func.lower(FacebookLead.company_name).like(like),
+                func.lower(FacebookLead.industry).like(like),
+            )
+        )
+    if match in ("new", "existing_customer", "known_prospect"):
+        base = base.where(FacebookLead.match_status == match)
+
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+
+    leads = db.scalars(
+        base.order_by(FacebookLead.created_time_utc.desc().nullslast())
+        .offset((page - 1) * per_page).limit(per_page)
+    ).all()
+
+    return templates.TemplateResponse(
+        request,
+        "facebook_leads.html",
+        {
+            "request": request,
+            "leads": leads,
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+            "search": search,
+            "match": match,
+            "app_name": settings.app_name,
+        },
+    )
+
+
+# ── Sync orphan invoice customers (creates Customer rows for invoice
+# emails that never made it into the customers table — the user reported
+# 1141 but the invoice CSV has 63 additional unique billing emails) ────────
+@app.post("/admin/sync-invoice-customers")
+def sync_invoice_customers(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    """Backfill customers table from any invoice customer_emails that aren't there yet."""
+    from app.utils import normalize_email, normalize_domain
+    inserted = 0
+
+    # Fetch orphan invoice emails not yet in customers
+    raw = db.execute(text("""
+        SELECT
+            LOWER(i.customer_email) AS email,
+            MIN(COALESCE(NULLIF(i.customer_name_clean, ''), i.customer_name_raw, i.billing_name)) AS name,
+            MIN(i.city) AS city,
+            MIN(i.country_code) AS country,
+            COUNT(*) AS invoice_count,
+            COALESCE(SUM(i.amount_paid), 0) AS total_paid
+        FROM invoices i
+        WHERE i.customer_email IS NOT NULL AND i.customer_email != ''
+          AND LOWER(i.customer_email) NOT IN (
+              SELECT LOWER(customer_email_primary) FROM customers
+              WHERE customer_email_primary IS NOT NULL AND customer_email_primary != ''
+          )
+        GROUP BY LOWER(i.customer_email)
+    """)).fetchall()
+
+    for row in raw:
+        email = row[0]
+        name = (row[1] or email.split("@", 1)[0]).strip()
+        domain = email.split("@", 1)[1] if "@" in email else ""
+        entity_id = f"orphan-invoice:{email}"
+        # Skip if already exists by entity_id (idempotent)
+        if db.scalar(select(Customer.id).where(Customer.customer_entity_id == entity_id)):
+            continue
+        c = Customer(
+            customer_entity_id=entity_id,
+            source_system="invoice_orphan_sync",
+            canonical_company_name=name or email,
+            canonical_company_name_clean=(name or email).lower().strip(),
+            customer_email_primary=email,
+            email_domain_primary=domain,
+            match_key_domain=domain,
+            city=row[2] or "",
+            country_code=row[3] or "",
+            invoice_count=int(row[4] or 0),
+            lifetime_amount_paid=float(row[5] or 0),
+            lifetime_total_invoiced=float(row[5] or 0),
+            already_client_flag=True,
+        )
+        db.add(c)
+        inserted += 1
+    db.commit()
+    flash = f"Synced {inserted} orphan invoice customers into the customers table."
+    return RedirectResponse(f"/customers?flash={quote_plus(flash)}", status_code=303)
 
 
 @app.post("/admin/import/customers")

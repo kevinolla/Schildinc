@@ -435,3 +435,37 @@ class KvkImportLog(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FacebookLead(Base):
+    """Lead from the Facebook Lead Ads CRM spreadsheet."""
+
+    __tablename__ = "facebook_leads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fb_lead_id: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    created_time_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ad_name: Mapped[str] = mapped_column(Text, default="")
+    adset_name: Mapped[str] = mapped_column(Text, default="")
+    campaign_name: Mapped[str] = mapped_column(Text, default="")
+    form_name: Mapped[str] = mapped_column(Text, default="")
+    platform: Mapped[str] = mapped_column(Text, default="")
+    is_organic: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    full_name: Mapped[str] = mapped_column(Text, default="", index=True)
+    email: Mapped[str] = mapped_column(Text, default="", index=True)
+    phone_number: Mapped[str] = mapped_column(Text, default="")
+    company_name: Mapped[str] = mapped_column(Text, default="", index=True)
+
+    industry: Mapped[str] = mapped_column(Text, default="", index=True)
+    estimated_order_size: Mapped[str] = mapped_column(Text, default="")
+    lead_status: Mapped[str] = mapped_column(Text, default="", index=True)
+
+    matched_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True, index=True)
+    matched_kvk_company_id: Mapped[int | None] = mapped_column(ForeignKey("kvk_companies.id"), nullable=True, index=True)
+    match_status: Mapped[str] = mapped_column(Text, default="new", index=True)
+
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    raw_row: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)

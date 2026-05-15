@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h2>Customer Analytics</h2>
+    <p class="page-subtitle">
+      {{ customer_total }} customers · €{{ "%.0f"|format(total_ltv) }} lifetime revenue · €{{ "%.0f"|format(median_ltv_proxy) }} avg
+    </p>
+  </div>
+  <div class="page-actions">
+    <a href="/customers" class="btn btn-ghost btn-sm">← Customers</a>
+    <form method="post" action="/admin/facebook-leads/import" style="display:inline">
+      <button class="btn btn-primary btn-sm" type="submit">📥 Sync Facebook Leads</button>
+    </form>
+    <form method="post" action="/admin/sync-invoice-customers" style="display:inline">
+      <button class="btn btn-secondary btn-sm" type="submit" title="Backfill customers from orphan invoice emails">
+        Sync invoice orphans
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- ── Top KPI row ────────────────────────────────────────────────── -->
+<div class="stats-row">
+  <div class="stat-chip">
+    <span class="stat-chip-label">Customers</span>
+    <span class="stat-chip-value">{{ customer_total }}</span>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">Lifetime revenue</span>
+    <span class="stat-chip-value">€{{ "{:,.0f}".format(total_ltv) }}</span>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">Avg LTV</span>
+    <span class="stat-chip-value">€{{ "{:,.0f}".format(median_ltv_proxy) }}</span>
+  </div>
+  <div class="stat-chip">
+    <span class="stat-chip-label">Facebook leads</span>
+    <a href="/customers/facebook-leads" class="stat-chip-value">{{ fb_total }}</a>
+  </div>
+</div>
+
+<div class="two-col">
+  <!-- ── Country breakdown ─────────────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">By Country</h3>
+    <p class="muted">Customers + lifetime revenue grouped by billing country</p>
+    {% set country_max = country_breakdown[0].count if country_breakdown else 1 %}
+    <table style="width:100%;font-size:13px">
+      <thead>
+        <tr>
+          <th style="text-align:left">Country</th>
+          <th style="text-align:right">Customers</th>
+          <th style="text-align:right">LTV</th>
+          <th style="text-align:left;padding-left:12px">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in country_breakdown[:20] %}
+        <tr>
+          <td>{{ c.label }}</td>
+          <td style="text-align:right">{{ c.count }}</td>
+          <td style="text-align:right">€{{ "{:,.0f}".format(c.ltv) }}</td>
+          <td style="padding-left:12px">
+            <div style="background:#dbeafe;height:8px;border-radius:4px;width:{{ (100 * c.count / country_max) | round(1) }}%;min-width:2px"></div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── LTV bucket distribution ───────────────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">By Lifetime Value</h3>
+    <p class="muted">How revenue concentrates across customer segments</p>
+    {% set ltv_max = (ltv_breakdown | map(attribute='count') | max) or 1 %}
+    <table style="width:100%;font-size:13px">
+      <thead>
+        <tr>
+          <th style="text-align:left">LTV bracket</th>
+          <th style="text-align:right">Customers</th>
+          <th style="text-align:right">Revenue</th>
+          <th style="text-align:left;padding-left:12px">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in ltv_breakdown %}
+        <tr>
+          <td><strong>{{ b.label }}</strong></td>
+          <td style="text-align:right">{{ b.count }}</td>
+          <td style="text-align:right">€{{ "{:,.0f}".format(b.ltv) }}</td>
+          <td style="padding-left:12px">
+            <div style="background:#d1fae5;height:8px;border-radius:4px;width:{{ (100 * b.count / ltv_max) | round(1) }}%;min-width:2px"></div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="two-col">
+  <!-- ── Sector breakdown (KVK-matched customers) ─────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">By Sector (KVK-matched)</h3>
+    <p class="muted">Only customers cross-referenced to a KVK record</p>
+    {% if kvk_sector_breakdown %}
+    {% set sec_max = kvk_sector_breakdown[0].count if kvk_sector_breakdown else 1 %}
+    <table style="width:100%;font-size:13px">
+      <thead>
+        <tr>
+          <th style="text-align:left">Segment</th>
+          <th style="text-align:right">Customers</th>
+          <th style="text-align:right">LTV</th>
+          <th style="text-align:left;padding-left:12px">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in kvk_sector_breakdown %}
+        <tr>
+          <td>{{ s.label }}</td>
+          <td style="text-align:right">{{ s.count }}</td>
+          <td style="text-align:right">€{{ "{:,.0f}".format(s.ltv) }}</td>
+          <td style="padding-left:12px">
+            <div style="background:#ede9fe;height:8px;border-radius:4px;width:{{ (100 * s.count / sec_max) | round(1) }}%;min-width:2px"></div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No customers matched to KVK yet — run the email agent or the
+    /customers cross-reference to populate this view.</p>
+    {% endif %}
+  </div>
+
+  <!-- ── Facebook leads industry breakdown ─────────────────────── -->
+  <div class="card">
+    <h3 style="margin-top:0">Facebook Leads by Industry</h3>
+    <p class="muted">{{ fb_total }} leads imported from the team Google Sheet</p>
+    {% if fb_industry_breakdown %}
+    {% set ind_max = fb_industry_breakdown[0].count if fb_industry_breakdown else 1 %}
+    <table style="width:100%;font-size:13px">
+      <thead>
+        <tr>
+          <th style="text-align:left">Industry</th>
+          <th style="text-align:right">Leads</th>
+          <th style="text-align:left;padding-left:12px">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for i in fb_industry_breakdown %}
+        <tr>
+          <td>{{ i.label }}</td>
+          <td style="text-align:right">{{ i.count }}</td>
+          <td style="padding-left:12px">
+            <div style="background:#fef3c7;height:8px;border-radius:4px;width:{{ (100 * i.count / ind_max) | round(1) }}%;min-width:2px"></div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid #e5e7eb;font-size:.85rem">
+      <strong>Match status:</strong>
+      🆕 New: {{ fb_match_breakdown.get('new', 0) }} ·
+      🟢 Existing customer: {{ fb_match_breakdown.get('existing_customer', 0) }} ·
+      🔵 Known prospect: {{ fb_match_breakdown.get('known_prospect', 0) }}
+      <br>
+      <a href="/customers/facebook-leads" style="font-size:.85rem">→ Browse all FB leads</a>
+    </div>
+    {% else %}
+    <p class="muted">No Facebook leads imported yet.
+    <form method="post" action="/admin/facebook-leads/import" style="margin-top:.5rem">
+      <button class="btn btn-primary btn-sm" type="submit">Sync from Google Sheet now</button>
+    </form>
+    </p>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

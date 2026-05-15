@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h2>Facebook Leads</h2>
+    <p class="page-subtitle">{{ total }} leads from the Google Sheet · auto-matched against customers + KVK</p>
+  </div>
+  <div class="page-actions">
+    <a href="/customers/analytics" class="btn btn-ghost btn-sm">📊 Analytics</a>
+    <form method="post" action="/admin/facebook-leads/import" style="display:inline">
+      <button class="btn btn-primary btn-sm" type="submit">🔄 Re-sync from sheet</button>
+    </form>
+  </div>
+</div>
+
+{% if request.query_params.get('flash') %}
+<div class="flash flash-success">{{ request.query_params.get('flash') | replace('+', ' ') | replace('%2C', ',') }}</div>
+{% endif %}
+
+<form method="get" action="/customers/facebook-leads" class="filter-bar">
+  <div class="filter-form" style="grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr) minmax(120px, auto) auto;">
+    <input type="text" name="search" value="{{ search }}"
+           placeholder="Search name / email / company / industry…" class="search-input">
+    <select name="match">
+      <option value="" {% if not match %}selected{% endif %}>All match types</option>
+      <option value="new" {% if match == 'new' %}selected{% endif %}>🆕 New leads</option>
+      <option value="existing_customer" {% if match == 'existing_customer' %}selected{% endif %}>🟢 Existing customer</option>
+      <option value="known_prospect" {% if match == 'known_prospect' %}selected{% endif %}>🔵 Known prospect</option>
+    </select>
+    <select name="per_page">
+      {% for size in [25, 50, 100, 200] %}
+      <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}/page</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+  </div>
+</form>
+
+{% if leads %}
+<div class="card table-card prospects-table-card">
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Lead</th>
+          <th>Company</th>
+          <th>Email · Phone</th>
+          <th>Industry</th>
+          <th>Order size</th>
+          <th>Campaign</th>
+          <th>Match</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lead in leads %}
+        <tr>
+          <td style="min-width:140px">
+            <div style="font-weight:600">{{ lead.full_name or '—' }}</div>
+            {% if lead.created_time_utc %}
+            <div class="muted" style="font-size:.72rem">{{ lead.created_time_utc.strftime('%d %b %Y') }}</div>
+            {% endif %}
+          </td>
+          <td style="font-size:.85rem">{{ lead.company_name or '—' }}</td>
+          <td style="font-size:.82rem">
+            {% if lead.email %}<div>📧 {{ lead.email }}</div>{% endif %}
+            {% if lead.phone_number %}<div>📞 {{ lead.phone_number }}</div>{% endif %}
+          </td>
+          <td style="font-size:.82rem">{{ (lead.industry or '—') | replace('_', ' ') | title }}</td>
+          <td style="font-size:.82rem">{{ (lead.estimated_order_size or '—') | replace('_', ' ') }}</td>
+          <td style="font-size:.75rem;color:#6b7280">
+            <div title="{{ lead.campaign_name }}">{{ lead.campaign_name[:32] }}{% if lead.campaign_name and lead.campaign_name|length > 32 %}…{% endif %}</div>
+            <div class="muted" style="font-size:.7rem">{{ lead.platform or '' }} · {{ lead.form_name[:24] }}</div>
+          </td>
+          <td>
+            {% if lead.match_status == 'existing_customer' %}
+            <span class="badge badge-green" title="Already a paying customer">🟢 Customer</span>
+            {% elif lead.match_status == 'known_prospect' %}
+            <span class="badge badge-blue" title="Already in KVK pipeline">🔵 KVK</span>
+            {% else %}
+            <span class="badge badge-orange" title="Genuinely new lead">🆕 New</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% set base_qs = '' %}
+  {% if search %}{% set base_qs = base_qs + 'search=' + search + '&' %}{% endif %}
+  {% if match %}{% set base_qs = base_qs + 'match=' + match + '&' %}{% endif %}
+  {% set base_qs = base_qs + 'per_page=' + per_page|string %}
+
+  {% if page > 1 %}
+  <a href="?{{ base_qs }}&page=1" class="btn btn-ghost btn-sm">« First</a>
+  <a href="?{{ base_qs }}&page={{ page - 1 }}" class="btn btn-ghost btn-sm">‹ Prev</a>
+  {% endif %}
+  <span style="font-weight:500">Page {{ page }} / {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a href="?{{ base_qs }}&page={{ page + 1 }}" class="btn btn-ghost btn-sm">Next ›</a>
+  <a href="?{{ base_qs }}&page={{ total_pages }}" class="btn btn-ghost btn-sm">Last »</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <p style="font-size:1.1rem">No Facebook leads yet.</p>
+  <p class="text-muted">Click <strong>🔄 Re-sync from sheet</strong> above to pull from the team Google Sheet.</p>
+</div>
+{% endif %}
+
+{% endblock %}
