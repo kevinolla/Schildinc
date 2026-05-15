@@ -26,6 +26,7 @@ from typing import Any, Iterable
 from urllib.request import Request, urlopen
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -179,6 +180,52 @@ def _populate_lead(lead: FacebookLead, row: dict[str, str], source_url: str) -> 
     lead.raw_row = " | ".join(f"{k}={v}" for k, v in row.items() if v)[:2000]
 
 
+def _row_to_dict(row: dict[str, str], source_url: str) -> dict[str, Any] | None:
+    """
+    Translate one CSV row into a plain dict matching FacebookLead's
+    columns — ready for the ON CONFLICT bulk upsert. Returns None if
+    the row has no usable fb_lead_id.
+    """
+    fb_id = (row.get("id") or "").strip()
+    if not fb_id:
+        return None
+
+    phone = (row.get("phone_number") or "").strip()
+    if phone.lower().startswith("p:"):
+        phone = phone[2:].strip()
+
+    return {
+        "fb_lead_id":              fb_id,
+        "created_time_utc":        _parse_created_time(row.get("created_time", "")),
+        "ad_name":                 (row.get("ad_name") or "").strip(),
+        "adset_name":              (row.get("adset_name") or "").strip(),
+        "campaign_name":           (row.get("campaign_name") or "").strip(),
+        "form_name":               (row.get("form_name") or "").strip(),
+        "platform":                (row.get("platform") or "").strip(),
+        "is_organic":              (row.get("is_organic", "") or "").strip().lower() == "true",
+        "full_name":               (row.get("full_name") or "").strip(),
+        "email":                   (row.get("email") or "").strip().lower(),
+        "phone_number":            phone,
+        "company_name":            (row.get("company_name") or "").strip(),
+        "industry":                _pick(row, "industry"),
+        "estimated_order_size":    _pick(row, "estimated_order_size"),
+        "lead_status":             _pick(row, "lead_status"),
+        "country":                 _pick(row, "country"),
+        "email_quality":           _pick(row, "email_quality"),
+        "quality_score":           _pick(row, "quality_score"),
+        "leads_quality":           _pick(row, "leads_quality"),
+        "progress":                _pick(row, "progress"),
+        "pic":                     _pick(row, "pic"),
+        "customer_segmentation":   _pick(row, "customer_segmentation"),
+        "total_order_amount":      _pick(row, "total_order_amount"),
+        "detailed_information":    _pick(row, "detailed_information"),
+        "email_marketing_consent": _pick(row, "email_marketing_consent"),
+        "source_url":              source_url,
+        "raw_row":                 (" | ".join(f"{k}={v}" for k, v in row.items() if v))[:2000],
+        "match_status":            "new",  # bulk-set; classified later in batch
+    }
+
+
 def import_facebook_leads_from_csv(
     db: Session,
     csv_text: str,
@@ -188,97 +235,100 @@ def import_facebook_leads_from_csv(
     progress_print: bool = False,
 ) -> dict[str, int]:
     """
-    Stream-parse a CSV blob and upsert every row by fb_lead_id.
+    Stream-parse a CSV blob and upsert every row by fb_lead_id using
+    Postgres `INSERT ... ON CONFLICT (fb_lead_id) DO UPDATE` (true
+    server-side upsert).
 
-    Strategy (handles 50k+ rows + duplicate fb_lead_ids in same file):
-      1. Walk the CSV once, keeping the LAST row per fb_lead_id in
-         memory (a dict). Last-wins matches the user's expectation that
-         a re-export overrides earlier values.
-      2. Pre-load every existing fb_lead_id from the DB into a set so
-         we know up-front which rows are updates vs inserts.
-      3. For each unique row, either fetch the existing FacebookLead
-         (update) or instantiate a new one (insert). Add to session.
-      4. Flush every `batch_size` rows so SQLAlchemy's session sees
-         our newly-added rows on subsequent lookups (and so RAM
-         pressure stays bounded). Commit at the end of each batch.
+    Why ON CONFLICT instead of select-then-insert:
+      - Race-free: no read/write gap that lets duplicates slip through
+      - Bulk-safe: 500-row INSERT works even when 100% of the rows
+        already exist in the DB (UPDATE path takes over per-row)
+      - Handles the case of 50k-row historical CSV against a DB that
+        already has overlapping IDs from the live sheet sync
+
+    Cross-referencing (customer / KVK match) happens in a separate
+    pass at the end on just the affected fb_lead_ids — keeps the
+    upsert batch lean.
     """
     reader = csv.DictReader(io.StringIO(csv_text))
 
-    # Phase 1: dedupe by fb_lead_id in memory — last occurrence wins
-    rows_by_id: dict[str, dict[str, str]] = {}
+    # Phase 1: walk CSV → list of dicts, dedupe in memory by fb_lead_id
+    # (last occurrence wins so a re-export overrides stale values)
+    rows_by_id: dict[str, dict[str, Any]] = {}
     csv_skipped = 0
     for row in reader:
-        fb_id = (row.get("id") or "").strip()
-        if not fb_id:
+        record = _row_to_dict(row, source_url)
+        if record is None:
             csv_skipped += 1
             continue
-        rows_by_id[fb_id] = row
+        rows_by_id[record["fb_lead_id"]] = record
 
+    total = len(rows_by_id)
     if progress_print:
-        print(f"[fb-import] CSV had {len(rows_by_id)} unique fb_lead_ids ({csv_skipped} skipped)")
+        print(f"[fb-import] CSV deduped to {total} unique fb_lead_ids ({csv_skipped} skipped)")
 
-    # Phase 2: pre-load existing fb_lead_ids (cheap — one column)
-    existing_ids = {
-        row[0] for row in db.execute(
-            select(FacebookLead.fb_lead_id).where(
-                FacebookLead.fb_lead_id.in_(list(rows_by_id.keys()))
-            )
+    # Phase 2: batched ON CONFLICT upsert. Every column EXCEPT the
+    # immutables (id, fb_lead_id, created_at) is updated on conflict.
+    UPDATE_COLS = [
+        "created_time_utc", "ad_name", "adset_name", "campaign_name",
+        "form_name", "platform", "is_organic",
+        "full_name", "email", "phone_number", "company_name",
+        "industry", "estimated_order_size", "lead_status",
+        "country", "email_quality", "quality_score", "leads_quality",
+        "progress", "pic", "customer_segmentation", "total_order_amount",
+        "detailed_information", "email_marketing_consent",
+        "source_url", "raw_row",
+    ]
+
+    all_records = list(rows_by_id.values())
+    inserted_or_updated = 0
+    for offset in range(0, total, batch_size):
+        chunk = all_records[offset : offset + batch_size]
+        stmt = pg_insert(FacebookLead).values(chunk)
+        excluded = stmt.excluded
+        do_update = {col: getattr(excluded, col) for col in UPDATE_COLS}
+        do_update["updated_at"] = func.now()
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["fb_lead_id"], set_=do_update
+        )
+        db.execute(stmt)
+        db.commit()
+        inserted_or_updated += len(chunk)
+        if progress_print:
+            print(f"[fb-import] upserted {inserted_or_updated}/{total} rows")
+
+    # Phase 3: classify match status for the affected rows. We do this
+    # OUTSIDE the upsert loop because _classify_lead needs the in-DB
+    # row + customer/KVK joins per record (slow), and we want each
+    # upsert batch itself to stay fast.
+    matched_customer = matched_kvk = new_leads = 0
+    if progress_print:
+        print(f"[fb-import] classifying {total} leads against customers + KVK…")
+    chunk_size = 200
+    fb_ids = list(rows_by_id.keys())
+    for offset in range(0, total, chunk_size):
+        ids_chunk = fb_ids[offset : offset + chunk_size]
+        leads = db.scalars(
+            select(FacebookLead).where(FacebookLead.fb_lead_id.in_(ids_chunk))
         ).all()
-    }
-    if progress_print:
-        print(f"[fb-import] {len(existing_ids)} already in DB — will update; {len(rows_by_id) - len(existing_ids)} new")
-
-    inserted = 0
-    updated = 0
-    matched_customer = 0
-    matched_kvk = 0
-    new_leads = 0
-    seen_in_batch = 0
-    processed = 0
-
-    for fb_id, row in rows_by_id.items():
-        if fb_id in existing_ids:
-            lead = db.scalars(
-                select(FacebookLead).where(FacebookLead.fb_lead_id == fb_id).limit(1)
-            ).first()
-            if lead is None:
-                lead = FacebookLead(fb_lead_id=fb_id)
-                db.add(lead)
-                inserted += 1
+        for lead in leads:
+            lead.match_status = _classify_lead(db, lead)
+            if lead.match_status == "existing_customer":
+                matched_customer += 1
+            elif lead.match_status == "known_prospect":
+                matched_kvk += 1
             else:
-                updated += 1
-        else:
-            lead = FacebookLead(fb_lead_id=fb_id)
-            db.add(lead)
-            inserted += 1
-            existing_ids.add(fb_id)  # track within this run
+                new_leads += 1
+        db.commit()
 
-        _populate_lead(lead, row, source_url)
-        lead.match_status = _classify_lead(db, lead)
-        if lead.match_status == "existing_customer":
-            matched_customer += 1
-        elif lead.match_status == "known_prospect":
-            matched_kvk += 1
-        else:
-            new_leads += 1
-
-        seen_in_batch += 1
-        processed += 1
-        if seen_in_batch >= batch_size:
-            db.commit()
-            if progress_print:
-                print(f"[fb-import] committed {processed}/{len(rows_by_id)} rows")
-            seen_in_batch = 0
-
-    db.commit()
     return {
-        "inserted": inserted,
-        "updated": updated,
+        "inserted": inserted_or_updated,  # ON CONFLICT collapses insert+update count
+        "updated": 0,
         "skipped": csv_skipped,
         "existing_customer_matches": matched_customer,
         "known_prospect_matches": matched_kvk,
         "new_leads": new_leads,
-        "total_in_sheet": inserted + updated,
+        "total_in_sheet": total,
     }
 
 
