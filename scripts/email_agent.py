@@ -46,6 +46,13 @@ PASSWORD = "Schildinc#01"
 
 # ── Email regex + filters (mirror server logic) ─────────────────────────────
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.I)
+# Common obfuscations — info [at] domain [dot] nl, info(at)domain.nl, etc.
+OBFUSCATED_AT = r"\s*(?:\[\s*at\s*\]|\(\s*at\s*\)|\s+at\s+|\{\s*at\s*\}|@)\s*"
+OBFUSCATED_DOT = r"\s*(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\s+dot\s+|\{\s*dot\s*\}|\.)\s*"
+OBFUSCATED_EMAIL_RE = re.compile(
+    rf"([A-Za-z0-9._%+\-]+){OBFUSCATED_AT}([A-Za-z0-9\-]+){OBFUSCATED_DOT}([A-Za-z]{{2,8}})",
+    re.I,
+)
 REJECT_LOCAL = {
     "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon",
     "support-ticket", "webmaster", "postmaster", "abuse", "admin",
@@ -94,8 +101,31 @@ def api_post(path: str, data: dict[str, str]) -> Any:
         return {"ok": False, "error": f"URLError: {exc}"}
 
 
+def deobfuscate_emails(text: str) -> str:
+    """
+    Reassemble obfuscated emails like `info [at] example [dot] nl`,
+    `info(at)example.nl`, `info {at} example {dot} nl` into normal
+    `info@example.nl` form so the main regex picks them up.
+
+    Returns a string of reassembled emails joined by spaces — meant to
+    be appended to the regular text blob before email extraction.
+    """
+    if not text:
+        return ""
+    out: list[str] = []
+    for m in OBFUSCATED_EMAIL_RE.finditer(text):
+        local = m.group(1).strip(".-_")
+        domain = m.group(2).strip(".-_")
+        tld = m.group(3).strip(".-_")
+        if local and domain and tld:
+            out.append(f"{local}@{domain}.{tld}")
+    return " ".join(out)
+
+
 def filter_emails(text: str) -> list[str]:
     """Run regex over text, drop noise, return ranked list (best first)."""
+    # First reassemble any obfuscated `[at]` / `[dot]` style addresses
+    text = (text or "") + " " + deobfuscate_emails(text or "")
     seen: set[str] = set()
     found: list[str] = []
     for em in EMAIL_RE.findall(text or ""):
@@ -193,7 +223,51 @@ def wait_for_human(page, label: str = "Google CAPTCHA") -> None:
         pass
 
 
-def search_one(page, company_name: str, city: str) -> tuple[str, str]:
+def _collect_text_from_page(page) -> str:
+    """
+    Pull every kind of text the user actually sees in the rendered Google
+    results page, not just the raw HTML:
+      - body.innerText (covers AI Overview, Knowledge Panel, snippets)
+      - all anchor `href` values (catches mailto: links)
+      - text from every iframe (AI Overview sometimes uses iframes)
+    Returns one big string for the email regex to scan.
+    """
+    parts: list[str] = []
+    try:
+        body = page.evaluate("document.body ? document.body.innerText : ''") or ""
+        parts.append(body)
+    except Exception:
+        pass
+    try:
+        hrefs = page.evaluate(
+            "Array.from(document.querySelectorAll('a')).map(a => a.href || '').join(' ')"
+        ) or ""
+        parts.append(hrefs)
+    except Exception:
+        pass
+    # Iframes: AI Overview sometimes lives in one
+    try:
+        for frame in page.frames:
+            if frame == page.main_frame:
+                continue
+            try:
+                ft = frame.evaluate("document.body ? document.body.innerText : ''") or ""
+                if ft:
+                    parts.append(ft)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Final fallback: raw HTML (catches emails in tag attributes /
+    # data-cfemail / structured data even when innerText doesn't surface them)
+    try:
+        parts.append(page.content() or "")
+    except Exception:
+        pass
+    return " ".join(parts)
+
+
+def search_one(page, company_name: str, city: str, debug: bool = False) -> tuple[str, str]:
     """
     Open Google in the Playwright page, search "{name}" {city} email,
     return (email, source_url).
@@ -206,23 +280,48 @@ def search_one(page, company_name: str, city: str) -> tuple[str, str]:
     query = f'"{company_name}" {city} email'.strip()
     url = "https://www.google.com/search?q=" + urlencode({"q": query})[2:]
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
         # Quick CAPTCHA check before doing anything else
         if is_captcha_page(page):
             return CAPTCHA_BLOCKED, ""
+
+        # Wait for the main results container, then for the AI Overview /
+        # Knowledge Panel which loads later via JS.
         try:
-            page.wait_for_selector("div#search, div#rso", timeout=4000)
+            page.wait_for_selector("div#search, div#rso, div#main", timeout=8000)
         except Exception:
             pass
-        # Re-check after render — sometimes CAPTCHA appears late
+        # Wait for network to quiet down so AI Overview etc. has loaded
+        try:
+            page.wait_for_load_state("networkidle", timeout=6000)
+        except Exception:
+            pass
+        # Small extra settle pause for very late-rendered widgets
+        try:
+            page.wait_for_timeout(800)
+        except Exception:
+            pass
+
+        # Re-check CAPTCHA — sometimes Google interrupts after results render
         if is_captcha_page(page):
             return CAPTCHA_BLOCKED, ""
-        text = page.content()  # full HTML — emails leak in titles/snippets/URLs
-        candidates = filter_emails(text)
+
+        full_text = _collect_text_from_page(page)
+        candidates = filter_emails(full_text)
         best = rank_emails(candidates, company_name)
         if best:
             _, _, dom = best.partition("@")
             return best, f"https://{dom}"
+
+        if debug:
+            # Dump a chunk so the user can compare what we saw vs what
+            # they see in the visible Chrome window
+            sample = full_text[:600].replace("\n", " ")
+            print()
+            print(f"     DEBUG (no email found). Page text sample:")
+            print(f"     {sample!r}")
+            if candidates:
+                print(f"     Candidates that didn't pass ranking: {candidates[:6]}")
         return "", ""
     except Exception as exc:
         print(f"  ! search error: {exc}")
@@ -236,6 +335,8 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--max", type=int, default=0, help="stop after N records (0 = forever)")
     ap.add_argument("--delay", type=float, default=2.0, help="seconds between searches")
+    ap.add_argument("--debug", action="store_true",
+                    help="when no email is found, print a sample of the page text")
     args = ap.parse_args()
 
     try:
@@ -304,7 +405,7 @@ def main() -> int:
                     skipped_due_to_captcha = False
                     email, website = "", ""
                     while True:
-                        email, website = search_one(page, name, city)
+                        email, website = search_one(page, name, city, debug=args.debug)
                         if email == CAPTCHA_BLOCKED:
                             if captcha_retries_left <= 0:
                                 # Give up on this record without poisoning it —
