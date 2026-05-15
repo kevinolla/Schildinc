@@ -123,16 +123,26 @@ def _emails_from_snippets(query: str, max_emails: int = 10) -> list[str]:
     """
     Extract email addresses from search-engine result snippets.
 
-    Tries multiple backends, free sources FIRST:
-      A. Bing HTML scrape (free, rich snippets, no key)
-      B. DuckDuckGo HTML scrape (free, sparse snippets)
-      C. Google CSE (rich, but the 'entire web' toggle is deprecated)
-      D. Brave Search API (paid, only used if all free sources missed)
-
-    Used as the first-stage email finder (before Playwright) in the KVK
-    enrichment pipeline.
+    Tries multiple backends, residential-quality sources FIRST:
+      A. Playwright Google scrape (free, real Chromium DOM — bypasses the
+         cloud-IP block that hits bare urllib requests)
+      B. Bing HTML scrape (free, but cloud IPs get a JS-only stub)
+      C. DuckDuckGo HTML scrape (free, sparse snippets)
+      D. Google CSE (rich, but 'entire web' toggle is deprecated)
+      E. Brave Search API (paid, last resort)
     """
-    # ── Source A: Bing (free, rich snippets — like Chrome) ────────────────
+    # ── Source A: Playwright Google (real Chromium — works from cloud IPs)
+    try:
+        from app.playwright_search import google_snippet_text
+        text = google_snippet_text(query)
+        if text:
+            emails = _filter_emails_from_text(text, max_emails=max_emails)
+            if emails:
+                return emails
+    except Exception as exc:
+        print(f"[snippets] playwright source failed: {exc}")
+
+    # ── Source B: Bing (free, but cloud IPs get a JS-only stub) ───────────
     try:
         from app.bing_search import bing_snippet_text
         text = bing_snippet_text(query, count=10)
@@ -863,6 +873,11 @@ def get_enrichment_progress(db) -> dict:
         bing_on = _bing_enabled()
     except Exception:
         bing_on = False
+    try:
+        from app.playwright_search import is_enabled as _pw_enabled
+        pw_on = _pw_enabled()
+    except Exception:
+        pw_on = False
     return {
         "total": total,
         "pending": pending,
@@ -872,6 +887,7 @@ def get_enrichment_progress(db) -> dict:
         "errors": errors,
         "pct": pct,
         "active": _scheduler_started,
+        "playwright_search_enabled": pw_on,
         "bing_search_enabled": bing_on,
         "brave_search_enabled": brave_on,
         "brave_usage": brave_usage,
