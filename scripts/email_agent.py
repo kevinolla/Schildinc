@@ -436,29 +436,18 @@ def _empty_result() -> dict:
     }
 
 
-def search_one(page, company_name: str, city: str, debug: bool = False) -> dict | str:
+def _do_google_query(page, query: str) -> tuple[str, str]:
     """
-    Open Google in the Playwright page, search "{name}" {city} contact,
-    return a dict with everything we could extract:
-      {email, website, phone, whatsapp_number, whatsapp_url,
-       instagram_url, linkedin_url}
-
-    Returns CAPTCHA_BLOCKED (the string) when Google challenges us;
-    caller should pause for the user.
-
-    Empty strings for fields nothing was found. The query asks for
-    'contact' instead of just 'email' so Google surfaces the
-    Knowledge Panel which often shows phone + socials too.
+    Navigate to Google with `query`, wait for results to render
+    (including scroll-triggered AI Overview / Knowledge Panel),
+    return (full_extracted_text, status). status is "" on success,
+    "captcha" if Google challenged us, "error" on exceptions.
     """
-    # Broader query — 'contact' surfaces Knowledge Panel with all channels
-    query = f'"{company_name}" {city} contact'.strip()
     url = "https://www.google.com/search?q=" + urlencode({"q": query})[2:]
-    result = _empty_result()
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=20000)
         if is_captcha_page(page):
-            return CAPTCHA_BLOCKED
-
+            return "", "captcha"
         try:
             page.wait_for_selector("div#search, div#rso, div#main", timeout=8000)
         except Exception:
@@ -468,56 +457,107 @@ def search_one(page, company_name: str, city: str, debug: bool = False) -> dict 
         except Exception:
             pass
         if is_captcha_page(page):
-            return CAPTCHA_BLOCKED
-
-        # Trigger lazy widgets via scroll
+            return "", "captcha"
         try:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-            page.wait_for_timeout(1200)
+            page.wait_for_timeout(1000)
             page.evaluate("window.scrollTo(0, 0)")
             page.wait_for_timeout(400)
         except Exception:
             pass
-
-        # Multi-pass: AI Overview / Knowledge Panel content trickles in
-        best_email, website, candidates, full_text = "", "", [], ""
-        for _ in range(4):
-            best_email, website, candidates, full_text = _attempt_extract(page, company_name)
-            # Extract all other channels every pass — early-stop only on email
-            if best_email and full_text:
-                break
-            try:
-                page.wait_for_timeout(1500)
-            except Exception:
-                break
-
-        # Make sure we have full_text even if early-broke without it
-        if not full_text:
-            try:
-                full_text = _collect_text_from_page(page)
-            except Exception:
-                full_text = ""
-
-        # Pull every contact channel we can find
-        result["email"] = best_email
-        result["website"] = website
-        result["phone"] = _extract_phone(full_text)
-        wa_num, wa_url = _extract_whatsapp(full_text)
-        result["whatsapp_number"] = wa_num
-        result["whatsapp_url"] = wa_url
-        result["instagram_url"] = _extract_instagram(full_text)
-        result["linkedin_url"] = _extract_linkedin(full_text)
-
-        if debug and not any(result.values()):
-            sample = full_text[:800].replace("\n", " ")
-            print()
-            print(f"     DEBUG (no contacts found). Page text sample (first 800 chars):")
-            print(f"     {sample!r}")
-
-        return result
+        # One more wait for late-arriving widgets
+        try:
+            page.wait_for_timeout(800)
+        except Exception:
+            pass
+        return _collect_text_from_page(page), ""
     except Exception as exc:
-        print(f"  ! search error: {exc}")
-        return result
+        print(f"  ! query error '{query[:40]}…': {exc}")
+        return "", "error"
+
+
+def _merge_extracted(result: dict, text: str, company_name: str) -> None:
+    """
+    In-place merge: for every empty field in `result`, try to extract
+    that channel from `text`. Fields that already have a value are
+    left alone — we never overwrite an earlier hit.
+    """
+    if not text:
+        return
+    if not result["email"]:
+        candidates = filter_emails(text)
+        best = rank_emails(candidates, company_name)
+        if best:
+            result["email"] = best
+            if not result["website"]:
+                _, _, dom = best.partition("@")
+                result["website"] = f"https://{dom}"
+    if not result["phone"]:
+        result["phone"] = _extract_phone(text)
+    if not result["whatsapp_number"]:
+        wa_num, wa_url = _extract_whatsapp(text)
+        if wa_num or wa_url:
+            result["whatsapp_number"] = wa_num
+            result["whatsapp_url"] = wa_url
+    if not result["instagram_url"]:
+        result["instagram_url"] = _extract_instagram(text)
+    if not result["linkedin_url"]:
+        result["linkedin_url"] = _extract_linkedin(text)
+
+
+def search_one(page, company_name: str, city: str, debug: bool = False) -> dict | str:
+    """
+    Run a targeted Google search per missing channel and aggregate the
+    results. The query keyword steers Google's snippet selection — a
+    'phone' query surfaces the Knowledge Panel sidebar with phone +
+    socials, while an 'email' query surfaces the contact-page snippet.
+
+    Returns:
+      dict with {email, website, phone, whatsapp_number, whatsapp_url,
+                 instagram_url, linkedin_url} — any field can be ""
+      CAPTCHA_BLOCKED string when Google challenges us (caller pauses)
+
+    Per-channel early-stop: skips queries we no longer need because
+    the previous query already filled that channel.
+    """
+    result = _empty_result()
+
+    # Queries ordered cheapest-info first. Each step adds info-dense
+    # snippets for the channels still missing.
+    base = f'"{company_name}" {city}'.strip()
+    plan = [
+        ("email",     f'{base} email'),                # contact pages with email
+        ("phone",     f'{base} telefoon contact'),     # NL "telephone" surfaces Knowledge Panel
+        ("instagram", f'{base} instagram'),            # IG profile
+        ("linkedin",  f'{base} linkedin'),             # LI page
+    ]
+
+    def need(field_key: str) -> bool:
+        """True when this query's primary target is still missing."""
+        if field_key == "email":     return not result["email"]
+        if field_key == "phone":     return not (result["phone"] or result["whatsapp_number"])
+        if field_key == "instagram": return not result["instagram_url"]
+        if field_key == "linkedin":  return not result["linkedin_url"]
+        return True
+
+    last_text = ""
+    for purpose, query in plan:
+        if not need(purpose):
+            continue
+        text, status = _do_google_query(page, query)
+        if status == "captcha":
+            return CAPTCHA_BLOCKED
+        last_text = text or last_text
+        if text:
+            _merge_extracted(result, text, company_name)
+
+    if debug and not any(result.values()):
+        sample = (last_text or "")[:800].replace("\n", " ")
+        print()
+        print(f"     DEBUG (no contacts found after {len(plan)} queries). Last page sample:")
+        print(f"     {sample!r}")
+
+    return result
 
 
 def prompt_manual_email(company_name: str, city: str) -> str:
