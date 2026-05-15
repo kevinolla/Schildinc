@@ -141,20 +141,82 @@ def rank_emails(candidates: list[str], company_name: str) -> str:
     return best if best_score >= 20 else ""
 
 
+# Sentinel returned by search_one when Google challenges with a CAPTCHA.
+# Caller treats this differently from "not found" — it skips the record
+# without poisoning its server-side status, so we can retry it later.
+CAPTCHA_BLOCKED = "__CAPTCHA__"
+
+# Things that signal Google is challenging us, not serving real results
+_CAPTCHA_URL_FRAGMENTS = ("/sorry/", "google.com/sorry", "consent.google")
+_CAPTCHA_TEXT_FRAGMENTS = (
+    "ongebruikelijk verkeer",        # NL: unusual traffic
+    "unusual traffic",
+    "i'm not a robot",
+    "captcha",
+    "before you continue to google",
+    "voordat je verdergaat",         # NL: consent gate
+)
+
+
+def is_captcha_page(page) -> bool:
+    """Detect Google's bot-challenge / consent walls."""
+    try:
+        url = (page.url or "").lower()
+        if any(fr in url for fr in _CAPTCHA_URL_FRAGMENTS):
+            return True
+        body = (page.evaluate("document.body ? document.body.innerText.slice(0, 800) : ''") or "").lower()
+        return any(fr in body for fr in _CAPTCHA_TEXT_FRAGMENTS)
+    except Exception:
+        return False
+
+
+def wait_for_human(page, label: str = "Google CAPTCHA") -> None:
+    """
+    Pause the script and wait for the user to solve the challenge in the
+    visible browser window. They press Enter in the terminal once they're
+    back on a normal Google search page.
+    """
+    print()
+    print("=" * 60)
+    print(f"  ⚠  {label} detected.")
+    print(f"  → In the Chrome window: solve the challenge, then return.")
+    print(f"  → Press Enter here when you're past the challenge.")
+    print("=" * 60)
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        raise
+    # Give Google a couple of seconds after the user navigates back
+    try:
+        page.wait_for_timeout(1500)
+    except Exception:
+        pass
+
+
 def search_one(page, company_name: str, city: str) -> tuple[str, str]:
     """
     Open Google in the Playwright page, search "{name}" {city} email,
-    return (email, source_url). Empty if nothing found.
+    return (email, source_url).
+
+    Returns:
+      (email, website_url) — match found
+      ("", "")             — searched OK but no email in snippet
+      (CAPTCHA_BLOCKED, "")— Google challenged us; caller should pause
     """
     query = f'"{company_name}" {city} email'.strip()
     url = "https://www.google.com/search?q=" + urlencode({"q": query})[2:]
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        # Wait briefly for results to render
+        # Quick CAPTCHA check before doing anything else
+        if is_captcha_page(page):
+            return CAPTCHA_BLOCKED, ""
         try:
             page.wait_for_selector("div#search, div#rso", timeout=4000)
         except Exception:
             pass
+        # Re-check after render — sometimes CAPTCHA appears late
+        if is_captcha_page(page):
+            return CAPTCHA_BLOCKED, ""
         text = page.content()  # full HTML — emails leak in titles/snippets/URLs
         candidates = filter_emails(text)
         best = rank_emails(candidates, company_name)
@@ -226,6 +288,7 @@ def main() -> int:
                 if not args.quiet:
                     print(f"--- Got {len(pending)} pending records ---")
 
+                captcha_count = 0
                 for rec in pending:
                     if args.max and processed >= args.max:
                         break
@@ -235,8 +298,36 @@ def main() -> int:
                     if not args.quiet:
                         print(f"  [{processed+1}] #{cid} {name} ({city or '-'}) … ", end="", flush=True)
 
-                    email, website = search_one(page, name, city)
+                    # Inner retry loop — handles CAPTCHA challenges by pausing
+                    # for the user, then retrying the SAME record once.
+                    captcha_retries_left = 1
+                    skipped_due_to_captcha = False
+                    email, website = "", ""
+                    while True:
+                        email, website = search_one(page, name, city)
+                        if email == CAPTCHA_BLOCKED:
+                            if captcha_retries_left <= 0:
+                                # Give up on this record without poisoning it —
+                                # leaves status alone so it stays in /agent/pending
+                                if not args.quiet:
+                                    print("⚠ still blocked, skipping (record left pending)")
+                                captcha_count += 1
+                                skipped_due_to_captcha = True
+                                email, website = "", ""
+                                break
+                            captcha_retries_left -= 1
+                            print()  # break the trailing "…"
+                            wait_for_human(page, label=f"Google CAPTCHA on #{cid} {name}")
+                            print(f"  retrying #{cid} {name} … ", end="", flush=True)
+                            continue
+                        break
+
                     processed += 1
+
+                    if skipped_due_to_captcha:
+                        # Don't write back — record stays in /agent/pending for retry
+                        time.sleep(args.delay)
+                        continue
 
                     if email:
                         result = api_post("/api/kvk/agent/result", {
@@ -266,7 +357,13 @@ def main() -> int:
 
                     time.sleep(args.delay)
 
-                print(f"\n  >>> Progress: {processed} processed, {found_count} found, {miss_count} miss")
+                print(f"\n  >>> Progress: {processed} processed, {found_count} found, {miss_count} miss, {captcha_count} captcha-skipped")
+
+                # If CAPTCHA hit ratio is high, slow down between batches
+                if captcha_count >= 3:
+                    cool = max(60, args.delay * 30)
+                    print(f"  >>> Many CAPTCHAs in this batch — cooling down for {cool}s before next batch")
+                    time.sleep(cool)
 
         except KeyboardInterrupt:
             print(f"\n\n[interrupted] Processed {processed} records, saved {found_count} emails.")
