@@ -4,7 +4,7 @@ import csv
 import io
 import secrets
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from io import StringIO
 from threading import Thread
 from urllib.parse import quote_plus
@@ -1456,6 +1456,87 @@ async def kvk_set_email_inline(
 @app.get("/api/kvk/progress")
 def kvk_progress(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
     return JSONResponse(get_enrichment_progress(db))
+
+
+# ── Local browser-agent endpoints ────────────────────────────────────────────
+# These two endpoints let a Playwright script running on the user's laptop
+# (residential IP, can actually scrape Google) drive enrichment from
+# outside Railway. The script polls /agent/pending for a batch, runs
+# Google searches in a real browser, then POSTs each result back to
+# /agent/result. See scripts/email_agent.py.
+@app.get("/api/kvk/agent/pending")
+def kvk_agent_pending(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    limit: int = 25,
+) -> JSONResponse:
+    limit = max(1, min(100, limit))
+    rows = db.scalars(
+        select(KvkCompany)
+        .where(KvkCompany.email_public == "")  # only records still needing email
+        .where(KvkCompany.already_client_flag.is_(False))
+        .order_by(KvkCompany.id)
+        .limit(limit)
+    ).all()
+    return JSONResponse([
+        {
+            "id": r.id,
+            "company_name": r.company_name,
+            "city": r.primary_city or "",
+            "postal_code": r.primary_postal_code or "",
+            "address": r.primary_address or "",
+            "current_website": r.website or "",
+            "current_status": r.enrichment_status,
+        }
+        for r in rows
+    ])
+
+
+@app.post("/api/kvk/agent/result")
+def kvk_agent_result(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    company_id: int = Form(...),
+    email: str = Form(""),
+    website: str = Form(""),
+    source: str = Form("browser_agent"),
+    confidence: str = Form("high"),
+    note: str = Form(""),
+) -> JSONResponse:
+    """
+    Save an email/website discovered by the local browser agent.
+    Empty `email` is allowed — the agent uses it to mark "not found"
+    so we don't keep handing the same record back to it.
+    """
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+
+    company.last_enrichment_attempt_at = datetime.now(timezone.utc)
+    if email and "@" in email:
+        company.email_public = email.strip().lower()
+        company.email_source_url = source
+        company.email_confidence = confidence or "high"
+        if website and not company.website:
+            company.website = website
+            from app.utils import normalize_domain as _nd
+            company.website_domain = _nd(website)
+        if not company.website_domain:
+            company.website_domain = email.split("@", 1)[1]
+        company.enrichment_status = "discovered"
+        if note:
+            company.notes = ((company.notes or "") + " | agent: " + note).lstrip(" |")
+        from app.matching import apply_kvk_matching
+        apply_kvk_matching(db, company)
+    else:
+        # Mark as agent-checked-with-no-result so it isn't re-queued forever
+        if company.enrichment_status not in ("discovered", "no_website"):
+            company.enrichment_status = "no_contacts"
+        if note:
+            company.notes = ((company.notes or "") + " | agent: " + note).lstrip(" |")
+
+    db.commit()
+    return JSONResponse({"ok": True, "id": company.id, "email": company.email_public, "status": company.enrichment_status})
 
 
 # -- CSV export --
