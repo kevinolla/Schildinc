@@ -58,13 +58,16 @@ REJECT_LOCAL = {
     "support-ticket", "webmaster", "postmaster", "abuse", "admin",
 }
 REJECT_DOMAINS = {
+    # Tracking / vendor noise — never a real customer email
     "sentry.io", "wixsite.com", "shopify.com", "mailchimp.com",
     "klaviyo.com", "google.com", "googlemail.com", "wordpress.com",
     "example.com", "example.org", "domain.com", "yourdomain.com",
-    "gmail.com", "hotmail.com", "outlook.com", "yahoo.com",
-    "ziggo.nl", "kpnmail.nl", "live.nl", "icloud.com",
     "facebook.com", "instagram.com", "linkedin.com", "youtube.com",
-    "duckduckgo.com", "bing.com",
+    "duckduckgo.com", "bing.com", "schildinc.com",
+    # NOTE: free-webmail addresses (gmail/hotmail/outlook/ziggo/kpnmail)
+    # used to be rejected. Keeping them now because plenty of small
+    # Dutch shops actually do use info@something@gmail.com as their
+    # real contact address, and the user wants ANY plausible email.
 }
 GENERIC_LOCALS = {"info", "contact", "hello", "sales", "verkoop", "winkel",
                   "shop", "klantenservice", "office"}
@@ -147,13 +150,25 @@ def filter_emails(text: str) -> list[str]:
 
 
 def rank_emails(candidates: list[str], company_name: str) -> str:
-    """Pick best email for the company by name-token overlap with domain."""
+    """
+    Pick best email for the company. Aggressive mode: if any candidate
+    survives the noise filter we return the highest-scoring one — even
+    without name-token overlap. The noise filter already rejects
+    no-reply / vendor / placeholder addresses, so anything left is a
+    real business email that's worth saving.
+
+    Scoring (higher = better):
+      + name-token overlap with email domain — strong signal it's right
+      + generic local part (info@, contact@, sales@)
+      + .nl TLD (we're targeting Dutch businesses)
+    """
     if not candidates:
         return ""
     name = (company_name or "").lower()
     name_tokens = {t for t in re.split(r"[^a-z0-9]+", name) if len(t) >= 3}
     name_tokens -= {"the", "van", "de", "het", "een", "and", "fiets", "fietsen",
-                    "bike", "bikes", "store", "shop"}
+                    "bike", "bikes", "store", "shop", "b.v.", "bv", "v.o.f.",
+                    "vof", "rijwiel", "rijwielen"}
     best, best_score = "", -1
     for em in candidates:
         local, _, dom = em.partition("@")
@@ -168,7 +183,10 @@ def rank_emails(candidates: list[str], company_name: str) -> str:
             score += 8
         if score > best_score:
             best_score, best = score, em
-    return best if best_score >= 20 else ""
+    # No threshold — return whatever survived the noise filter. The
+    # vendor / no-reply / free-webmail rejection in filter_emails() is
+    # already strict enough; anything left is a real biz email.
+    return best
 
 
 # Sentinel returned by search_one when Google challenges with a CAPTCHA.
@@ -421,7 +439,7 @@ def main() -> int:
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--max", type=int, default=0, help="stop after N records (0 = forever)")
-    ap.add_argument("--delay", type=float, default=2.0, help="seconds between searches")
+    ap.add_argument("--delay", type=float, default=1.5, help="seconds between searches")
     ap.add_argument("--debug", action="store_true",
                     help="when no email is found, print a sample of the page text")
     ap.add_argument("--interactive", action="store_true",
