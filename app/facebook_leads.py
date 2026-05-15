@@ -189,38 +189,71 @@ def import_facebook_leads_from_csv(
 ) -> dict[str, int]:
     """
     Stream-parse a CSV blob and upsert every row by fb_lead_id.
-    Commits in batches so huge files (50k+ rows) don't blow up RAM.
+
+    Strategy (handles 50k+ rows + duplicate fb_lead_ids in same file):
+      1. Walk the CSV once, keeping the LAST row per fb_lead_id in
+         memory (a dict). Last-wins matches the user's expectation that
+         a re-export overrides earlier values.
+      2. Pre-load every existing fb_lead_id from the DB into a set so
+         we know up-front which rows are updates vs inserts.
+      3. For each unique row, either fetch the existing FacebookLead
+         (update) or instantiate a new one (insert). Add to session.
+      4. Flush every `batch_size` rows so SQLAlchemy's session sees
+         our newly-added rows on subsequent lookups (and so RAM
+         pressure stays bounded). Commit at the end of each batch.
     """
     reader = csv.DictReader(io.StringIO(csv_text))
 
+    # Phase 1: dedupe by fb_lead_id in memory — last occurrence wins
+    rows_by_id: dict[str, dict[str, str]] = {}
+    csv_skipped = 0
+    for row in reader:
+        fb_id = (row.get("id") or "").strip()
+        if not fb_id:
+            csv_skipped += 1
+            continue
+        rows_by_id[fb_id] = row
+
+    if progress_print:
+        print(f"[fb-import] CSV had {len(rows_by_id)} unique fb_lead_ids ({csv_skipped} skipped)")
+
+    # Phase 2: pre-load existing fb_lead_ids (cheap — one column)
+    existing_ids = {
+        row[0] for row in db.execute(
+            select(FacebookLead.fb_lead_id).where(
+                FacebookLead.fb_lead_id.in_(list(rows_by_id.keys()))
+            )
+        ).all()
+    }
+    if progress_print:
+        print(f"[fb-import] {len(existing_ids)} already in DB — will update; {len(rows_by_id) - len(existing_ids)} new")
+
     inserted = 0
     updated = 0
-    skipped = 0
     matched_customer = 0
     matched_kvk = 0
     new_leads = 0
     seen_in_batch = 0
+    processed = 0
 
-    for row in reader:
-        fb_id = (row.get("id") or "").strip()
-        if not fb_id:
-            skipped += 1
-            continue
-
-        existing = db.scalars(
-            select(FacebookLead).where(FacebookLead.fb_lead_id == fb_id).limit(1)
-        ).first()
-        is_new = existing is None
-        lead = existing or FacebookLead(fb_lead_id=fb_id)
-
-        _populate_lead(lead, row, source_url)
-
-        if is_new:
+    for fb_id, row in rows_by_id.items():
+        if fb_id in existing_ids:
+            lead = db.scalars(
+                select(FacebookLead).where(FacebookLead.fb_lead_id == fb_id).limit(1)
+            ).first()
+            if lead is None:
+                lead = FacebookLead(fb_lead_id=fb_id)
+                db.add(lead)
+                inserted += 1
+            else:
+                updated += 1
+        else:
+            lead = FacebookLead(fb_lead_id=fb_id)
             db.add(lead)
             inserted += 1
-        else:
-            updated += 1
+            existing_ids.add(fb_id)  # track within this run
 
+        _populate_lead(lead, row, source_url)
         lead.match_status = _classify_lead(db, lead)
         if lead.match_status == "existing_customer":
             matched_customer += 1
@@ -230,17 +263,18 @@ def import_facebook_leads_from_csv(
             new_leads += 1
 
         seen_in_batch += 1
+        processed += 1
         if seen_in_batch >= batch_size:
             db.commit()
             if progress_print:
-                print(f"[fb-import] committed batch, total so far: {inserted+updated}")
+                print(f"[fb-import] committed {processed}/{len(rows_by_id)} rows")
             seen_in_batch = 0
 
     db.commit()
     return {
         "inserted": inserted,
         "updated": updated,
-        "skipped": skipped,
+        "skipped": csv_skipped,
         "existing_customer_matches": matched_customer,
         "known_prospect_matches": matched_kvk,
         "new_leads": new_leads,
