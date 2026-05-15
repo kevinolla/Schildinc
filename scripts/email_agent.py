@@ -522,33 +522,30 @@ def search_one(page, company_name: str, city: str, debug: bool = False) -> dict 
     """
     result = _empty_result()
 
-    # Queries ordered cheapest-info first. Each step adds info-dense
-    # snippets for the channels still missing.
+    # Run ALL targeted queries every record — no per-channel skip. Each
+    # query's keyword steers Google toward a different snippet pattern,
+    # so even when the email query already filled some fields, the
+    # follow-ups regularly surface phones / socials we'd otherwise miss.
     base = f'"{company_name}" {city}'.strip()
     plan = [
-        ("email",     f'{base} email'),                # contact pages with email
-        ("phone",     f'{base} telefoon contact'),     # NL "telephone" surfaces Knowledge Panel
-        ("instagram", f'{base} instagram'),            # IG profile
-        ("linkedin",  f'{base} linkedin'),             # LI page
+        f'{base} email',                  # contact pages with email
+        f'{base} telefoon contact',       # NL "telephone" — Knowledge Panel
+        f'{base} instagram',              # IG profile
+        f'{base} linkedin',               # LI page
     ]
 
-    def need(field_key: str) -> bool:
-        """True when this query's primary target is still missing."""
-        if field_key == "email":     return not result["email"]
-        if field_key == "phone":     return not (result["phone"] or result["whatsapp_number"])
-        if field_key == "instagram": return not result["instagram_url"]
-        if field_key == "linkedin":  return not result["linkedin_url"]
-        return True
-
     last_text = ""
-    for purpose, query in plan:
-        if not need(purpose):
-            continue
+    for query in plan:
         text, status = _do_google_query(page, query)
         if status == "captcha":
             return CAPTCHA_BLOCKED
         last_text = text or last_text
         if text:
+            # _merge_extracted is no-clobber — it fills empty fields
+            # while leaving already-found values untouched. So running
+            # every query unconditionally still yields the same data
+            # as the first hit for each channel; we just see more of
+            # the channels light up.
             _merge_extracted(result, text, company_name)
 
     if debug and not any(result.values()):
