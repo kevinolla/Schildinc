@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import random
 import re
+import threading
 from urllib.parse import quote_plus
 
 from playwright.sync_api import (
@@ -23,6 +24,15 @@ from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
     sync_playwright,
 )
+
+# sync_playwright() is greenlet-based and can't be spawned simultaneously
+# from multiple threads — concurrent calls produce
+#   RuntimeError: Racing with another loop to spawn a process
+# Serialize launches with a module-level lock. Each search still runs to
+# completion in its own browser; the lock only protects the launch step.
+# In practice each search holds the lock for ~6-8s so the 3 workers in
+# the auto-enrich pool effectively trade off snippet searches.
+_LAUNCH_LOCK = threading.Lock()
 
 # Real-browser UAs for Chromium-flavored browsers — Google fingerprints UA
 # strings tightly so anything that smells synthetic gets a CAPTCHA.
@@ -60,7 +70,10 @@ def google_snippet_text(query: str) -> str:
     ua = random.choice(_USER_AGENTS)
 
     try:
-        with sync_playwright() as pw:
+        # Acquire the lock before sync_playwright() to avoid the "Racing
+        # with another loop" error when multiple worker threads enter
+        # this function simultaneously.
+        with _LAUNCH_LOCK, sync_playwright() as pw:
             browser = pw.chromium.launch(
                 headless=True,
                 args=[
