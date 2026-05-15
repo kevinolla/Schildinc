@@ -223,16 +223,51 @@ def wait_for_human(page, label: str = "Google CAPTCHA") -> None:
         pass
 
 
+# JS that walks the entire DOM including shadow roots and grabs every
+# text node. Google AI Overview embeds content inside open shadow DOM
+# that document.body.innerText doesn't pierce.
+_DEEP_TEXT_JS = r"""
+(() => {
+  const out = [];
+  function walk(node) {
+    if (!node) return;
+    if (node.nodeType === 3) {                      // text node
+      const t = (node.textContent || '').trim();
+      if (t) out.push(t);
+      return;
+    }
+    if (node.shadowRoot) walk(node.shadowRoot);
+    // pick up href / aria-label / title / placeholder attrs that
+    // sometimes hold the email
+    if (node.attributes) {
+      for (const a of node.attributes) {
+        const v = (a.value || '').trim();
+        if (v && (v.includes('@') || v.startsWith('mailto:'))) out.push(v);
+      }
+    }
+    let c = node.firstChild;
+    while (c) { walk(c); c = c.nextSibling; }
+  }
+  walk(document);
+  return out.join(' ');
+})()
+"""
+
+
 def _collect_text_from_page(page) -> str:
     """
     Pull every kind of text the user actually sees in the rendered Google
-    results page, not just the raw HTML:
-      - body.innerText (covers AI Overview, Knowledge Panel, snippets)
-      - all anchor `href` values (catches mailto: links)
-      - text from every iframe (AI Overview sometimes uses iframes)
-    Returns one big string for the email regex to scan.
+    results page — including shadow DOM (AI Overview), iframes, anchor
+    hrefs, and attribute values.
     """
     parts: list[str] = []
+    # 1. Deep walk: body.innerText + shadow DOM + attribute values
+    try:
+        deep = page.evaluate(_DEEP_TEXT_JS) or ""
+        parts.append(deep)
+    except Exception:
+        pass
+    # 2. Plain body.innerText as backup
     try:
         body = page.evaluate("document.body ? document.body.innerText : ''") or ""
         parts.append(body)
@@ -245,7 +280,7 @@ def _collect_text_from_page(page) -> str:
         parts.append(hrefs)
     except Exception:
         pass
-    # Iframes: AI Overview sometimes lives in one
+    # 3. Iframes (AI Overview sometimes lives in one)
     try:
         for frame in page.frames:
             if frame == page.main_frame:
@@ -258,7 +293,7 @@ def _collect_text_from_page(page) -> str:
                 pass
     except Exception:
         pass
-    # Final fallback: raw HTML (catches emails in tag attributes /
+    # 4. Final fallback: raw HTML (catches emails in tag attributes /
     # data-cfemail / structured data even when innerText doesn't surface them)
     try:
         parts.append(page.content() or "")
@@ -267,10 +302,26 @@ def _collect_text_from_page(page) -> str:
     return " ".join(parts)
 
 
+def _attempt_extract(page, company_name: str) -> tuple[str, str, list[str], str]:
+    """One extraction pass. Returns (best_email, website, all_candidates, full_text)."""
+    full_text = _collect_text_from_page(page)
+    candidates = filter_emails(full_text)
+    best = rank_emails(candidates, company_name)
+    website = ""
+    if best:
+        _, _, dom = best.partition("@")
+        website = f"https://{dom}"
+    return best, website, candidates, full_text
+
+
 def search_one(page, company_name: str, city: str, debug: bool = False) -> tuple[str, str]:
     """
     Open Google in the Playwright page, search "{name}" {city} email,
     return (email, source_url).
+
+    Aggressively waits for late-rendered content (AI Overview takes
+    several seconds to appear after initial load) and polls the page
+    multiple times in case more results stream in.
 
     Returns:
       (email, website_url) — match found
@@ -281,51 +332,87 @@ def search_one(page, company_name: str, city: str, debug: bool = False) -> tuple
     url = "https://www.google.com/search?q=" + urlencode({"q": query})[2:]
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=20000)
-        # Quick CAPTCHA check before doing anything else
         if is_captcha_page(page):
             return CAPTCHA_BLOCKED, ""
 
-        # Wait for the main results container, then for the AI Overview /
-        # Knowledge Panel which loads later via JS.
+        # Wait for main results container
         try:
             page.wait_for_selector("div#search, div#rso, div#main", timeout=8000)
         except Exception:
             pass
-        # Wait for network to quiet down so AI Overview etc. has loaded
+        # Wait for network quiet — AI Overview loads via XHR after this
         try:
-            page.wait_for_load_state("networkidle", timeout=6000)
-        except Exception:
-            pass
-        # Small extra settle pause for very late-rendered widgets
-        try:
-            page.wait_for_timeout(800)
+            page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:
             pass
 
-        # Re-check CAPTCHA — sometimes Google interrupts after results render
         if is_captcha_page(page):
             return CAPTCHA_BLOCKED, ""
 
-        full_text = _collect_text_from_page(page)
-        candidates = filter_emails(full_text)
-        best = rank_emails(candidates, company_name)
-        if best:
-            _, _, dom = best.partition("@")
-            return best, f"https://{dom}"
+        # Trigger lazy-loaded widgets (AI Overview, "More results"
+        # cards, Knowledge Panel) by scrolling down — Google won't
+        # render them for a "user" who never moved the page.
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+            page.wait_for_timeout(1200)
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(400)
+        except Exception:
+            pass
 
+        # Multi-pass extraction: try every 1.5s up to 4 times so AI
+        # Overview / Knowledge Panel content that streams in late still
+        # gets captured. Stop early on the first valid match.
+        best, website, candidates, full_text = "", "", [], ""
+        for attempt in range(4):
+            best, website, candidates, full_text = _attempt_extract(page, company_name)
+            if best:
+                return best, website
+            try:
+                page.wait_for_timeout(1500)
+            except Exception:
+                break
+
+        # Nothing found after 4 polls + scroll
         if debug:
-            # Dump a chunk so the user can compare what we saw vs what
-            # they see in the visible Chrome window
-            sample = full_text[:600].replace("\n", " ")
+            sample = full_text[:800].replace("\n", " ")
             print()
-            print(f"     DEBUG (no email found). Page text sample:")
+            print(f"     DEBUG (no email found). Page text sample (first 800 chars):")
             print(f"     {sample!r}")
             if candidates:
-                print(f"     Candidates that didn't pass ranking: {candidates[:6]}")
+                print(f"     Raw candidates that didn't pass ranking: {candidates[:8]}")
+            else:
+                print(f"     No emails matched in extracted text at all.")
         return "", ""
     except Exception as exc:
         print(f"  ! search error: {exc}")
         return "", ""
+
+
+def prompt_manual_email(company_name: str, city: str) -> str:
+    """
+    Interactive fallback: when the script can't extract an email but the
+    user CAN see one in the browser window, let them paste it. Returns
+    the typed email, or "" to skip.
+    """
+    print()
+    print("-" * 60)
+    print(f"  Can you see an email for `{company_name}` ({city or '-'}) in the browser?")
+    print(f"  → Paste the email and press Enter to save it.")
+    print(f"  → Press Enter alone to skip this record.")
+    print(f"  → Type 'q' to quit the agent.")
+    try:
+        raw = input("  email: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        raise
+    if raw in ("q", "quit", "exit"):
+        raise KeyboardInterrupt()
+    if not raw:
+        return ""
+    if "@" not in raw or "." not in raw.split("@", 1)[1]:
+        print(f"  ! '{raw}' doesn't look like an email. Skipping.")
+        return ""
+    return raw
 
 
 def main() -> int:
@@ -337,6 +424,8 @@ def main() -> int:
     ap.add_argument("--delay", type=float, default=2.0, help="seconds between searches")
     ap.add_argument("--debug", action="store_true",
                     help="when no email is found, print a sample of the page text")
+    ap.add_argument("--interactive", action="store_true",
+                    help="on miss, pause and let you type the email you see in the browser")
     args = ap.parse_args()
 
     try:
@@ -430,18 +519,33 @@ def main() -> int:
                         time.sleep(args.delay)
                         continue
 
+                    # Interactive fallback: if extraction missed but the
+                    # user CAN see an email in the visible Chrome window,
+                    # let them paste it. Confidence stays "high" since
+                    # they verified it personally.
+                    manual_source = "browser_agent"
+                    if not email and args.interactive:
+                        print("✗ not auto-detected", end="", flush=True)
+                        typed = prompt_manual_email(name, city)
+                        if typed:
+                            email = typed
+                            _, _, dom = typed.partition("@")
+                            website = f"https://{dom}"
+                            manual_source = "browser_agent_manual"
+
                     if email:
                         result = api_post("/api/kvk/agent/result", {
                             "company_id": str(cid),
                             "email": email,
                             "website": website,
-                            "source": "browser_agent",
+                            "source": manual_source,
                             "confidence": "high",
                         })
                         if result.get("ok"):
                             found_count += 1
+                            tag = " (manual)" if manual_source.endswith("_manual") else ""
                             if not args.quiet:
-                                print(f"✓ {email}")
+                                print(f"✓ {email}{tag}")
                         else:
                             print(f"✗ save failed: {result}")
                     else:
