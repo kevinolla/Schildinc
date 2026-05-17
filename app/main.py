@@ -1894,11 +1894,26 @@ def kvk_agent_pending(
     _: str = Depends(require_admin),
     limit: int = 25,
 ) -> JSONResponse:
+    """
+    Return records the agent has NOT yet attempted. Filters on
+    enrichment_status (not just email_public) so records the agent
+    already touched — even ones where it found just a phone or
+    nothing — don't get re-served on every batch.
+
+    Reprocessable statuses: 'pending', '', 'searching', 'running',
+    'no_website', 'error'. Records in 'discovered' / 'partial' /
+    'no_contacts' have already been fully attempted.
+    """
     limit = max(1, min(100, limit))
     rows = db.scalars(
         select(KvkCompany)
-        .where(KvkCompany.email_public == "")  # only records still needing email
+        .where(KvkCompany.email_public == "")
         .where(KvkCompany.already_client_flag.is_(False))
+        .where(
+            KvkCompany.enrichment_status.notin_(
+                ["discovered", "partial", "no_contacts"]
+            )
+        )
         .order_by(KvkCompany.id)
         .limit(limit)
     ).all()
