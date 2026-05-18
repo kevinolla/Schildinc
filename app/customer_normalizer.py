@@ -260,6 +260,18 @@ def import_customers_from_csv(
     FB leads importer — atomic, race-free, bulk-safe.
     """
     records = normalize_customer_csv(csv_text)
+
+    # Within-batch dedup: two distinct customer NAMES can slug to the
+    # same `customer_entity_id` (e.g. "Azor Bike BV" and "Azor-Bike BV").
+    # ON CONFLICT can only fire once per ID per command, so collapse
+    # duplicates here, keeping the highest-LTV record (most data).
+    by_id: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        cid = rec["customer_entity_id"]
+        prev = by_id.get(cid)
+        if prev is None or rec["lifetime_amount_paid"] > prev["lifetime_amount_paid"]:
+            by_id[cid] = rec
+    records = list(by_id.values())
     total = len(records)
     if progress_print:
         print(f"[customer-import] CSV aggregated to {total} unique customers")
