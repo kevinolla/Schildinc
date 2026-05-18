@@ -11,6 +11,14 @@
   </div>
   <div class="page-actions">
     <a href="/customers/analytics" class="btn btn-secondary btn-sm">📊 Analytics</a>
+    {# Export CSV that honors the current filters #}
+    {% set qs = '' %}
+    {% if search %}{% set qs = qs + 'search=' + search + '&' %}{% endif %}
+    {% if sector %}{% set qs = qs + 'sector=' + sector + '&' %}{% endif %}
+    {% if segment %}{% set qs = qs + 'segment=' + segment + '&' %}{% endif %}
+    {% if country %}{% set qs = qs + 'country=' + country + '&' %}{% endif %}
+    {% if sort %}{% set qs = qs + 'sort=' + sort %}{% endif %}
+    <a href="/customers/export.csv?{{ qs }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
     <button class="btn btn-secondary btn-sm" type="button"
             onclick="document.getElementById('rich-upload-panel').classList.toggle('hidden')">
       📤 Import customer DB
@@ -40,19 +48,26 @@
 
 <!-- Search + filters -->
 <form method="get" action="/customers" class="filter-bar">
-  <div class="filter-form" style="grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(120px, 1fr) minmax(110px, auto) auto;">
+  <div class="filter-form" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px;">
     <input type="text" name="search" value="{{ search }}"
-           placeholder="Search company, email, domain, city, contact…" class="search-input">
+           placeholder="Search name, email, city, contact…" class="search-input"
+           style="grid-column: span 2; min-width: 0;">
     <select name="sector">
-      <option value="" {% if not request.query_params.get('sector') %}selected{% endif %}>All sectors</option>
+      <option value="" {% if not sector %}selected{% endif %}>All sectors</option>
       {% for s in sector_options %}
-      <option value="{{ s }}" {% if request.query_params.get('sector') == s %}selected{% endif %}>{{ s }}</option>
+      <option value="{{ s }}" {% if sector == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <select name="country" title="Filter by country">
+      <option value="" {% if not country %}selected{% endif %}>All countries</option>
+      {% for cc in country_options %}
+      <option value="{{ cc }}" {% if country == cc %}selected{% endif %}>{{ cc }}</option>
       {% endfor %}
     </select>
     <select name="segment">
-      <option value="" {% if not request.query_params.get('segment') %}selected{% endif %}>B2B + B2C</option>
-      <option value="B2B" {% if request.query_params.get('segment') == 'B2B' %}selected{% endif %}>B2B only</option>
-      <option value="B2C" {% if request.query_params.get('segment') == 'B2C' %}selected{% endif %}>B2C only</option>
+      <option value="" {% if not segment %}selected{% endif %}>B2B + B2C</option>
+      <option value="B2B" {% if segment == 'B2B' %}selected{% endif %}>B2B only</option>
+      <option value="B2C" {% if segment == 'B2C' %}selected{% endif %}>B2C only</option>
     </select>
     <select name="match">
       <option value="" {% if not match %}selected{% endif %}>All matches</option>
@@ -60,6 +75,14 @@
       <option value="kvk_only" {% if match == 'kvk_only' %}selected{% endif %}>🟢 KVK only</option>
       <option value="prospect_only" {% if match == 'prospect_only' %}selected{% endif %}>🔵 Prospect only</option>
       <option value="kvk_and_prospect" {% if match == 'kvk_and_prospect' %}selected{% endif %}>✅ Both</option>
+    </select>
+    <select name="sort" title="Sort order">
+      <option value="ltv_desc" {% if sort == 'ltv_desc' or not sort %}selected{% endif %}>💰 Top LTV first</option>
+      <option value="ltv_asc"  {% if sort == 'ltv_asc' %}selected{% endif %}>↑ Lowest LTV first</option>
+      <option value="country"  {% if sort == 'country' %}selected{% endif %}>🌍 By country</option>
+      <option value="company"  {% if sort == 'company' %}selected{% endif %}>A → Z company</option>
+      <option value="recent"   {% if sort == 'recent' %}selected{% endif %}>🕐 Most recent invoice</option>
+      <option value="invoices" {% if sort == 'invoices' %}selected{% endif %}>📦 Most invoices</option>
     </select>
     <select name="per_page">
       {% for size in [25, 50, 100, 200] %}
@@ -168,7 +191,11 @@
 <div class="pagination">
   {% set base_qs = '' %}
   {% if search %}{% set base_qs = base_qs + 'search=' + search + '&' %}{% endif %}
+  {% if sector %}{% set base_qs = base_qs + 'sector=' + sector + '&' %}{% endif %}
+  {% if country %}{% set base_qs = base_qs + 'country=' + country + '&' %}{% endif %}
+  {% if segment %}{% set base_qs = base_qs + 'segment=' + segment + '&' %}{% endif %}
   {% if match %}{% set base_qs = base_qs + 'match=' + match + '&' %}{% endif %}
+  {% if sort %}{% set base_qs = base_qs + 'sort=' + sort + '&' %}{% endif %}
   {% set base_qs = base_qs + 'per_page=' + per_page|string %}
 
   {% if page > 1 %}

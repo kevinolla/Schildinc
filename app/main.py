@@ -497,34 +497,19 @@ def dashboard(request: Request, db: Session = Depends(get_db), _: str = Depends(
     )
 
 
-@app.get("/customers", response_class=HTMLResponse)
-def customers_page(
-    request: Request,
-    db: Session = Depends(get_db),
-    _: str = Depends(require_admin),
-    page: int = 1,
-    per_page: int = 50,
+def _customers_base_query(
+    *,
     search: str = "",
-    match: str = "",
     sector: str = "",
     segment: str = "",
-) -> HTMLResponse:
+    country: str = "",
+    sort: str = "ltv_desc",
+):
     """
-    Paginated customers list with KVK + Prospect match status per row.
-
-    For each customer on the visible page, we check whether they appear
-    in the KVK or Prospect tables — matched by primary email OR by
-    canonical_company_name_clean. The result is one of:
-      - 'kvk_only'        → already in KVK, no prospect
-      - 'prospect_only'   → already in prospects, no KVK
-      - 'kvk_and_prospect'→ in both
-      - 'new'             → not in either (this customer hasn't been
-                            cross-referenced — treat as a new lead)
-    Showing this lets the user audit gaps in coverage.
+    Build the filtered + sorted base SELECT for customers. Shared
+    between the /customers HTML view and the /customers/export.csv
+    endpoint so both apply identical filters.
     """
-    page = max(1, page)
-    per_page = max(10, min(200, per_page))
-
     base = select(Customer)
     if search:
         like = f"%{search.lower()}%"
@@ -542,6 +527,58 @@ def customers_page(
         base = base.where(Customer.main_sector == sector)
     if segment in ("B2B", "B2C"):
         base = base.where(Customer.customer_segment == segment)
+    if country:
+        base = base.where(func.upper(Customer.country_code) == country.upper())
+
+    # Sort order — declarative so the export and HTML stay in sync
+    if sort == "ltv_asc":
+        base = base.order_by(Customer.lifetime_amount_paid.asc().nullslast(), Customer.canonical_company_name)
+    elif sort == "country":
+        base = base.order_by(Customer.country_code.nullslast(), Customer.lifetime_amount_paid.desc().nullslast())
+    elif sort == "company":
+        base = base.order_by(Customer.canonical_company_name)
+    elif sort == "recent":
+        base = base.order_by(Customer.last_invoice_date_utc.desc().nullslast(), Customer.canonical_company_name)
+    elif sort == "invoices":
+        base = base.order_by(Customer.invoice_count.desc().nullslast(), Customer.lifetime_amount_paid.desc().nullslast())
+    else:  # ltv_desc — default
+        base = base.order_by(Customer.lifetime_amount_paid.desc().nullslast(), Customer.updated_at.desc())
+    return base
+
+
+@app.get("/customers", response_class=HTMLResponse)
+def customers_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    page: int = 1,
+    per_page: int = 50,
+    search: str = "",
+    match: str = "",
+    sector: str = "",
+    segment: str = "",
+    country: str = "",
+    sort: str = "ltv_desc",
+) -> HTMLResponse:
+    """
+    Paginated customers list with KVK + Prospect match status per row.
+
+    For each customer on the visible page, we check whether they appear
+    in the KVK or Prospect tables — matched by primary email OR by
+    canonical_company_name_clean. The result is one of:
+      - 'kvk_only'        → already in KVK, no prospect
+      - 'prospect_only'   → already in prospects, no KVK
+      - 'kvk_and_prospect'→ in both
+      - 'new'             → not in either (this customer hasn't been
+                            cross-referenced — treat as a new lead)
+    Showing this lets the user audit gaps in coverage.
+    """
+    page = max(1, page)
+    per_page = max(10, min(200, per_page))
+
+    base = _customers_base_query(
+        search=search, sector=sector, segment=segment, country=country, sort=sort
+    )
 
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     total_pages = max(1, (total + per_page - 1) // per_page)
@@ -549,9 +586,7 @@ def customers_page(
         page = total_pages
 
     customers = db.scalars(
-        base.order_by(Customer.lifetime_amount_paid.desc().nullslast(), Customer.updated_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
+        base.offset((page - 1) * per_page).limit(per_page)
     ).all()
 
     # ── Cross-reference batch: one query each to KVK and Prospects ───────
@@ -616,11 +651,16 @@ def customers_page(
     if match in ("kvk_only", "prospect_only", "kvk_and_prospect", "new"):
         enriched = [row for row in enriched if row["status"] == match]
 
-    # Summary counts + distinct sectors for the filter dropdown
+    # Summary counts + distinct sectors / countries for the filter dropdowns
     customer_total = db.scalar(select(func.count(Customer.id))) or 0
     sector_options = [
         s for (s,) in db.execute(
             select(Customer.main_sector).where(Customer.main_sector != "").distinct().order_by(Customer.main_sector)
+        ).all()
+    ]
+    country_options = [
+        c for (c,) in db.execute(
+            select(Customer.country_code).where(Customer.country_code != "").distinct().order_by(Customer.country_code)
         ).all()
     ]
 
@@ -639,9 +679,83 @@ def customers_page(
             "match": match,
             "sector": sector,
             "segment": segment,
+            "country": country,
+            "sort": sort,
             "sector_options": sector_options,
+            "country_options": country_options,
             "app_name": settings.app_name,
         },
+    )
+
+
+@app.get("/customers/export.csv")
+def customers_export_csv(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    search: str = "",
+    sector: str = "",
+    segment: str = "",
+    country: str = "",
+    sort: str = "ltv_desc",
+) -> StreamingResponse:
+    """
+    Stream the customers list as CSV with the SAME filters + sort
+    order as the HTML view. Useful for handing a segmented audience
+    to outreach tools (Klaviyo, mail merge, etc.).
+    """
+    base = _customers_base_query(
+        search=search, sector=sector, segment=segment, country=country, sort=sort
+    )
+
+    def gen():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow([
+            "company_name", "contact_person", "email", "phone", "website",
+            "city", "country_code", "main_sector", "sub_sector", "segment",
+            "invoice_count", "lifetime_amount_paid", "last_invoice_date",
+            "first_invoice_date", "customer_entity_id",
+        ])
+        yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+        # Stream in chunks of 1000 so a 10k-customer export doesn't load
+        # everything into memory at once
+        offset, page_size = 0, 1000
+        while True:
+            chunk = db.scalars(base.offset(offset).limit(page_size)).all()
+            if not chunk:
+                break
+            for c in chunk:
+                w.writerow([
+                    c.canonical_company_name,
+                    c.contact_person or "",
+                    c.customer_email_primary or "",
+                    c.phone_primary or "",
+                    c.website or c.website_domain_candidate or "",
+                    c.city or "",
+                    c.country_code or "",
+                    c.main_sector or "",
+                    c.sub_sector or "",
+                    c.customer_segment or "",
+                    c.invoice_count or 0,
+                    f"{float(c.lifetime_amount_paid or 0):.2f}",
+                    c.last_invoice_date_utc.strftime("%Y-%m-%d") if c.last_invoice_date_utc else "",
+                    c.first_invoice_date_utc.strftime("%Y-%m-%d") if c.first_invoice_date_utc else "",
+                    c.customer_entity_id or "",
+                ])
+            yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+            offset += page_size
+
+    # Build a filename that reflects the filters applied
+    slug_parts: list[str] = []
+    if sector:   slug_parts.append(f"sector-{sector.lower()}")
+    if segment:  slug_parts.append(segment.lower())
+    if country:  slug_parts.append(f"country-{country.lower()}")
+    suffix = "-".join(slug_parts) or "all"
+    filename = f"customers-{suffix}-{date.today().isoformat()}.csv"
+    return StreamingResponse(
+        gen(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
