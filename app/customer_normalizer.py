@@ -31,6 +31,7 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.country_codes import to_iso2
 from app.models import Customer
 from app.utils import normalize_domain, normalize_email, normalize_text
 
@@ -197,11 +198,9 @@ def normalize_customer_csv(csv_text: str) -> list[dict[str, Any]]:
         # Extract city/country if not given in dedicated column
         city, addr_country = _extract_city_country(delivery_addr)
         country = country_raw or addr_country
-        # Country code: try to slug to 2 letters when it's a 2-letter code already
-        if len(country) == 2 and country.isalpha():
-            country_code = country.upper()
-        else:
-            country_code = country[:3].upper() if country else ""
+        # Canonicalize to ISO-2 via the alias registry — handles
+        # 'Netherlands', 'NL', 'NLD', 'NET' etc. uniformly
+        country_code = to_iso2(country)
 
         # Email + domain
         norm_email = normalize_email(email) if email else ""

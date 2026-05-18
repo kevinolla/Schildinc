@@ -11,14 +11,15 @@
   </div>
   <div class="page-actions">
     <a href="/customers/analytics" class="btn btn-secondary btn-sm">📊 Analytics</a>
-    {# Export CSV that honors the current filters #}
-    {% set qs = '' %}
-    {% if search %}{% set qs = qs + 'search=' + search + '&' %}{% endif %}
-    {% if sector %}{% set qs = qs + 'sector=' + sector + '&' %}{% endif %}
-    {% if segment %}{% set qs = qs + 'segment=' + segment + '&' %}{% endif %}
-    {% if country %}{% set qs = qs + 'country=' + country + '&' %}{% endif %}
-    {% if sort %}{% set qs = qs + 'sort=' + sort %}{% endif %}
-    <a href="/customers/export.csv?{{ qs }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
+    {# Export CSV that honors the current filters — country is a list so
+       we repeat the param per selected value. #}
+    {% set qs = [] %}
+    {% if search %}{% set _ = qs.append('search=' ~ search) %}{% endif %}
+    {% if sector %}{% set _ = qs.append('sector=' ~ sector) %}{% endif %}
+    {% if segment %}{% set _ = qs.append('segment=' ~ segment) %}{% endif %}
+    {% for cc in country %}{% set _ = qs.append('country=' ~ cc) %}{% endfor %}
+    {% if sort %}{% set _ = qs.append('sort=' ~ sort) %}{% endif %}
+    <a href="/customers/export.csv?{{ qs|join('&') }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
     <button class="btn btn-secondary btn-sm" type="button"
             onclick="document.getElementById('rich-upload-panel').classList.toggle('hidden')">
       📤 Import customer DB
@@ -58,12 +59,32 @@
       <option value="{{ s }}" {% if sector == s %}selected{% endif %}>{{ s }}</option>
       {% endfor %}
     </select>
-    <select name="country" title="Filter by country">
-      <option value="" {% if not country %}selected{% endif %}>All countries</option>
-      {% for cc in country_options %}
-      <option value="{{ cc }}" {% if country == cc %}selected{% endif %}>{{ cc }}</option>
-      {% endfor %}
-    </select>
+    {# Country multi-select checklist — multiple `country=XX` params sent on submit #}
+    <details class="filter-multiselect">
+      <summary>
+        🌍
+        {% if country %}
+          {{ country|length }} countr{{ 'y' if country|length == 1 else 'ies' }}
+        {% else %}
+          All countries
+        {% endif %}
+      </summary>
+      <div class="filter-multiselect-pop">
+        <div class="filter-multiselect-actions">
+          <a href="javascript:void(0)" onclick="document.querySelectorAll('.country-cb').forEach(c=>c.checked=true)">All</a>
+          <span>·</span>
+          <a href="javascript:void(0)" onclick="document.querySelectorAll('.country-cb').forEach(c=>c.checked=false)">None</a>
+        </div>
+        {% for opt in country_options %}
+        <label class="filter-multiselect-row">
+          <input type="checkbox" name="country" value="{{ opt.code }}" class="country-cb"
+                 {% if opt.code in country %}checked{% endif %}>
+          <span>{{ opt.name }}</span>
+          <span class="muted">{{ opt.count }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </details>
     <select name="segment">
       <option value="" {% if not segment %}selected{% endif %}>B2B + B2C</option>
       <option value="B2B" {% if segment == 'B2B' %}selected{% endif %}>B2B only</option>
@@ -146,7 +167,11 @@
           </td>
           <td class="text-muted" style="font-size:.82rem">
             {{ c.city or '—' }}
-            {% if c.country_code %}<span style="color:#9ca3af">· {{ c.country_code }}</span>{% endif %}
+            {% if c.country_code %}
+            <div class="muted" style="font-size:.72rem">
+              {{ country_names.get(c.country_code, c.country_code) }}
+            </div>
+            {% endif %}
           </td>
           <td style="text-align:right">{{ c.invoice_count or 0 }}</td>
           <td style="text-align:right;font-weight:600">
@@ -189,14 +214,15 @@
 <!-- Pagination -->
 {% if total_pages > 1 %}
 <div class="pagination">
-  {% set base_qs = '' %}
-  {% if search %}{% set base_qs = base_qs + 'search=' + search + '&' %}{% endif %}
-  {% if sector %}{% set base_qs = base_qs + 'sector=' + sector + '&' %}{% endif %}
-  {% if country %}{% set base_qs = base_qs + 'country=' + country + '&' %}{% endif %}
-  {% if segment %}{% set base_qs = base_qs + 'segment=' + segment + '&' %}{% endif %}
-  {% if match %}{% set base_qs = base_qs + 'match=' + match + '&' %}{% endif %}
-  {% if sort %}{% set base_qs = base_qs + 'sort=' + sort + '&' %}{% endif %}
-  {% set base_qs = base_qs + 'per_page=' + per_page|string %}
+  {% set base_parts = [] %}
+  {% if search %}{% set _ = base_parts.append('search=' ~ search) %}{% endif %}
+  {% if sector %}{% set _ = base_parts.append('sector=' ~ sector) %}{% endif %}
+  {% for cc in country %}{% set _ = base_parts.append('country=' ~ cc) %}{% endfor %}
+  {% if segment %}{% set _ = base_parts.append('segment=' ~ segment) %}{% endif %}
+  {% if match %}{% set _ = base_parts.append('match=' ~ match) %}{% endif %}
+  {% if sort %}{% set _ = base_parts.append('sort=' ~ sort) %}{% endif %}
+  {% set _ = base_parts.append('per_page=' ~ per_page|string) %}
+  {% set base_qs = base_parts|join('&') %}
 
   {% if page > 1 %}
   <a href="?{{ base_qs }}&page=1" class="btn btn-ghost btn-sm">« First</a>

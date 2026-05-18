@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 
 import pandas as pd
 import stripe
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -502,13 +502,15 @@ def _customers_base_query(
     search: str = "",
     sector: str = "",
     segment: str = "",
-    country: str = "",
+    country: list[str] | None = None,
     sort: str = "ltv_desc",
 ):
     """
     Build the filtered + sorted base SELECT for customers. Shared
     between the /customers HTML view and the /customers/export.csv
     endpoint so both apply identical filters.
+
+    `country` is a list of ISO-2 codes; multiple values mean IN().
     """
     base = select(Customer)
     if search:
@@ -528,7 +530,10 @@ def _customers_base_query(
     if segment in ("B2B", "B2C"):
         base = base.where(Customer.customer_segment == segment)
     if country:
-        base = base.where(func.upper(Customer.country_code) == country.upper())
+        # Normalize input to uppercase for the IN clause
+        codes = [c.strip().upper() for c in country if c.strip()]
+        if codes:
+            base = base.where(func.upper(Customer.country_code).in_(codes))
 
     # Sort order — declarative so the export and HTML stay in sync
     if sort == "ltv_asc":
@@ -557,7 +562,7 @@ def customers_page(
     match: str = "",
     sector: str = "",
     segment: str = "",
-    country: str = "",
+    country: list[str] = Query(default=[]),
     sort: str = "ltv_desc",
 ) -> HTMLResponse:
     """
@@ -658,11 +663,19 @@ def customers_page(
             select(Customer.main_sector).where(Customer.main_sector != "").distinct().order_by(Customer.main_sector)
         ).all()
     ]
-    country_options = [
-        c for (c,) in db.execute(
-            select(Customer.country_code).where(Customer.country_code != "").distinct().order_by(Customer.country_code)
-        ).all()
-    ]
+    # Distinct country codes with counts + display names, alphabetical
+    # by name so the dropdown reads naturally
+    from app.country_codes import COUNTRIES, name_for as _country_name
+    raw_country_rows = db.execute(
+        select(Customer.country_code, func.count(Customer.id))
+        .where(Customer.country_code != "")
+        .group_by(Customer.country_code)
+    ).all()
+    country_options = sorted(
+        [{"code": code, "name": _country_name(code), "count": cnt}
+         for code, cnt in raw_country_rows],
+        key=lambda r: r["name"],
+    )
 
     return templates.TemplateResponse(
         request,
@@ -683,6 +696,7 @@ def customers_page(
             "sort": sort,
             "sector_options": sector_options,
             "country_options": country_options,
+            "country_names": COUNTRIES,
             "app_name": settings.app_name,
         },
     )
@@ -695,7 +709,7 @@ def customers_export_csv(
     search: str = "",
     sector: str = "",
     segment: str = "",
-    country: str = "",
+    country: list[str] = Query(default=[]),
     sort: str = "ltv_desc",
 ) -> StreamingResponse:
     """
@@ -749,7 +763,10 @@ def customers_export_csv(
     slug_parts: list[str] = []
     if sector:   slug_parts.append(f"sector-{sector.lower()}")
     if segment:  slug_parts.append(segment.lower())
-    if country:  slug_parts.append(f"country-{country.lower()}")
+    if country:
+        codes = "-".join(c.lower() for c in country if c.strip())
+        if codes:
+            slug_parts.append(f"country-{codes}")
     suffix = "-".join(slug_parts) or "all"
     filename = f"customers-{suffix}-{date.today().isoformat()}.csv"
     return StreamingResponse(
