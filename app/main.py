@@ -506,6 +506,8 @@ def customers_page(
     per_page: int = 50,
     search: str = "",
     match: str = "",
+    sector: str = "",
+    segment: str = "",
 ) -> HTMLResponse:
     """
     Paginated customers list with KVK + Prospect match status per row.
@@ -533,8 +535,13 @@ def customers_page(
                 func.lower(Customer.website_domain_candidate).like(like),
                 func.lower(Customer.match_key_domain).like(like),
                 func.lower(Customer.city).like(like),
+                func.lower(Customer.contact_person).like(like),
             )
         )
+    if sector:
+        base = base.where(Customer.main_sector == sector)
+    if segment in ("B2B", "B2C"):
+        base = base.where(Customer.customer_segment == segment)
 
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     total_pages = max(1, (total + per_page - 1) // per_page)
@@ -609,8 +616,13 @@ def customers_page(
     if match in ("kvk_only", "prospect_only", "kvk_and_prospect", "new"):
         enriched = [row for row in enriched if row["status"] == match]
 
-    # Summary counts across ALL customers (cheap aggregate queries)
+    # Summary counts + distinct sectors for the filter dropdown
     customer_total = db.scalar(select(func.count(Customer.id))) or 0
+    sector_options = [
+        s for (s,) in db.execute(
+            select(Customer.main_sector).where(Customer.main_sector != "").distinct().order_by(Customer.main_sector)
+        ).all()
+    ]
 
     return templates.TemplateResponse(
         request,
@@ -625,6 +637,9 @@ def customers_page(
             "customer_total": customer_total,
             "search": search,
             "match": match,
+            "sector": sector,
+            "segment": segment,
+            "sector_options": sector_options,
             "app_name": settings.app_name,
         },
     )
@@ -935,6 +950,28 @@ async def import_customers(
     summary = upsert_customers_from_dataframe(db, df)
     db.commit()
     return RedirectResponse(f"/customers?inserted={summary.inserted}&updated={summary.updated}", status_code=303)
+
+
+@app.post("/admin/import/customers-rich")
+async def import_customers_rich(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    """
+    Schild Inc historical customer-DB CSV (one row per order-line).
+    Aggregates by customer name into one Customer row each, then
+    upserts via Postgres ON CONFLICT — safe to re-run.
+    """
+    from app.customer_normalizer import import_customers_from_csv
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8-sig", errors="replace")
+        summary = import_customers_from_csv(db, text, batch_size=500)
+        flash = f"Customer DB import: {summary['upserted']} customers upserted from {summary['total']} aggregated rows"
+    except Exception as exc:
+        flash = f"Customer DB import failed: {exc}"
+    return RedirectResponse(f"/customers?flash={quote_plus(flash)}", status_code=303)
 
 
 @app.post("/admin/import/invoices")

@@ -11,21 +11,55 @@
   </div>
   <div class="page-actions">
     <a href="/customers/analytics" class="btn btn-secondary btn-sm">📊 Analytics</a>
+    <button class="btn btn-secondary btn-sm" type="button"
+            onclick="document.getElementById('rich-upload-panel').classList.toggle('hidden')">
+      📤 Import customer DB
+    </button>
     <a href="/customers" class="btn btn-ghost btn-sm">Reset</a>
   </div>
 </div>
 
+{% if request.query_params.get('flash') %}
+<div class="flash flash-success">{{ request.query_params.get('flash') | replace('+', ' ') | replace('%2C', ',') }}</div>
+{% endif %}
+
+<!-- Customer-DB CSV upload panel (Schild Inc historical order lines) -->
+<div id="rich-upload-panel" class="card hidden" style="margin-bottom: 1rem">
+  <h3 style="margin-top:0;font-size:1rem">Import Schild Inc customer database</h3>
+  <p class="muted">
+    The "Customer Database — All Combined 21-25" CSV has one row per order line. The importer aggregates by customer name
+    (summing total order value, counting invoices, picking sector/contact from the rows), then upserts into the customers
+    table. Safe to re-run — existing customers get refreshed.
+  </p>
+  <form method="post" action="/admin/import/customers-rich" enctype="multipart/form-data"
+        style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+    <input type="file" name="file" accept=".csv" required>
+    <button class="btn btn-primary btn-sm" type="submit">Upload + normalize</button>
+  </form>
+</div>
+
 <!-- Search + filters -->
 <form method="get" action="/customers" class="filter-bar">
-  <div class="filter-form" style="grid-template-columns: minmax(240px, 2fr) minmax(150px, 1fr) minmax(120px, auto) auto;">
+  <div class="filter-form" style="grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) minmax(140px, 1fr) minmax(120px, 1fr) minmax(110px, auto) auto;">
     <input type="text" name="search" value="{{ search }}"
-           placeholder="Search company, email, domain, city…" class="search-input">
+           placeholder="Search company, email, domain, city, contact…" class="search-input">
+    <select name="sector">
+      <option value="" {% if not request.query_params.get('sector') %}selected{% endif %}>All sectors</option>
+      {% for s in sector_options %}
+      <option value="{{ s }}" {% if request.query_params.get('sector') == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <select name="segment">
+      <option value="" {% if not request.query_params.get('segment') %}selected{% endif %}>B2B + B2C</option>
+      <option value="B2B" {% if request.query_params.get('segment') == 'B2B' %}selected{% endif %}>B2B only</option>
+      <option value="B2C" {% if request.query_params.get('segment') == 'B2C' %}selected{% endif %}>B2C only</option>
+    </select>
     <select name="match">
-      <option value="" {% if not match %}selected{% endif %}>All match types</option>
-      <option value="new" {% if match == 'new' %}selected{% endif %}>🆕 New (not in KVK or Prospects)</option>
-      <option value="kvk_only" {% if match == 'kvk_only' %}selected{% endif %}>🟢 In KVK only</option>
-      <option value="prospect_only" {% if match == 'prospect_only' %}selected{% endif %}>🔵 In Prospects only</option>
-      <option value="kvk_and_prospect" {% if match == 'kvk_and_prospect' %}selected{% endif %}>✅ In both</option>
+      <option value="" {% if not match %}selected{% endif %}>All matches</option>
+      <option value="new" {% if match == 'new' %}selected{% endif %}>🆕 New</option>
+      <option value="kvk_only" {% if match == 'kvk_only' %}selected{% endif %}>🟢 KVK only</option>
+      <option value="prospect_only" {% if match == 'prospect_only' %}selected{% endif %}>🔵 Prospect only</option>
+      <option value="kvk_and_prospect" {% if match == 'kvk_and_prospect' %}selected{% endif %}>✅ Both</option>
     </select>
     <select name="per_page">
       {% for size in [25, 50, 100, 200] %}
@@ -43,7 +77,9 @@
       <thead>
         <tr>
           <th>Company</th>
-          <th>Primary email</th>
+          <th>Sector</th>
+          <th>Contact</th>
+          <th>Email / Phone</th>
           <th>City</th>
           <th>Invoices</th>
           <th>Lifetime paid</th>
@@ -55,16 +91,37 @@
         {% for row in rows %}
         {% set c = row.customer %}
         <tr>
-          <td style="min-width:200px">
+          <td style="min-width:190px">
             <div class="company-link" title="{{ c.full_address or '' }}">{{ c.canonical_company_name }}</div>
             {% if c.website_domain_candidate or c.match_key_domain %}
-            <div class="muted" style="font-size:.8rem">{{ c.website_domain_candidate or c.match_key_domain }}</div>
+            <div class="muted" style="font-size:.78rem">{{ c.website_domain_candidate or c.match_key_domain }}</div>
+            {% endif %}
+            {% if c.customer_segment %}
+            <span class="badge {% if c.customer_segment == 'B2B' %}badge-blue{% else %}badge-purple{% endif %}" style="font-size:.65rem;margin-top:2px">{{ c.customer_segment }}</span>
             {% endif %}
           </td>
-          <td style="font-size:.82rem">
-            {{ c.customer_email_primary or '—' }}
+          <td style="font-size:.78rem;min-width:110px">
+            {% if c.main_sector %}
+            <div style="font-weight:500">{{ c.main_sector }}</div>
+            {% endif %}
+            {% if c.sub_sector %}
+            <div class="muted" style="font-size:.72rem">{{ c.sub_sector }}</div>
+            {% endif %}
+            {% if not c.main_sector and not c.sub_sector %}<span class="text-muted">—</span>{% endif %}
           </td>
-          <td class="text-muted" style="font-size:.85rem">
+          <td style="font-size:.78rem;min-width:130px">
+            {% if c.contact_person %}
+            <div>{{ c.contact_person }}</div>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td style="font-size:.78rem;min-width:170px">
+            {% if c.customer_email_primary %}<div>📧 {{ c.customer_email_primary }}</div>{% endif %}
+            {% if c.phone_primary %}<div>📞 {{ c.phone_primary }}</div>{% endif %}
+            {% if not c.customer_email_primary and not c.phone_primary %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="text-muted" style="font-size:.82rem">
             {{ c.city or '—' }}
             {% if c.country_code %}<span style="color:#9ca3af">· {{ c.country_code }}</span>{% endif %}
           </td>

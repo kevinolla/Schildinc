@@ -64,6 +64,14 @@ class Customer(Base):
     already_client_flag: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     client_source: Mapped[str] = mapped_column(Text, default="")
     stripe_customer_id: Mapped[str] = mapped_column(Text, default="", index=True)
+    # Schild-Inc-specific annotations from the historical Customer DB
+    # (8.8k-row "All Combined 21-25" CSV — aggregated order lines)
+    main_sector: Mapped[str] = mapped_column(Text, default="", index=True)
+    sub_sector: Mapped[str] = mapped_column(Text, default="")
+    customer_segment: Mapped[str] = mapped_column(Text, default="", index=True)  # 'B2B' / 'B2C'
+    contact_person: Mapped[str] = mapped_column(Text, default="")
+    phone_primary: Mapped[str] = mapped_column(Text, default="")
+    website: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
