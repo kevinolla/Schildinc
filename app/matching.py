@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from rapidfuzz import fuzz
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Customer, KvkCompany, MatchStatus, Prospect
@@ -131,62 +131,47 @@ def match_prospect(session: Session, prospect: Prospect) -> MatchResult:
 
 def match_kvk_company(session: Session, company: KvkCompany) -> tuple[Customer | None, str, str]:
     """
-    Match a KvkCompany against existing customers.
+    STRICT KVK → Customer matching. Only TWO ways to be flagged as
+    an existing client ('Klant'); everything else is treated as a
+    new prospect:
+
+      1. EXACT email match — company.email_public lower-cased equals
+         a Customer.customer_email_primary (case-insensitive).
+      2. EXACT name + EXACT country match — both
+         canonical_company_name_clean and country_code (upper-cased)
+         match a Customer row.
+
+    Domain matching and fuzzy name matching are deliberately removed
+    here: the user wants near-zero false positives. A bike shop on
+    Shopify shouldn't be mis-flagged as a client just because some
+    customer happens to share `*.shopify.com`, and 'Bike Shop' vs
+    'Bikeshop B.V.' shouldn't collapse.
+
     Returns (customer | None, confidence, reason).
-    Priority: domain > email > name+city+country > fuzzy.
     """
-    domain = normalize_domain(company.website_domain or company.website)
-    if domain:
+    # ── 1. Exact email match ───────────────────────────────────────────────
+    norm_email = normalize_email(company.email_public) if company.email_public else ""
+    if norm_email:
         customer = session.scalar(
             select(Customer).where(
-                (Customer.match_key_domain == domain)
-                | (Customer.website_domain_candidate == domain)
-                | (Customer.email_domain_primary == domain)
+                func.lower(Customer.customer_email_primary) == norm_email.lower()
             )
         )
         if customer:
-            return customer, "high", "domain"
+            return customer, "high", "exact_email"
 
-    if company.email_public:
-        norm_email = normalize_email(company.email_public)
-        customer = session.scalar(select(Customer).where(Customer.customer_email_primary == norm_email))
-        if customer:
-            return customer, "high", "email"
-
-    clean_name = company.canonical_company_name_clean or normalize_text(company.company_name)
-    city = (company.primary_city or "").lower().strip()
+    # ── 2. Exact name + country match ──────────────────────────────────────
+    clean_name = (company.canonical_company_name_clean or normalize_text(company.company_name) or "").strip()
     country = (company.country_code or "").upper().strip()
-
-    name_geo = build_name_geo_key(company.company_name, company.primary_city, "", company.country_code)
-    geo_match = session.scalar(select(Customer).where(Customer.canonical_name_geo_key == name_geo))
-    if geo_match:
-        return geo_match, "medium", "name_city_country"
-
-    candidates = session.scalars(
-        select(Customer).where(Customer.country_code == country)
-    ).all()
-    if not candidates:
-        candidates = session.scalars(select(Customer)).all()
-
-    best_customer: Customer | None = None
-    best_score = 0
-    for cust in candidates:
-        cust_name = cust.canonical_company_name_clean or normalize_text(cust.canonical_company_name)
-        if not cust_name:
-            continue
-        score = int(fuzz.WRatio(clean_name, cust_name))
-        if city and cust.city and normalize_text(city) == normalize_text(cust.city):
-            score += 4
-        if domain and cust.website_domain_candidate and domain == normalize_domain(cust.website_domain_candidate):
-            score += 6
-        if score > best_score:
-            best_score = score
-            best_customer = cust
-
-    if best_customer and best_score >= 92:
-        return best_customer, "medium", "fuzzy_name"
-    if best_customer and best_score >= 82:
-        return best_customer, "low", "fuzzy_name_review"
+    if clean_name and country:
+        customer = session.scalar(
+            select(Customer).where(
+                Customer.canonical_company_name_clean == clean_name,
+                func.upper(Customer.country_code) == country,
+            )
+        )
+        if customer:
+            return customer, "high", "exact_name_country"
 
     return None, "none", "no_match"
 
