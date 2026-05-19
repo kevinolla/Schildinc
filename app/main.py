@@ -1970,15 +1970,18 @@ def kvk_export_csv(
     confidence: str = "",
 ) -> StreamingResponse:
     q = select(KvkCompany).order_by(KvkCompany.company_name)
-    if tier:
+    # Treat 'all' / 'any' as no-op — they're the dropdown's default UI label,
+    # not an actual filter value. Same treatment for empty string.
+    NO_OP = {"", "all", "any"}
+    if tier and tier not in NO_OP:
         q = q.where(KvkCompany.bike_shop_tier == tier)
     if has_email == "1":
         q = q.where(KvkCompany.email_public != "")
     elif has_email == "0":
         q = q.where(KvkCompany.email_public == "")
-    if match:
+    if match and match not in NO_OP:
         q = q.where(KvkCompany.client_match_status == match)
-    if confidence:
+    if confidence and confidence not in NO_OP:
         q = q.where(KvkCompany.email_confidence == confidence)
     companies = db.scalars(q).all()
 
@@ -2018,12 +2021,18 @@ def kvk_export_csv(
             ])
             yield buf.getvalue(); buf.seek(0); buf.truncate(0)
 
-    # Reflect active filters in the filename
+    # Reflect active filters in the filename (skip no-op values)
     slug_parts: list[str] = []
-    if tier:       slug_parts.append("tier-" + tier.lower().replace(" ", "-"))
-    if has_email:  slug_parts.append("email-yes" if has_email == "1" else "email-no")
-    if match:      slug_parts.append("match-" + match)
-    if confidence: slug_parts.append("conf-" + confidence)
+    if tier and tier not in NO_OP:
+        slug_parts.append("tier-" + tier.lower().replace(" ", "-"))
+    if has_email == "1":
+        slug_parts.append("email-yes")
+    elif has_email == "0":
+        slug_parts.append("email-no")
+    if match and match not in NO_OP:
+        slug_parts.append("match-" + match)
+    if confidence and confidence not in NO_OP:
+        slug_parts.append("conf-" + confidence)
     suffix = "-".join(slug_parts) or "all"
     filename = f"kvk-{suffix}-{date.today().isoformat()}.csv"
     return StreamingResponse(
