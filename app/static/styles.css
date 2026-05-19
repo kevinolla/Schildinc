@@ -1183,6 +1183,38 @@ tbody tr:hover td { background: var(--surface-2); }
   border-color: #93c5fd;
 }
 
+/* One-click verify / reject / edit buttons in the email cell */
+.email-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+}
+.verify-btn {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.verify-btn.verify-yes { color: var(--success); }
+.verify-btn.verify-yes:hover { background: var(--success-soft); border-color: var(--success); }
+.verify-btn.verify-no { color: var(--danger); }
+.verify-btn.verify-no:hover { background: var(--danger-soft); border-color: var(--danger); }
+.verify-btn.verify-edit:hover { background: var(--surface-3); color: var(--brand); border-color: var(--brand); }
+
+.contact-mini a, .contact-mini { text-decoration: none; }
+.contact-mini a:hover { color: var(--brand); }
+
 /* ── Prospect Detail Page ───────────────────────────────────────────────── */
 .prospect-list { display: grid; gap: 14px; }
 .prospect-list-compact { gap: 12px; }

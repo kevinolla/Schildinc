@@ -238,27 +238,19 @@ def is_captcha_page(page) -> bool:
         return False
 
 
-def wait_for_human(page, label: str = "Google CAPTCHA") -> None:
+def auto_cooldown_for_captcha(page, label: str = "Google CAPTCHA", sleep_seconds: int = 90) -> None:
     """
-    Pause the script and wait for the user to solve the challenge in the
-    visible browser window. They press Enter in the terminal once they're
-    back on a normal Google search page.
+    Hands-free: when Google challenges us we DON'T pause for the user.
+    We log it, sleep for a cool-down, and let the caller skip this
+    record. The record stays in /agent/pending so it's eligible on a
+    later run when our rate-limit has unwound.
     """
     print()
-    print("=" * 60)
-    print(f"  ⚠  {label} detected.")
-    print(f"  → In the Chrome window: solve the challenge, then return.")
-    print(f"  → Press Enter here when you're past the challenge.")
-    print("=" * 60)
+    print(f"  ⚠ {label} hit — sleeping {sleep_seconds}s and skipping (record stays pending)")
     try:
-        input()
-    except (EOFError, KeyboardInterrupt):
-        raise
-    # Give Google a couple of seconds after the user navigates back
-    try:
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(sleep_seconds * 1000)
     except Exception:
-        pass
+        time.sleep(sleep_seconds)
 
 
 # JS that walks the entire DOM including shadow roots and grabs every
@@ -597,8 +589,8 @@ def main() -> int:
     ap.add_argument("--delay", type=float, default=1.5, help="seconds between searches")
     ap.add_argument("--debug", action="store_true",
                     help="when no email is found, print a sample of the page text")
-    ap.add_argument("--interactive", action="store_true",
-                    help="on miss, pause and let you type the email you see in the browser")
+    ap.add_argument("--captcha-cooldown", type=int, default=90,
+                    help="seconds to wait after a CAPTCHA before continuing (default 90)")
     args = ap.parse_args()
 
     try:
@@ -661,46 +653,31 @@ def main() -> int:
                     if not args.quiet:
                         print(f"  [{processed+1}] #{cid} {name} ({city or '-'}) … ", end="", flush=True)
 
-                    # Inner retry loop — handles CAPTCHA challenges by pausing
-                    # for the user, then retrying the SAME record once.
-                    captcha_retries_left = 1
-                    skipped_due_to_captcha = False
+                    # Fully automatic — no user prompts, ever. If Google
+                    # challenges us we cool down + skip; the record stays
+                    # pending for a later run.
                     extract: dict = _empty_result()
-                    while True:
-                        out = search_one(page, name, city, debug=args.debug)
-                        if out == CAPTCHA_BLOCKED:
-                            if captcha_retries_left <= 0:
-                                if not args.quiet:
-                                    print("⚠ still blocked, skipping (record left pending)")
-                                captcha_count += 1
-                                skipped_due_to_captcha = True
-                                break
-                            captcha_retries_left -= 1
-                            print()
-                            wait_for_human(page, label=f"Google CAPTCHA on #{cid} {name}")
-                            print(f"  retrying #{cid} {name} … ", end="", flush=True)
-                            continue
+                    skipped_due_to_captcha = False
+                    out = search_one(page, name, city, debug=args.debug)
+                    if out == CAPTCHA_BLOCKED:
+                        captcha_count += 1
+                        skipped_due_to_captcha = True
+                        auto_cooldown_for_captcha(
+                            page,
+                            label=f"Google CAPTCHA on #{cid} {name}",
+                            sleep_seconds=args.captcha_cooldown,
+                        )
+                    else:
                         extract = out  # type: ignore[assignment]
-                        break
 
                     processed += 1
 
                     if skipped_due_to_captcha:
+                        # Record stays in /agent/pending — no API write
                         time.sleep(args.delay)
                         continue
 
-                    # Interactive fallback: if extraction missed email but
-                    # user can see one, paste it manually
                     manual_source = "browser_agent"
-                    if not extract["email"] and args.interactive:
-                        print("✗ not auto-detected", end="", flush=True)
-                        typed = prompt_manual_email(name, city)
-                        if typed:
-                            extract["email"] = typed
-                            _, _, dom = typed.partition("@")
-                            extract["website"] = f"https://{dom}"
-                            manual_source = "browser_agent_manual"
-
                     found_any = any([
                         extract["email"], extract["phone"],
                         extract["whatsapp_number"], extract["whatsapp_url"],

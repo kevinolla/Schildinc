@@ -2044,6 +2044,43 @@ async def kvk_set_email_inline(
     return JSONResponse({"ok": True, "email": email})
 
 
+@app.post("/kvk/{company_id}/verify-email")
+async def kvk_verify_email(
+    company_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> JSONResponse:
+    """One-click verify: mark this email as human-checked (confidence='verified')."""
+    company = db.get(KvkCompany, company_id)
+    if not company or not (company.email_public or "").strip():
+        return JSONResponse({"ok": False, "error": "no_email"}, status_code=400)
+    company.email_confidence = "verified"
+    company.approved_for_outreach = True
+    company.enrichment_status = "discovered"
+    db.commit()
+    return JSONResponse({"ok": True, "email": company.email_public, "confidence": "verified"})
+
+
+@app.post("/kvk/{company_id}/reject-email")
+async def kvk_reject_email(
+    company_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> JSONResponse:
+    """One-click reject: clear a wrong email so the record goes back to pending."""
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+    company.email_public = ""
+    company.email_confidence = ""
+    company.email_source_url = ""
+    company.approved_for_outreach = False
+    company.enrichment_status = "pending"
+    apply_kvk_matching(db, company)
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
 # -- Enrichment progress API (for dashboard live counter) --
 @app.get("/api/kvk/progress")
 def kvk_progress(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:

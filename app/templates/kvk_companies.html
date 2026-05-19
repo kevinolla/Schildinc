@@ -147,28 +147,52 @@
           {% endif %}
         </td>
 
-        <!-- Inline email cell with edit-in-place -->
+        <!-- Email cell: shows email + one-click verify/reject + all other channels -->
         <td class="email-cell" id="email-cell-{{ c.id }}">
           {% if c.email_public %}
-          <div class="email-display">
+          <div class="email-display" id="email-display-{{ c.id }}">
             <span class="has-contact" title="{{ c.email_public }}" style="font-size:.82rem">
-              {{ c.email_public[:32] }}{% if c.email_public|length > 32 %}…{% endif %}
+              {{ c.email_public[:34] }}{% if c.email_public|length > 34 %}…{% endif %}
             </span>
-            {% if c.email_confidence == 'manual' %}
-            <span class="conf-dot" style="color:#7c3aed" title="Handmatig">●</span>
+            {% if c.email_confidence == 'verified' %}
+            <span class="badge badge-green" style="font-size:.62rem;padding:1px 6px" title="Verified">✓</span>
+            {% elif c.email_confidence == 'manual' %}
+            <span class="badge badge-purple" style="font-size:.62rem;padding:1px 6px" title="Manual">M</span>
+            {% elif c.email_confidence == 'guessed' %}
+            <span class="badge badge-yellow" style="font-size:.62rem;padding:1px 6px" title="Pattern-guessed (info@domain)">?</span>
             {% elif c.email_confidence == 'high' %}
-            <span class="conf-dot conf-high" title="Hoge betrouwbaarheid">●</span>
+            <span class="badge badge-blue" style="font-size:.62rem;padding:1px 6px" title="High confidence">H</span>
             {% elif c.email_confidence == 'medium' %}
-            <span class="conf-dot conf-medium" title="Gemiddelde betrouwbaarheid">●</span>
+            <span class="badge badge-yellow" style="font-size:.62rem;padding:1px 6px" title="Medium">M</span>
             {% else %}
-            <span class="conf-dot conf-low" title="Lage betrouwbaarheid">●</span>
+            <span class="badge badge-gray" style="font-size:.62rem;padding:1px 6px" title="Low">?</span>
             {% endif %}
-            <button class="edit-email-btn" onclick="showEmailEdit({{ c.id }}, '{{ c.email_public }}')" title="E-mail aanpassen">✎</button>
+            <div class="email-actions">
+              {% if c.email_confidence != 'verified' %}
+              <button class="verify-btn verify-yes" title="Mark as verified"
+                      onclick="verifyEmail({{ c.id }})">✓</button>
+              {% endif %}
+              <button class="verify-btn verify-no" title="Wrong email — remove"
+                      onclick="rejectEmail({{ c.id }})">✗</button>
+              <button class="verify-btn verify-edit" title="Edit email"
+                      onclick="showEmailEdit({{ c.id }}, '{{ c.email_public }}')">✎</button>
+            </div>
           </div>
           {% else %}
-          <div class="email-display">
+          <div class="email-display" id="email-display-{{ c.id }}">
             <span class="text-muted" style="font-size:.82rem">—</span>
-            <button class="edit-email-btn add-email-btn" onclick="showEmailEdit({{ c.id }}, '')" title="E-mail toevoegen">+ email</button>
+            <button class="edit-email-btn add-email-btn" onclick="showEmailEdit({{ c.id }}, '')" title="Add email">+ email</button>
+          </div>
+          {% endif %}
+          {# Other contacts on second line — phone / WA / IG / LI #}
+          {% if c.phone_public or c.whatsapp_number or c.instagram_url or c.linkedin_url %}
+          <div class="contact-mini" style="margin-top:3px;font-size:.7rem;color:#6b7280;display:flex;gap:8px;flex-wrap:wrap">
+            {% if c.phone_public %}<span title="{{ c.phone_public }}">📞 {{ c.phone_public[:14] }}</span>{% endif %}
+            {% if c.whatsapp_number or c.whatsapp_url %}
+            <a href="{{ c.whatsapp_url or 'https://wa.me/' ~ (c.whatsapp_number or '')|replace('+','') }}" target="_blank" class="ext-link" title="WhatsApp">💬</a>
+            {% endif %}
+            {% if c.instagram_url %}<a href="{{ c.instagram_url }}" target="_blank" class="ext-link" title="Instagram">📷</a>{% endif %}
+            {% if c.linkedin_url %}<a href="{{ c.linkedin_url }}" target="_blank" class="ext-link" title="LinkedIn">💼</a>{% endif %}
           </div>
           {% endif %}
           <div class="email-edit-form hidden" id="email-form-{{ c.id }}">
@@ -312,6 +336,59 @@ async function saveEmail(id) {
     hideEmailEdit(id);
   } else {
     input.style.borderColor = '#dc2626';
+  }
+}
+
+// ── One-click verify / reject ──
+async function verifyEmail(id) {
+  const cell = document.getElementById('email-cell-' + id);
+  cell.style.opacity = '.5';
+  try {
+    const resp = await fetch('/kvk/' + id + '/verify-email', {method: 'POST'});
+    const data = await resp.json();
+    if (data.ok) {
+      // Swap the H/?/etc badge for the green ✓ badge and remove the ✓ button
+      const display = document.getElementById('email-display-' + id);
+      const badges = display.querySelectorAll('.badge');
+      badges.forEach(b => b.remove());
+      const verifiedBadge = document.createElement('span');
+      verifiedBadge.className = 'badge badge-green';
+      verifiedBadge.style.cssText = 'font-size:.62rem;padding:1px 6px';
+      verifiedBadge.title = 'Verified';
+      verifiedBadge.textContent = '✓';
+      display.querySelector('.has-contact').after(verifiedBadge);
+      const yesBtn = display.querySelector('.verify-yes');
+      if (yesBtn) yesBtn.remove();
+    } else {
+      alert('Verify failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) {
+    alert('Network error: ' + e);
+  } finally {
+    cell.style.opacity = '';
+  }
+}
+
+async function rejectEmail(id) {
+  if (!confirm('Wrong email — clear it and re-queue this record?')) return;
+  const cell = document.getElementById('email-cell-' + id);
+  cell.style.opacity = '.5';
+  try {
+    const resp = await fetch('/kvk/' + id + '/reject-email', {method: 'POST'});
+    const data = await resp.json();
+    if (data.ok) {
+      // Replace the email display with the "add email" placeholder
+      const display = document.getElementById('email-display-' + id);
+      display.innerHTML =
+        '<span class="text-muted" style="font-size:.82rem">—</span>' +
+        '<button class="edit-email-btn add-email-btn" onclick="showEmailEdit(' + id + ', \\'\\')" title="Add email">+ email</button>';
+    } else {
+      alert('Reject failed: ' + (data.error || 'unknown'));
+    }
+  } catch (e) {
+    alert('Network error: ' + e);
+  } finally {
+    cell.style.opacity = '';
   }
 }
 
