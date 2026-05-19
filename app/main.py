@@ -1957,6 +1957,82 @@ def kvk_retier_single(
     return RedirectResponse(f"/kvk/{company_id}?flash=Tier+herberekend%3A+{decision.bike_shop_tier}", status_code=303)
 
 
+# IMPORTANT: this static-path GET MUST come BEFORE the catch-all
+# /kvk/{company_id} below, otherwise FastAPI tries to parse
+# "export.csv" as an int and returns 422.
+@app.get("/kvk/export.csv")
+def kvk_export_csv(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    tier: str = "",
+    has_email: str = "",
+    match: str = "",
+    confidence: str = "",
+) -> StreamingResponse:
+    q = select(KvkCompany).order_by(KvkCompany.company_name)
+    if tier:
+        q = q.where(KvkCompany.bike_shop_tier == tier)
+    if has_email == "1":
+        q = q.where(KvkCompany.email_public != "")
+    elif has_email == "0":
+        q = q.where(KvkCompany.email_public == "")
+    if match:
+        q = q.where(KvkCompany.client_match_status == match)
+    if confidence:
+        q = q.where(KvkCompany.email_confidence == confidence)
+    companies = db.scalars(q).all()
+
+    def gen():
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow([
+            "kvk_number", "company_name", "city", "postal_code", "address",
+            "website", "email", "phone", "whatsapp", "instagram", "linkedin",
+            "bike_shop_tier", "outreach_priority",
+            "already_client", "client_match_status",
+            "enrichment_status", "email_confidence", "email_source",
+            "approved_for_outreach",
+        ])
+        yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+        for c in companies:
+            w.writerow([
+                c.kvk_number or "",
+                c.company_name or "",
+                c.primary_city or "",
+                c.primary_postal_code or "",
+                c.primary_address or "",
+                c.website or "",
+                c.email_public or "",
+                c.phone_public or "",
+                c.whatsapp_number or "",
+                c.instagram_url or "",
+                c.linkedin_url or "",
+                c.bike_shop_tier or "",
+                c.outreach_priority or "",
+                "ja" if c.already_client_flag else "nee",
+                c.client_match_status or "",
+                c.enrichment_status or "",
+                c.email_confidence or "",
+                c.email_source_url or "",
+                "ja" if c.approved_for_outreach else "nee",
+            ])
+            yield buf.getvalue(); buf.seek(0); buf.truncate(0)
+
+    # Reflect active filters in the filename
+    slug_parts: list[str] = []
+    if tier:       slug_parts.append("tier-" + tier.lower().replace(" ", "-"))
+    if has_email:  slug_parts.append("email-yes" if has_email == "1" else "email-no")
+    if match:      slug_parts.append("match-" + match)
+    if confidence: slug_parts.append("conf-" + confidence)
+    suffix = "-".join(slug_parts) or "all"
+    filename = f"kvk-{suffix}-{date.today().isoformat()}.csv"
+    return StreamingResponse(
+        gen(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/kvk/{company_id}", response_class=HTMLResponse)
 def kvk_company_detail(
     company_id: int,
@@ -2226,48 +2302,8 @@ def kvk_agent_result(
     })
 
 
-# -- CSV export --
-@app.get("/kvk/export.csv")
-def kvk_export_csv(
-    db: Session = Depends(get_db),
-    _: str = Depends(require_admin),
-    tier: str = "",
-    has_email: str = "",
-    match: str = "",
-) -> StreamingResponse:
-    q = select(KvkCompany).order_by(KvkCompany.company_name)
-    if tier:
-        q = q.where(KvkCompany.bike_shop_tier == tier)
-    if has_email == "1":
-        q = q.where(KvkCompany.email_public != "")
-    if match:
-        q = q.where(KvkCompany.client_match_status == match)
-    companies = db.scalars(q).all()
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "kvk_number", "company_name", "city", "postal_code", "address",
-        "website", "email", "phone",
-        "bike_shop_tier", "outreach_priority",
-        "already_client", "client_match_status",
-        "enrichment_status", "email_confidence", "email_source",
-    ])
-    for c in companies:
-        writer.writerow([
-            c.kvk_number, c.company_name, c.primary_city, c.primary_postal_code,
-            c.primary_address, c.website, c.email_public, c.phone_public,
-            c.bike_shop_tier, c.outreach_priority,
-            "ja" if c.already_client_flag else "nee",
-            c.client_match_status, c.enrichment_status,
-            c.email_confidence, c.email_source_url,
-        ])
-    output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=kvk_leads.csv"},
-    )
+# (Old kvk_export_csv route moved up before /kvk/{company_id} —
+# leaving it duplicated here was the source of the int_parsing error.)
 
 
 # -- Klaviyo push --
