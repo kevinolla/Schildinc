@@ -1751,6 +1751,20 @@ def kvk_companies_page(
         q = q.where(KvkCompany.search_attempts >= 2)
     elif search_status == "tried_no_email":
         q = q.where(KvkCompany.search_attempts >= 1).where(KvkCompany.email_public == "")
+    elif search_status == "offline":
+        # Tried at least once and the agent found ZERO online presence:
+        # no website, no email, no phone, no WhatsApp, no IG, no LI.
+        # These are physical-only / offline-only businesses — they need
+        # door-to-door or phone outreach via the KVK address, not email.
+        q = (
+            q.where(KvkCompany.search_attempts >= 1)
+             .where(KvkCompany.website == "")
+             .where(KvkCompany.email_public == "")
+             .where(KvkCompany.phone_public == "")
+             .where(KvkCompany.whatsapp_number == "")
+             .where(KvkCompany.instagram_url == "")
+             .where(KvkCompany.linkedin_url == "")
+        )
 
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     companies = db.scalars(q.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
@@ -1769,6 +1783,16 @@ def kvk_companies_page(
             select(func.count(KvkCompany.id))
             .where(KvkCompany.search_attempts >= 1)
             .where(KvkCompany.email_public == "")
+        ) or 0,
+        "offline":        db.scalar(
+            select(func.count(KvkCompany.id))
+            .where(KvkCompany.search_attempts >= 1)
+            .where(KvkCompany.website == "")
+            .where(KvkCompany.email_public == "")
+            .where(KvkCompany.phone_public == "")
+            .where(KvkCompany.whatsapp_number == "")
+            .where(KvkCompany.instagram_url == "")
+            .where(KvkCompany.linkedin_url == "")
         ) or 0,
     }
 
