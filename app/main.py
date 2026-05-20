@@ -1714,6 +1714,7 @@ def kvk_companies_page(
     match: str = "all",
     has_email: str = "",
     has_website: str = "",
+    search_status: str = "all",  # all / never / once / twice_plus / tried_no_email
     page: int = 1,
 ) -> HTMLResponse:
     PAGE_SIZE = 50
@@ -1741,6 +1742,15 @@ def kvk_companies_page(
         q = q.where(KvkCompany.website != "")
     elif has_website == "0":
         q = q.where(KvkCompany.website == "")
+    # New: filter by search-attempt status
+    if search_status == "never":
+        q = q.where(KvkCompany.search_attempts == 0)
+    elif search_status == "once":
+        q = q.where(KvkCompany.search_attempts == 1)
+    elif search_status == "twice_plus":
+        q = q.where(KvkCompany.search_attempts >= 2)
+    elif search_status == "tried_no_email":
+        q = q.where(KvkCompany.search_attempts >= 1).where(KvkCompany.email_public == "")
 
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     companies = db.scalars(q.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
@@ -1749,6 +1759,18 @@ def kvk_companies_page(
     recent_imports = db.scalars(
         select(KvkImportLog).order_by(KvkImportLog.started_at.desc()).limit(5)
     ).all()
+
+    # Cheap counters across the WHOLE dataset for the filter chips at top
+    search_counts = {
+        "never":          db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.search_attempts == 0)) or 0,
+        "once":           db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.search_attempts == 1)) or 0,
+        "twice_plus":     db.scalar(select(func.count(KvkCompany.id)).where(KvkCompany.search_attempts >= 2)) or 0,
+        "tried_no_email": db.scalar(
+            select(func.count(KvkCompany.id))
+            .where(KvkCompany.search_attempts >= 1)
+            .where(KvkCompany.email_public == "")
+        ) or 0,
+    }
 
     return templates.TemplateResponse("kvk_companies.html", {
         "request": request,
@@ -1763,6 +1785,8 @@ def kvk_companies_page(
         "match": match,
         "has_email": has_email,
         "has_website": has_website,
+        "search_status": search_status,
+        "search_counts": search_counts,
         "tier_options": KVK_TIER_FILTERS,
         "enrichment_options": KVK_ENRICHMENT_FILTERS,
         "match_options": KVK_MATCH_FILTERS,
@@ -2183,16 +2207,20 @@ def kvk_agent_pending(
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
     limit: int = 25,
+    max_attempts: int = 2,
 ) -> JSONResponse:
     """
-    Return records the agent has NOT yet attempted. Filters on
-    enrichment_status (not just email_public) so records the agent
-    already touched — even ones where it found just a phone or
-    nothing — don't get re-served on every batch.
+    Return records the agent should search next. Two-axis prioritization:
 
-    Reprocessable statuses: 'pending', '', 'searching', 'running',
-    'no_website', 'error'. Records in 'discovered' / 'partial' /
-    'no_contacts' have already been fully attempted.
+      1. enrichment_status — skip records that are already done
+         ('discovered'/'partial') or marked as 'no_contacts'
+      2. search_attempts — fewest first, so we exhaust never-searched
+         records before retrying records that already failed once
+         or twice. Records with attempts >= max_attempts (default 2)
+         are excluded entirely, so we don't spin forever on hopeless
+         records.
+
+    Sort tie-breaker is `id` so the order is stable across calls.
     """
     limit = max(1, min(100, limit))
     rows = db.scalars(
@@ -2204,7 +2232,8 @@ def kvk_agent_pending(
                 ["discovered", "partial", "no_contacts"]
             )
         )
-        .order_by(KvkCompany.id)
+        .where(KvkCompany.search_attempts < max_attempts)
+        .order_by(KvkCompany.search_attempts.asc(), KvkCompany.id.asc())
         .limit(limit)
     ).all()
     return JSONResponse([
@@ -2216,6 +2245,7 @@ def kvk_agent_pending(
             "address": r.primary_address or "",
             "current_website": r.website or "",
             "current_status": r.enrichment_status,
+            "search_attempts": r.search_attempts,
         }
         for r in rows
     ])
@@ -2250,6 +2280,9 @@ def kvk_agent_result(
         return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
 
     company.last_enrichment_attempt_at = datetime.now(timezone.utc)
+    # Every agent post counts as one attempt — used by /agent/pending
+    # to prioritize records with fewer attempts first.
+    company.search_attempts = (company.search_attempts or 0) + 1
 
     has_email = bool(email and "@" in email)
     has_any_contact = bool(

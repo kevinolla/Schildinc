@@ -323,6 +323,9 @@ class KvkCompany(Base):
     google_maps_query: Mapped[str] = mapped_column(Text, default="")
     contact_search_query: Mapped[str] = mapped_column(Text, default="")
     last_enrichment_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # How many times the agent has searched this record. Lets the pending
+    # endpoint prioritize records with the fewest attempts.
+    search_attempts: Mapped[int] = mapped_column(Integer, default=0, index=True)
 
     already_client_flag: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     client_match_status: Mapped[str] = mapped_column(Text, default="unknown", index=True)
