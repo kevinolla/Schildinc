@@ -3,13 +3,13 @@
 
 <div class="page-header">
   <div>
-    <h2>KVK Bedrijven</h2>
-    <p class="page-subtitle">{{ total }} bedrijven · verrijking loopt automatisch op de achtergrond</p>
+    <h2>KVK Companies</h2>
+    <p class="page-subtitle">{{ total }} companies · enrichment runs automatically in the background</p>
   </div>
   <div class="page-actions">
-    <button class="btn btn-ghost btn-sm" onclick="document.getElementById('import-panel').classList.toggle('hidden')">+ Importeer</button>
-    <a href="/kvk/export.csv{% if tier or has_email or match %}?{% if tier %}tier={{ tier }}&{% endif %}{% if has_email %}has_email={{ has_email }}&{% endif %}{% if match %}match={{ match }}{% endif %}{% endif %}" class="btn btn-secondary btn-sm">⬇ CSV export</a>
-    <button class="btn btn-primary btn-sm" id="klaviyo-btn" onclick="pushKlaviyo()">☁ Naar Klaviyo</button>
+    <button class="btn btn-ghost btn-sm" onclick="document.getElementById('import-panel').classList.toggle('hidden')">+ Import</button>
+    <a href="/kvk/export.csv{% if tier or has_email or match %}?{% if tier %}tier={{ tier }}&{% endif %}{% if has_email %}has_email={{ has_email }}&{% endif %}{% if match %}match={{ match }}{% endif %}{% endif %}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
+    <button class="btn btn-primary btn-sm" id="klaviyo-btn" onclick="pushKlaviyo()">☁ Push to Klaviyo</button>
   </div>
 </div>
 
@@ -20,44 +20,44 @@
 <!-- Enrichment progress bar -->
 <div class="progress-card" id="progress-card">
   <div class="progress-header">
-    <span class="progress-title">📧 Email verrijking</span>
-    <span class="progress-meta" id="prog-label">Laden…</span>
+    <span class="progress-title">📧 Email enrichment</span>
+    <span class="progress-meta" id="prog-label">Loading…</span>
   </div>
   <div class="progress-track">
     <div class="progress-fill" id="prog-bar" style="width:0%"></div>
   </div>
   <div class="progress-chips">
-    <span class="prog-chip chip-done" id="prog-done">— verrijkt</span>
-    <span class="prog-chip chip-email" id="prog-email">— met e-mail</span>
-    <span class="prog-chip chip-pending" id="prog-pending">— wachtend</span>
-    <span class="prog-chip chip-active" id="prog-active" style="display:none">⚡ actief</span>
-    <span class="prog-chip chip-error" id="prog-error" style="display:none">— fouten</span>
+    <span class="prog-chip chip-done" id="prog-done">— enriched</span>
+    <span class="prog-chip chip-email" id="prog-email">— with email</span>
+    <span class="prog-chip chip-pending" id="prog-pending">— pending</span>
+    <span class="prog-chip chip-active" id="prog-active" style="display:none">⚡ active</span>
+    <span class="prog-chip chip-error" id="prog-error" style="display:none">— errors</span>
   </div>
 </div>
 
 <!-- Import panel -->
 <div id="import-panel" class="card hidden" style="margin-bottom:1rem">
-  <h3 style="margin-top:0;font-size:1rem">Importeer KVK bestanden</h3>
+  <h3 style="margin-top:0;font-size:1rem">Import KVK files</h3>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem">
     <div>
-      <p class="label">Bedrijven CSV</p>
+      <p class="label">Companies CSV</p>
       <form method="post" action="/kvk/import-companies" enctype="multipart/form-data" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
         <input type="file" name="file" accept=".csv" required style="font-size:.8rem">
-        <button class="btn btn-primary btn-sm">Importeer</button>
+        <button class="btn btn-primary btn-sm">Import</button>
       </form>
     </div>
     <div>
-      <p class="label">Vestigingen CSV</p>
+      <p class="label">Establishments CSV</p>
       <form method="post" action="/kvk/import-establishments" enctype="multipart/form-data" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
         <input type="file" name="file" accept=".csv" required style="font-size:.8rem">
-        <button class="btn btn-secondary btn-sm">Importeer</button>
+        <button class="btn btn-secondary btn-sm">Import</button>
       </form>
     </div>
   </div>
   {% if recent_imports %}
   <div style="margin-top:.75rem;font-size:.8rem;color:#6b7280">
-    Laatste import: <strong>{{ recent_imports[0].file_name }}</strong> —
-    {{ recent_imports[0].successful_upserts }} rijen · {{ recent_imports[0].started_at.strftime('%d-%m %H:%M') }}
+    Last import: <strong>{{ recent_imports[0].file_name }}</strong> —
+    {{ recent_imports[0].successful_upserts }} rows · {{ recent_imports[0].started_at.strftime('%d-%m %H:%M') }}
   </div>
   {% endif %}
 </div>
@@ -65,9 +65,9 @@
 <!-- Filters -->
 <div class="filter-bar">
   <form method="get" action="/kvk" class="filter-form">
-    <input type="text" name="search" placeholder="Naam, stad, KVK…" value="{{ search }}" class="search-input">
+    <input type="text" name="search" placeholder="Name, city, KVK…" value="{{ search }}" class="search-input">
     <select name="tier">
-      <option value="">Alle tiers</option>
+      <option value="">All tiers</option>
       {% for t in tier_options %}
       <option value="{{ t }}" {% if tier == t %}selected{% endif %}>{{ t }}</option>
       {% endfor %}
@@ -75,61 +75,61 @@
     <select name="enrichment">
       {% for e in enrichment_options %}
       <option value="{{ e }}" {% if enrichment == e %}selected{% endif %}>
-        {% if e == 'all' %}Alle statussen{% else %}{{ e }}{% endif %}
+        {% if e == 'all' %}All statuses{% else %}{{ e }}{% endif %}
       </option>
       {% endfor %}
     </select>
     <select name="match">
-      <option value="all" {% if match == 'all' %}selected{% endif %}>Alle matches</option>
-      <option value="no_match" {% if match == 'no_match' %}selected{% endif %}>Nieuwe prospects</option>
-      <option value="matched" {% if match == 'matched' %}selected{% endif %}>Bestaande klanten</option>
-      <option value="unknown" {% if match == 'unknown' %}selected{% endif %}>Onbekend</option>
+      <option value="all" {% if match == 'all' %}selected{% endif %}>All matches</option>
+      <option value="no_match" {% if match == 'no_match' %}selected{% endif %}>New prospects</option>
+      <option value="matched" {% if match == 'matched' %}selected{% endif %}>Existing customers</option>
+      <option value="unknown" {% if match == 'unknown' %}selected{% endif %}>Unknown</option>
     </select>
     <select name="has_email">
-      <option value="" {% if has_email == '' %}selected{% endif %}>Alle</option>
-      <option value="1" {% if has_email == '1' %}selected{% endif %}>✓ Heeft e-mail</option>
-      <option value="0" {% if has_email == '0' %}selected{% endif %}>✗ Geen e-mail</option>
+      <option value="" {% if has_email == '' %}selected{% endif %}>All</option>
+      <option value="1" {% if has_email == '1' %}selected{% endif %}>✓ Has email</option>
+      <option value="0" {% if has_email == '0' %}selected{% endif %}>✗ No email</option>
     </select>
     {# Search-attempt filter — pick records by how many times the agent has tried them #}
-    <select name="search_status" title="Zoek-status filter">
-      <option value="all"            {% if search_status == 'all' %}selected{% endif %}>🔍 Alle zoek-status</option>
-      <option value="never"          {% if search_status == 'never' %}selected{% endif %}>🆕 Nog niet gezocht ({{ search_counts.never }})</option>
-      <option value="once"           {% if search_status == 'once' %}selected{% endif %}>1️⃣ 1× gezocht ({{ search_counts.once }})</option>
-      <option value="twice_plus"     {% if search_status == 'twice_plus' %}selected{% endif %}>2️⃣ 2× of meer ({{ search_counts.twice_plus }})</option>
-      <option value="tried_no_email" {% if search_status == 'tried_no_email' %}selected{% endif %}>🚫 Gezocht, geen e-mail ({{ search_counts.tried_no_email }})</option>
-      <option value="offline"        {% if search_status == 'offline' %}selected{% endif %}>🏪 Offline winkel — geen online info ({{ search_counts.offline }})</option>
+    <select name="search_status" title="Search-status filter">
+      <option value="all"            {% if search_status == 'all' %}selected{% endif %}>🔍 All search status</option>
+      <option value="never"          {% if search_status == 'never' %}selected{% endif %}>🆕 Not searched yet ({{ search_counts.never }})</option>
+      <option value="once"           {% if search_status == 'once' %}selected{% endif %}>1️⃣ Searched 1× ({{ search_counts.once }})</option>
+      <option value="twice_plus"     {% if search_status == 'twice_plus' %}selected{% endif %}>2️⃣ Searched 2× or more ({{ search_counts.twice_plus }})</option>
+      <option value="tried_no_email" {% if search_status == 'tried_no_email' %}selected{% endif %}>🚫 Searched, no email ({{ search_counts.tried_no_email }})</option>
+      <option value="offline"        {% if search_status == 'offline' %}selected{% endif %}>🏪 Offline store — no online info ({{ search_counts.offline }})</option>
     </select>
-    <button type="submit" class="btn btn-secondary btn-sm">Filter</button>
-    <a href="/kvk" class="btn btn-ghost btn-sm">Wis</a>
+    <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+    <a href="/kvk" class="btn btn-ghost btn-sm">Clear</a>
   </form>
 </div>
 
 {# Quick-link chips: jump straight to the most useful slices #}
 <div class="search-status-chips" style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.75rem">
   <a href="/kvk?search_status=never" class="badge badge-blue" style="font-size:.7rem;text-decoration:none">
-    🆕 Nog niet gezocht: <strong>{{ search_counts.never }}</strong>
+    🆕 Not searched yet: <strong>{{ search_counts.never }}</strong>
   </a>
   <a href="/kvk?search_status=once" class="badge badge-yellow" style="font-size:.7rem;text-decoration:none">
-    1️⃣ 1× gezocht: <strong>{{ search_counts.once }}</strong>
+    1️⃣ Searched 1×: <strong>{{ search_counts.once }}</strong>
   </a>
   <a href="/kvk?search_status=twice_plus" class="badge badge-gray" style="font-size:.7rem;text-decoration:none">
-    2️⃣ 2×+ gezocht: <strong>{{ search_counts.twice_plus }}</strong>
+    2️⃣ Searched 2×+: <strong>{{ search_counts.twice_plus }}</strong>
   </a>
   <a href="/kvk?search_status=tried_no_email" class="badge badge-red" style="font-size:.7rem;text-decoration:none">
-    🚫 Geen e-mail: <strong>{{ search_counts.tried_no_email }}</strong>
+    🚫 No email: <strong>{{ search_counts.tried_no_email }}</strong>
   </a>
   <a href="/kvk?search_status=offline" class="badge badge-orange" style="font-size:.7rem;text-decoration:none"
-     title="Tried by agent — geen website, e-mail, telefoon of socials. Vermoedelijk offline-only / fysieke winkel zonder online aanwezigheid.">
+     title="Tried by agent — no website, email, phone or socials. Likely offline-only / physical store without online presence.">
     🏪 Offline-only: <strong>{{ search_counts.offline }}</strong>
   </a>
 </div>
 
 <!-- Bulk bar -->
 <div class="bulk-bar" id="bulk-bar" style="display:none">
-  <span><strong id="bulk-count">0</strong> geselecteerd</span>
+  <span><strong id="bulk-count">0</strong> selected</span>
   <form method="post" action="/kvk/bulk-enrich" style="display:inline" id="bulk-enrich-form">
     <input type="hidden" name="company_ids" id="bulk-ids">
-    <button class="btn btn-secondary btn-sm">📧 Verrijken</button>
+    <button class="btn btn-secondary btn-sm">📧 Enrich</button>
   </form>
   <form method="post" action="/kvk/push-klaviyo" style="display:inline" id="bulk-klaviyo-form">
     <input type="hidden" name="company_ids" id="bulk-klaviyo-ids">
@@ -142,13 +142,13 @@
   <table class="data-table kvk-table">
     <thead>
       <tr>
-        <th><input type="checkbox" id="select-all" title="Alles selecteren"></th>
-        <th>Bedrijf</th>
-        <th>Stad</th>
+        <th><input type="checkbox" id="select-all" title="Select all"></th>
+        <th>Company</th>
+        <th>City</th>
         <th>Website</th>
-        <th>E-mail</th>
-        <th>Telefoon</th>
-        <th>Klant?</th>
+        <th>Email</th>
+        <th>Phone</th>
+        <th>Customer?</th>
         <th>Tier</th>
         <th>Status</th>
         <th></th>
@@ -162,20 +162,20 @@
         <td>
           <a href="/kvk/{{ c.id }}" class="company-link">{{ c.company_name }}</a>
           {% if c.establishments_count and c.establishments_count > 1 %}
-          <span class="badge badge-gray" style="font-size:.65rem" title="{{ c.establishments_count }} vestigingen">{{ c.establishments_count }}×</span>
+          <span class="badge badge-gray" style="font-size:.65rem" title="{{ c.establishments_count }} establishments">{{ c.establishments_count }}×</span>
           {% endif %}
           {# Search-attempt badge: 🆕 / 1× / 2× — at-a-glance whether we've already tried this record #}
           {% if c.search_attempts == 0 %}
-          <span class="badge badge-blue" style="font-size:.6rem;padding:1px 5px" title="Nog niet gezocht door agent">🆕</span>
+          <span class="badge badge-blue" style="font-size:.6rem;padding:1px 5px" title="Not searched yet">🆕</span>
           {% elif c.search_attempts == 1 %}
-          <span class="badge badge-yellow" style="font-size:.6rem;padding:1px 5px" title="1× gezocht zonder e-mail">1×</span>
+          <span class="badge badge-yellow" style="font-size:.6rem;padding:1px 5px" title="Searched 1× without email">1×</span>
           {% else %}
-          <span class="badge badge-gray" style="font-size:.6rem;padding:1px 5px" title="{{ c.search_attempts }}× gezocht zonder e-mail">{{ c.search_attempts }}×</span>
+          <span class="badge badge-gray" style="font-size:.6rem;padding:1px 5px" title="Searched {{ c.search_attempts }}× without email">{{ c.search_attempts }}×</span>
           {% endif %}
           {# Offline-only badge — agent tried but found NO online presence at all #}
           {% if c.search_attempts >= 1 and not c.website and not c.email_public and not c.phone_public and not c.whatsapp_number and not c.instagram_url and not c.linkedin_url %}
           <span class="badge badge-orange" style="font-size:.6rem;padding:1px 5px"
-                title="Offline-only: geen website, e-mail, telefoon of socials gevonden">🏪</span>
+                title="Offline-only: no website, email, phone or socials found">🏪</span>
           {% endif %}
         </td>
 
@@ -238,7 +238,7 @@
           </div>
           {% endif %}
           <div class="email-edit-form hidden" id="email-form-{{ c.id }}">
-            <input type="email" class="email-input" id="email-input-{{ c.id }}" value="{{ c.email_public }}" placeholder="email@bedrijf.nl">
+            <input type="email" class="email-input" id="email-input-{{ c.id }}" value="{{ c.email_public }}" placeholder="email@company.com">
             <div style="display:flex;gap:.25rem;margin-top:.2rem">
               <button class="btn btn-primary btn-xs" onclick="saveEmail({{ c.id }})">✓</button>
               <button class="btn btn-ghost btn-xs" onclick="hideEmailEdit({{ c.id }})">✕</button>
@@ -250,9 +250,9 @@
 
         <td>
           {% if c.already_client_flag %}
-          <span class="badge badge-red" title="Bestaande klant">Klant</span>
+          <span class="badge badge-red" title="Existing customer">Customer</span>
           {% elif c.client_match_status == 'no_match' %}
-          <span class="badge badge-green">Nieuw</span>
+          <span class="badge badge-green">New</span>
           {% else %}
           <span class="badge badge-gray">?</span>
           {% endif %}
@@ -265,17 +265,17 @@
 
         <td>
           {% if c.enrichment_status == 'discovered' %}
-          <span class="status-dot status-green" title="Verrijkt">●</span>
+          <span class="status-dot status-green" title="Enriched">●</span>
           {% elif c.enrichment_status == 'partial' %}
-          <span class="status-dot status-blue" title="Gedeeltelijk">●</span>
+          <span class="status-dot status-blue" title="Partial">●</span>
           {% elif c.enrichment_status in ['running', 'searching'] %}
-          <span class="status-dot status-yellow status-pulse" title="Bezig…">●</span>
+          <span class="status-dot status-yellow status-pulse" title="Working…">●</span>
           {% elif c.enrichment_status == 'error' %}
-          <span class="status-dot status-red" title="Fout">●</span>
+          <span class="status-dot status-red" title="Error">●</span>
           {% elif c.enrichment_status == 'no_contacts' %}
-          <span class="status-dot status-gray" title="Geen contact gevonden">●</span>
+          <span class="status-dot status-gray" title="No contact found">●</span>
           {% else %}
-          <span class="status-dot status-gray" title="Wachtend">○</span>
+          <span class="status-dot status-gray" title="Pending">○</span>
           {% endif %}
         </td>
 
@@ -290,20 +290,20 @@
 {% if total_pages > 1 %}
 <div class="pagination">
   {% if page > 1 %}
-  <a href="?{% for k,v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page - 1 }}" class="btn btn-ghost btn-sm">← Vorige</a>
+  <a href="?{% for k,v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page - 1 }}" class="btn btn-ghost btn-sm">← Previous</a>
   {% endif %}
   <span style="color:#6b7280;font-size:.875rem">{{ page }} / {{ total_pages }}</span>
   {% if page < total_pages %}
-  <a href="?{% for k,v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page + 1 }}" class="btn btn-ghost btn-sm">Volgende →</a>
+  <a href="?{% for k,v in request.query_params.items() %}{% if k != 'page' %}{{ k }}={{ v }}&{% endif %}{% endfor %}page={{ page + 1 }}" class="btn btn-ghost btn-sm">Next →</a>
   {% endif %}
 </div>
 {% endif %}
 
 {% else %}
 <div class="empty-state">
-  <p style="font-size:1.1rem">📂 Nog geen KVK bedrijven geïmporteerd.</p>
-  <p class="text-muted">Upload de KVK CSV om te beginnen. Verrijking start daarna automatisch.</p>
-  <button class="btn btn-primary" onclick="document.getElementById('import-panel').classList.remove('hidden')">+ Importeer KVK CSV</button>
+  <p style="font-size:1.1rem">📂 No KVK companies imported yet.</p>
+  <p class="text-muted">Upload the KVK CSV to start. Enrichment kicks off automatically afterwards.</p>
+  <button class="btn btn-primary" onclick="document.getElementById('import-panel').classList.remove('hidden')">+ Import KVK CSV</button>
 </div>
 {% endif %}
 
@@ -341,7 +341,7 @@ function pushKlaviyo() {
   if (checked.length) {
     document.getElementById('bulk-klaviyo-form').submit();
   } else {
-    if (confirm('Alle bedrijven met e-mail naar Klaviyo sturen (huidige filters)?')) {
+    if (confirm('Push all companies with email to Klaviyo (current filters)?')) {
       document.getElementById('klaviyo-all-form').submit();
     }
   }
@@ -374,7 +374,7 @@ async function saveEmail(id) {
     cell.querySelector('.email-display').innerHTML =
       `<span class="has-contact" style="font-size:.82rem">${data.email}</span>
        <span class="conf-dot" style="color:#7c3aed" title="Handmatig">●</span>
-       <button class="edit-email-btn" onclick="showEmailEdit(${id},'${data.email}')" title="Aanpassen">✎</button>`;
+       <button class="edit-email-btn" onclick="showEmailEdit(${id},'${data.email}')" title="Edit">✎</button>`;
     hideEmailEdit(id);
   } else {
     input.style.borderColor = '#dc2626';
@@ -440,17 +440,17 @@ async function refreshProgress() {
     const r = await fetch('/api/kvk/progress');
     const d = await r.json();
     document.getElementById('prog-label').textContent =
-      d.pct + '% verrijkt (' + d.done + '/' + d.total + ')';
+      d.pct + '% enriched (' + d.done + '/' + d.total + ')';
     document.getElementById('prog-bar').style.width = d.pct + '%';
-    document.getElementById('prog-done').textContent  = d.done + ' verrijkt';
-    document.getElementById('prog-email').textContent = d.with_email + ' met e-mail';
-    document.getElementById('prog-pending').textContent = d.pending + ' wachtend';
+    document.getElementById('prog-done').textContent  = d.done + ' enriched';
+    document.getElementById('prog-email').textContent = d.with_email + ' with email';
+    document.getElementById('prog-pending').textContent = d.pending + ' pending';
 
     const activeEl = document.getElementById('prog-active');
     activeEl.style.display = (d.in_progress > 0) ? '' : 'none';
 
     const errEl = document.getElementById('prog-error');
-    if (d.errors > 0) { errEl.style.display = ''; errEl.textContent = d.errors + ' fouten'; }
+    if (d.errors > 0) { errEl.style.display = ''; errEl.textContent = d.errors + ' errors'; }
     else errEl.style.display = 'none';
 
     // auto-refresh while work is in progress

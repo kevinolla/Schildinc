@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd config for the KVK email-search agent.
+  Drop into ~/Library/LaunchAgents/ and load with:
+    launchctl load -w ~/Library/LaunchAgents/com.schildinc.kvk-agent.plist
+  See scripts/install-agent-daemon.sh for the one-line installer.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.schildinc.kvk-agent</string>
+
+  <!-- The command to run. Uses the project's .venv so dependencies are isolated. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/kevinolla/AI Project/B2B Prospect tool/.venv/bin/python</string>
+    <string>/Users/kevinolla/AI Project/B2B Prospect tool/scripts/email_agent.py</string>
+    <string>--headless</string>
+    <string>--quiet</string>
+    <string>--delay</string>
+    <string>3.0</string>
+    <string>--captcha-cooldown</string>
+    <string>180</string>
+  </array>
+
+  <!-- Working directory so relative paths resolve correctly -->
+  <key>WorkingDirectory</key>
+  <string>/Users/kevinolla/AI Project/B2B Prospect tool</string>
+
+  <!-- Auto-start on login -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart automatically if it crashes or runs out of pending records -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <!-- Wait 60s before restarting after exit, so transient network issues unwind -->
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <!-- Run as a low-priority background job so it doesn't fight your foreground apps -->
+  <key>Nice</key>
+  <integer>10</integer>
+
+  <!-- Log destinations -->
+  <key>StandardOutPath</key>
+  <string>/Users/kevinolla/Library/Logs/schild-kvk-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/kevinolla/Library/Logs/schild-kvk-agent.err.log</string>
+</dict>
+</plist>
