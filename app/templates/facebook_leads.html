@@ -40,9 +40,16 @@
 
 <!-- Filters -->
 <form method="get" action="/leads" class="filter-bar">
-  <div class="filter-form" style="grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr) minmax(140px, 1fr) minmax(120px, auto) auto;">
+  <div class="filter-form" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:8px;">
     <input type="text" name="search" value="{{ search }}"
-           placeholder="Search name / email / company / industry…" class="search-input">
+           placeholder="Search name / email / company / industry…" class="search-input"
+           style="grid-column: span 2; min-width: 0;">
+    <select name="sector" title="Filter by sector">
+      <option value="" {% if not sector %}selected{% endif %}>🏷️ All sectors</option>
+      {% for s in sector_counts %}
+      <option value="{{ s.name }}" {% if sector == s.name %}selected{% endif %}>{{ s.name }} ({{ s.count }})</option>
+      {% endfor %}
+    </select>
     <select name="match">
       <option value="" {% if not match %}selected{% endif %}>All match types</option>
       <option value="new" {% if match == 'new' %}selected{% endif %}>🆕 New leads</option>
@@ -58,6 +65,25 @@
     <a href="/leads" class="btn btn-ghost btn-sm">Reset</a>
   </div>
 </form>
+
+{# Sector quick-chips — clickable, show classifier-found counts #}
+{% if sector_counts %}
+<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.75rem">
+  {% for s in sector_counts %}
+  {% set color = {'Bike':'green','Candles':'yellow','Woodwork':'orange','Furniture':'blue','SteelWork':'gray','Music':'purple','Fashion':'red','Liquor & Bottles':'orange','Service':'blue','Art':'purple','Uncategorized':'gray'} %}
+  <a href="/leads?sector={{ s.name | urlencode }}" class="badge badge-{{ color.get(s.name, 'gray') }}"
+     style="font-size:.7rem;text-decoration:none">
+    {{ s.name }}: <strong>{{ s.count }}</strong>
+  </a>
+  {% endfor %}
+  {% if unclassified %}
+  <span class="badge badge-yellow" style="font-size:.7rem"
+        title="Classifier daemon hasn't reached these yet — will be sorted within ~60s">
+    ⏳ Unclassified: <strong>{{ unclassified }}</strong>
+  </span>
+  {% endif %}
+</div>
+{% endif %}
 
 {% if leads %}
 <div class="card table-card prospects-table-card">
@@ -91,6 +117,13 @@
             {{ lead.company_name or '—' }}
             {% if lead.country %}
             <div class="muted" style="font-size:.72rem">{{ lead.country }}</div>
+            {% endif %}
+            {% if lead.main_sector and lead.main_sector != 'Uncategorized' %}
+            <span class="badge badge-blue" style="font-size:.62rem;padding:1px 6px;margin-top:2px"
+                  title="Auto-classified by sector keyword agent">🏷️ {{ lead.main_sector }}</span>
+            {% elif lead.main_sector == 'Uncategorized' %}
+            <span class="badge badge-gray" style="font-size:.62rem;padding:1px 6px;margin-top:2px"
+                  title="No sector keywords matched">?</span>
             {% endif %}
           </td>
           <td style="font-size:.82rem">

@@ -1,0 +1,81 @@
+<!doctype html>
+<!--
+  Schild Inc — drop-in contact form
+  =================================
+  Paste this <form> block into any HTML page (your main site, a landing
+  page, a partner microsite). Submissions land in the leads CRM, get
+  classified into a sector automatically, and show up at /leads within
+  seconds.
+
+  No JavaScript framework required. Works on any static page.
+  Cross-origin POST is allowed (the /api/leads/webform endpoint sets
+  Access-Control-Allow-Origin: *).
+-->
+<form id="schild-contact-form" style="max-width:520px;margin:2rem auto;font-family:Inter,system-ui,sans-serif">
+  <h2 style="margin:0 0 .25rem">Get in touch</h2>
+  <p style="color:#6b7280;margin:0 0 1rem">Tell us a bit about your project — we'll get back within 1 business day.</p>
+
+  <input type="text" name="full_name" placeholder="Your name" required
+         style="width:100%;padding:.7rem;margin-bottom:.5rem;border:1px solid #d1d5db;border-radius:6px">
+
+  <input type="email" name="email" placeholder="Email" required
+         style="width:100%;padding:.7rem;margin-bottom:.5rem;border:1px solid #d1d5db;border-radius:6px">
+
+  <input type="text" name="company_name" placeholder="Company"
+         style="width:100%;padding:.7rem;margin-bottom:.5rem;border:1px solid #d1d5db;border-radius:6px">
+
+  <input type="text" name="phone" placeholder="Phone (optional)"
+         style="width:100%;padding:.7rem;margin-bottom:.5rem;border:1px solid #d1d5db;border-radius:6px">
+
+  <input type="text" name="country" placeholder="Country (optional)"
+         style="width:100%;padding:.7rem;margin-bottom:.5rem;border:1px solid #d1d5db;border-radius:6px">
+
+  <textarea name="message" placeholder="Tell us about your project…" rows="4"
+            style="width:100%;padding:.7rem;margin-bottom:.5rem;border:1px solid #d1d5db;border-radius:6px"></textarea>
+
+  <!-- Hidden meta — replace with your real values -->
+  <input type="hidden" name="source_site" value="schildinc.com">
+  <input type="hidden" name="source_form" value="contact-page">
+
+  <button type="submit"
+          style="width:100%;padding:.85rem;background:#2563eb;color:white;border:0;border-radius:6px;font-weight:600;cursor:pointer">
+    Send message
+  </button>
+  <div id="schild-contact-msg" style="margin-top:.75rem;font-size:.9rem"></div>
+</form>
+
+<script>
+(function () {
+  // ← EDIT THIS to your Railway URL (no trailing slash)
+  var ENDPOINT = 'https://schild-prospect-engine-production.up.railway.app/api/leads/webform';
+
+  var form = document.getElementById('schild-contact-form');
+  var msg  = document.getElementById('schild-contact-msg');
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    msg.textContent = 'Sending…';
+    msg.style.color = '#6b7280';
+    var data = Object.fromEntries(new FormData(form));
+    try {
+      var resp = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+      });
+      var body = await resp.json();
+      if (body.ok) {
+        msg.textContent = '✓ Thanks! We received your message.';
+        msg.style.color = '#059669';
+        form.reset();
+      } else {
+        msg.textContent = '✗ ' + (body.error || 'Submission failed.');
+        msg.style.color = '#dc2626';
+      }
+    } catch (err) {
+      msg.textContent = '✗ Network error. Please try again.';
+      msg.style.color = '#dc2626';
+    }
+  });
+})();
+</script>

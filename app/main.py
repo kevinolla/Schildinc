@@ -69,10 +69,11 @@ async def lifespan(app: FastAPI):
     # Background schedulers — both daemons, idempotent
     start_auto_enrichment_scheduler()
     try:
-        from app.facebook_leads import start_facebook_leads_scheduler
+        from app.facebook_leads import start_facebook_leads_scheduler, start_lead_classifier_scheduler
         start_facebook_leads_scheduler()
+        start_lead_classifier_scheduler()
     except Exception as exc:
-        print(f"[lifespan] FB leads scheduler not started: {exc}")
+        print(f"[lifespan] FB leads schedulers not started: {exc}")
     yield
 
 
@@ -949,6 +950,131 @@ async def leads_import_csv(
     return RedirectResponse(f"/leads?flash={quote_plus(flash)}", status_code=303)
 
 
+# ── Public web-form ingest ───────────────────────────────────────────────────
+# Lets an external site POST a contact-form submission to us. Goes
+# straight into facebook_leads (with source_url='webform') and gets
+# classified inline. CORS-permissive so any origin can post — but no
+# auth required, so a CAPTCHA on the embedding site is recommended
+# if abuse becomes a problem.
+@app.options("/api/leads/webform")
+async def webform_preflight() -> JSONResponse:
+    """CORS preflight — needed because the form lives on another origin."""
+    return JSONResponse(
+        {"ok": True},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+        },
+    )
+
+
+@app.post("/api/leads/webform")
+async def webform_submit(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """
+    Accept a lead from any web form. Accepts JSON or form-encoded.
+
+    Required fields: email
+    Optional: full_name, company_name, phone_number, country, message,
+              source_form (free-text label like 'contact-page'),
+              source_site (e.g. 'schildinc.com')
+
+    Returns 200 with classified sector on success.
+    """
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from app.facebook_leads import CURRENT_CLASSIFIER_VERSION
+    from app.lead_classifier import classify_lead
+
+    cors_headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
+
+    # Accept either JSON or form-encoded
+    payload: dict = {}
+    ctype = (request.headers.get("content-type") or "").lower()
+    try:
+        if "application/json" in ctype:
+            payload = await request.json()
+        else:
+            form = await request.form()
+            payload = dict(form)
+    except Exception:
+        return JSONResponse(
+            {"ok": False, "error": "invalid_payload"},
+            status_code=400,
+            headers=cors_headers,
+        )
+
+    email = str(payload.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return JSONResponse(
+            {"ok": False, "error": "email_required"},
+            status_code=400,
+            headers=cors_headers,
+        )
+
+    # Build a fb_lead_id for webform leads so the same person submitting
+    # twice from the same site collapses to one row (idempotent).
+    source_site = str(payload.get("source_site") or "webform")
+    source_form = str(payload.get("source_form") or "default")
+    fb_lead_id = f"webform:{source_site}:{source_form}:{email}"
+
+    existing = db.scalars(
+        select(FacebookLead).where(FacebookLead.fb_lead_id == fb_lead_id).limit(1)
+    ).first()
+    is_new = existing is None
+    lead = existing or FacebookLead(fb_lead_id=fb_lead_id)
+
+    # Capture incoming fields — only overwrite if non-empty (don't wipe
+    # historical values on a re-submit that omits a field)
+    def _set_if(field: str, value):
+        val = str(value or "").strip()
+        if val:
+            setattr(lead, field, val)
+
+    _set_if("full_name",            payload.get("full_name") or payload.get("name"))
+    _set_if("email",                email)
+    _set_if("phone_number",         payload.get("phone_number") or payload.get("phone"))
+    _set_if("company_name",         payload.get("company_name") or payload.get("company"))
+    _set_if("country",              payload.get("country"))
+    _set_if("detailed_information", payload.get("message") or payload.get("detail"))
+    _set_if("form_name",            source_form)
+    _set_if("source_url",           f"webform:{source_site}")
+    _set_if("platform",             "webform")
+
+    if is_new:
+        lead.created_time_utc = datetime.now(tz=timezone.utc)
+        db.add(lead)
+
+    # Classify inline before commit
+    lead.main_sector = classify_lead(lead)
+    lead.classifier_version = CURRENT_CLASSIFIER_VERSION
+
+    # Cross-reference vs customers + KVK
+    try:
+        from app.facebook_leads import _classify_lead as _matchref
+        lead.match_status = _matchref(db, lead)
+    except Exception:
+        lead.match_status = "new"
+
+    db.commit()
+    return JSONResponse(
+        {
+            "ok": True,
+            "id": lead.id,
+            "fb_lead_id": lead.fb_lead_id,
+            "main_sector": lead.main_sector,
+            "match_status": lead.match_status,
+            "created": is_new,
+        },
+        headers=cors_headers,
+    )
+
+
 # Top-level /leads route — also redirected from legacy /customers/facebook-leads
 @app.get("/customers/facebook-leads")
 def facebook_leads_legacy_redirect() -> RedirectResponse:
@@ -965,6 +1091,7 @@ def leads_page(
     per_page: int = 50,
     match: str = "",
     search: str = "",
+    sector: str = "",
 ) -> HTMLResponse:
     """Top-level Leads inbox: every FB lead from the live sheet + historical CSV."""
     page = max(1, page)
@@ -983,6 +1110,8 @@ def leads_page(
         )
     if match in ("new", "existing_customer", "known_prospect"):
         base = base.where(FacebookLead.match_status == match)
+    if sector:
+        base = base.where(FacebookLead.main_sector == sector)
 
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     total_pages = max(1, (total + per_page - 1) // per_page)
@@ -993,6 +1122,20 @@ def leads_page(
         base.order_by(FacebookLead.created_time_utc.desc().nullslast())
         .offset((page - 1) * per_page).limit(per_page)
     ).all()
+
+    # Per-sector counts across the full leads table — used for filter chips
+    sector_counts_rows = db.execute(
+        select(FacebookLead.main_sector, func.count(FacebookLead.id))
+        .where(FacebookLead.main_sector != "")
+        .group_by(FacebookLead.main_sector)
+        .order_by(func.count(FacebookLead.id).desc())
+    ).all()
+    sector_counts = [{"name": s, "count": c} for s, c in sector_counts_rows]
+
+    # How many haven't been classified yet (classifier daemon's backlog)
+    unclassified = db.scalar(
+        select(func.count(FacebookLead.id)).where(FacebookLead.main_sector == "")
+    ) or 0
 
     return templates.TemplateResponse(
         request,
@@ -1006,6 +1149,9 @@ def leads_page(
             "total_pages": total_pages,
             "search": search,
             "match": match,
+            "sector": sector,
+            "sector_counts": sector_counts,
+            "unclassified": unclassified,
             "app_name": settings.app_name,
         },
     )

@@ -485,6 +485,10 @@ class FacebookLead(Base):
     total_order_amount: Mapped[str] = mapped_column(Text, default="")
     detailed_information: Mapped[str] = mapped_column(Text, default="")
     email_marketing_consent: Mapped[str] = mapped_column(Text, default="")
+    # Set by the classifier daemon (app/lead_classifier.py)
+    main_sector: Mapped[str] = mapped_column(Text, default="", index=True)
+    sub_sector: Mapped[str] = mapped_column(Text, default="")
+    classifier_version: Mapped[int] = mapped_column(Integer, default=0, index=True)
 
     matched_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True, index=True)
     matched_kvk_company_id: Mapped[int | None] = mapped_column(ForeignKey("kvk_companies.id"), nullable=True, index=True)

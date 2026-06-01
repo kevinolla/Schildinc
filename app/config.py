@@ -81,6 +81,10 @@ class Settings:
     # idempotently upsert any new rows. Default 15 min.
     fb_leads_auto_sync_enabled: bool = _as_bool(os.getenv("FB_LEADS_AUTO_SYNC_ENABLED"), True)
     fb_leads_auto_sync_interval: int = int(os.getenv("FB_LEADS_AUTO_SYNC_INTERVAL", "900"))
+    # Lead sector classifier — runs every N seconds, classifies any
+    # facebook_leads row whose classifier_version < CURRENT.
+    fb_leads_classifier_enabled: bool = _as_bool(os.getenv("FB_LEADS_CLASSIFIER_ENABLED"), True)
+    fb_leads_classifier_interval: int = int(os.getenv("FB_LEADS_CLASSIFIER_INTERVAL", "60"))
 
 
 settings = Settings()

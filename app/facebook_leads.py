@@ -338,9 +338,16 @@ def import_facebook_leads(db: Session) -> dict[str, int]:
     return import_facebook_leads_from_csv(db, csv_text, SHEET_CSV_URL)
 
 
+# Bump this whenever SECTOR_KEYWORDS in lead_classifier.py changes
+# meaningfully. Any row with classifier_version < CURRENT gets re-classified.
+CURRENT_CLASSIFIER_VERSION = 1
+
+
 # ── Background auto-sync scheduler ─────────────────────────────────────────
 _fb_sync_started = False
 _fb_sync_lock = threading.Lock()
+_classifier_started = False
+_classifier_lock = threading.Lock()
 
 
 def _fb_sync_loop() -> None:
@@ -372,6 +379,75 @@ def start_facebook_leads_scheduler() -> None:
             return
         _fb_sync_started = True
     threading.Thread(target=_fb_sync_loop, daemon=True, name="fb-leads-sync").start()
+
+
+# ── Background sector-classifier daemon ────────────────────────────────────
+# Every N seconds, scoop up any facebook_leads row whose
+# classifier_version is below CURRENT, run the keyword classifier,
+# write main_sector + classifier_version back. Fast — pure regex, no
+# network. 10k rows / second easy.
+
+def classify_pending_leads(db: Session, *, batch_size: int = 1000) -> dict[str, int]:
+    """Classify any rows that haven't seen the current classifier version."""
+    from app.lead_classifier import classify_lead
+
+    pending = db.scalars(
+        select(FacebookLead)
+        .where(FacebookLead.classifier_version < CURRENT_CLASSIFIER_VERSION)
+        .limit(batch_size)
+    ).all()
+    if not pending:
+        return {"classified": 0, "remaining": 0}
+
+    n_real = 0
+    for row in pending:
+        row.main_sector = classify_lead(row)
+        row.classifier_version = CURRENT_CLASSIFIER_VERSION
+        if row.main_sector != "Uncategorized":
+            n_real += 1
+    db.commit()
+
+    remaining = db.scalar(
+        select(func.count(FacebookLead.id)).where(
+            FacebookLead.classifier_version < CURRENT_CLASSIFIER_VERSION
+        )
+    ) or 0
+    return {"classified": len(pending), "real_sector_hits": n_real, "remaining": remaining}
+
+
+def _classifier_loop() -> None:
+    """Daemon — runs every CLASSIFIER_INTERVAL seconds."""
+    interval = getattr(settings, "fb_leads_classifier_interval", 60)
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                summary = classify_pending_leads(db, batch_size=2000)
+                if summary["classified"]:
+                    print(
+                        f"[fb-classifier] {summary['classified']} classified "
+                        f"({summary.get('real_sector_hits', 0)} hits), "
+                        f"{summary.get('remaining', 0)} still pending"
+                    )
+            finally:
+                db.close()
+        except Exception as exc:
+            print(f"[fb-classifier] error (will retry next cycle): {exc}")
+        time.sleep(interval)
+
+
+def start_lead_classifier_scheduler() -> None:
+    """Idempotent. Off by default if FB_LEADS_CLASSIFIER_ENABLED=false."""
+    global _classifier_started
+    if not getattr(settings, "fb_leads_classifier_enabled", True):
+        return
+    with _classifier_lock:
+        if _classifier_started:
+            return
+        _classifier_started = True
+    threading.Thread(
+        target=_classifier_loop, daemon=True, name="fb-leads-classifier"
+    ).start()
 
 
 if __name__ == "__main__":
