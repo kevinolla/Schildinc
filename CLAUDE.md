@@ -1,6 +1,6 @@
 # Schild Inc B2B Prospect Engine — Project Memory
 
-Last updated: 2026-05-22
+Last updated: 2026-06-02
 
 This file is read automatically by Claude Code when starting a new session
 in this repo. It captures architecture, history, gotchas, and pending work
@@ -11,11 +11,11 @@ so we don't re-explain from scratch each time.
 ## What this is
 
 A B2B outreach engine for **Schild Inc** (Dutch metal-label manufacturer
-targeting bicycle shops and similar SMBs across NL/DE/BE/FR/UK/US/etc.).
+targeting bicycle shops + 10 other sectors across NL/DE/FR/BE/UK/US/etc.).
 
 - **Production**: https://schild-prospect-engine-production.up.railway.app
 - **Auth**: `schild` / `Schildinc#01` (HTTP Basic on every page)
-- **GitHub**: https://github.com/kevinolla/Schildinc.git (main = trunk, autodeploy NOT configured — must `railway up`)
+- **GitHub**: https://github.com/kevinolla/Schildinc.git (main = trunk, NO auto-deploy — must `railway up`)
 - **Owner email**: schild.inc.official@gmail.com
 - **Stack**: FastAPI + SQLAlchemy + Alembic + Postgres on Railway, Jinja2 templates, vanilla JS
 
@@ -24,46 +24,64 @@ targeting bicycle shops and similar SMBs across NL/DE/BE/FR/UK/US/etc.).
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  Railway container                      │
-│  ┌────────────────────────────────────────────────┐    │
-│  │  FastAPI app (app/main.py)                     │    │
-│  │  - HTTP routes for /kvk, /customers, /leads,   │    │
-│  │    /prospects, /queue, /suppression, /logs     │    │
-│  │  - Agent API: /api/kvk/agent/{pending,result}  │    │
-│  ├────────────────────────────────────────────────┤    │
-│  │  Background daemons (lifespan startup)         │    │
-│  │  - KVK auto-enrich scheduler (3 workers,       │    │
-│  │    polls every 30s)                            │    │
-│  │  - FB-leads sheet sync (every 15 min)          │    │
-│  └────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                  Railway container                       │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │  FastAPI app (app/main.py)                      │    │
+│  │  - Pages: /kvk, /customers, /leads, /prospects, │    │
+│  │    /queue, /suppression, /logs, /customers/analytics │
+│  │  - Agent API:   /api/kvk/agent/{pending,result} │    │
+│  │  - Webform API: /api/leads/webform (CORS-open)  │    │
+│  │  - Exports: /kvk/export.csv, /customers/export  │    │
+│  ├─────────────────────────────────────────────────┤    │
+│  │  Background daemons (lifespan startup)          │    │
+│  │  - KVK auto-enrich  (3 workers, every 30s)      │    │
+│  │  - FB-sheet sync    (every 15 min)              │    │
+│  │  - Lead classifier  (every 60s, NEW)            │    │
+│  └─────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────┘
               ↑                       ↓
               │ HTTP                  │ Postgres
               │                       ↓
    ┌──────────────────┐    ┌──────────────────┐
    │ Local Playwright │    │ Railway Postgres │
-   │ agent (laptop)   │    │ (3990 KVK rows,  │
-   │ scripts/email_   │    │ 8508 FB leads,   │
+   │ agent (laptop)   │    │ (3990 KVK,       │
+   │ scripts/email_   │    │ ~1.1M leads*,    │
    │ agent.py         │    │ 3256 customers)  │
    └──────────────────┘    └──────────────────┘
+   *fb_lead_id is sparse — actual row count ~9k.
+   The high `id` numbers are an auto-increment sequence quirk.
 ```
 
-The **local agent** runs on the user's Mac because Google/Bing return
-JS-only stub pages to cloud IPs (Railway). Residential IP → real
-snippets in the rendered DOM.
+The **local agent** runs on the user's Mac because Google returns JS-only
+stub pages to cloud IPs. Residential IP → real rendered DOM with snippets.
 
 ---
 
-## Tables (live row counts as of 2026-05-22)
+## Tables (live row counts as of 2026-06-02)
 
 | Table | Rows | Purpose |
 |---|---|---|
 | `customers`        | 3,256 | Paying customers (Stripe + Schild historical CSV) |
-| `kvk_companies`    | 3,990 | Dutch Chamber of Commerce import — outreach pool |
+| `kvk_companies`    | 3,990 | Dutch Chamber of Commerce — outreach pool |
+| `facebook_leads`   | ~8,500 unique fb_lead_ids | Lead Ads sheet (auto-synced) + 50k-row historical CSV |
 | `prospects`        |    68 | Earlier Google Places imports |
-| `facebook_leads`   | 8,508 | FB Lead Ads sheet + 50k-row historical CSV |
 | `invoices`         |   ~7k | Linked to customers |
+
+---
+
+## Sector taxonomy
+
+11 canonical sectors used by **both** Customer.main_sector and
+FacebookLead.main_sector (defined in `app/lead_classifier.py:SECTORS`):
+
+```
+Bike · Candles · Woodwork · Furniture · SteelWork · Music · Fashion ·
+Liquor & Bottles · Service · Art · Uncategorized
+```
+
+Live distribution on leads as of 2026-06-02: Bike 2,759 · Art 2,533 ·
+Uncategorized 1,217 · Service 800ish · SteelWork 412 · others.
 
 ---
 
@@ -71,55 +89,61 @@ snippets in the rendered DOM.
 
 | Path | Role |
 |---|---|
-| `app/main.py` | All HTTP routes (single big file ~2,400 lines) |
-| `app/models.py` | SQLAlchemy models — KvkCompany, Customer, Prospect, FacebookLead, Invoice, SuppressionEntry, etc. |
-| `app/matching.py` | **STRICT** KVK↔Customer matching: exact email OR exact (name + country). Anything fuzzy was deliberately removed. |
-| `app/kvk_enrichment.py` | Background scheduler that crawls KVK records (3 workers, 6s Playwright timeout). Stage-by-stage: Places → Playwright site crawl → MX-guess `info@domain` |
-| `app/discovery.py` | Core Playwright scraper (used by both scheduler + agent) |
-| `app/email_guesser.py` | MX-validated `info@<domain>` pattern fallback. Skips free webmail. |
-| `app/brave_search.py` | Brave Search API wrapper. Circuit-breaker trips after 5 consecutive 402s (out-of-budget). |
-| `app/bing_search.py` | HTML scrape — cloud IP gets useless SPA stub, kept for completeness |
-| `app/playwright_search.py` | Playwright Google scraper — works from cloud, but slow (~5-8s/query); module-level `_LAUNCH_LOCK` serializes launches |
-| `app/google_search.py` | Google CSE wrapper — DEPRECATED (Google killed "Search the entire web" toggle, so CSEs only search 1 placeholder domain) |
-| `app/facebook_leads.py` | FB sheet auto-sync daemon + flexible importer (handles both live sheet AND historical CSV column shapes) |
-| `app/customer_normalizer.py` | Schild Inc historical customer CSV importer — aggregates 3,078 order-lines to 2,052 customers |
-| `app/country_codes.py` | ISO-2 ↔ name registry. `to_iso2(value)` canonicalizes anything ("Netherlands"/"NL"/"NLD"/"NET" → "NL") |
-| `app/klaviyo_sync.py` | Klaviyo v3 profile push (list `XHgkXM` = "KVK Lead List") |
-| `scripts/email_agent.py` | **Local browser agent** — runs on user's laptop, real Chromium, residential IP. Hands-free (no prompts). |
-| `scripts/install-agent-daemon.sh` | macOS launchd installer for always-on agent |
-| `scripts/com.schildinc.kvk-agent.plist` | The launchd config it installs |
+| `app/main.py` | All HTTP routes (~2,500 lines). Single file. |
+| `app/models.py` | SQLAlchemy models — Customer, KvkCompany, Prospect, FacebookLead, Invoice, SuppressionEntry, etc. |
+| `app/matching.py` | **STRICT** KVK↔Customer matching: exact email OR exact (name + country). Fuzzy/domain matching deliberately removed. |
+| `app/kvk_enrichment.py` | KVK auto-enrich scheduler (3 workers, 6s Playwright timeout). Stages: Places → Playwright crawl → MX-guess `info@domain` |
+| `app/discovery.py` | Core Playwright scraper |
+| `app/email_guesser.py` | MX-validated `info@<domain>` pattern fallback (skips free webmail) |
+| `app/brave_search.py` | Brave Search API. Circuit-breaker after 5 consecutive 402s. |
+| `app/bing_search.py` | HTML scrape — cloud IPs get SPA stub, kept for completeness |
+| `app/playwright_search.py` | Real-Chromium Google scraper (works from cloud, slow ~5-8s). Module-level `_LAUNCH_LOCK` serializes launches. |
+| `app/facebook_leads.py` | FB sheet auto-sync **+** classifier daemon (lines `start_lead_classifier_scheduler`, `classify_pending_leads`) |
+| `app/lead_classifier.py` | **Keyword sector classifier** — fast regex matcher. 11 sectors, NL/DE/FR/EN keywords. ~10k rows/sec. |
+| `app/customer_normalizer.py` | Schild historical customer CSV importer (3,078 order-lines → 2,052 customers) |
+| `app/country_codes.py` | ISO-2 ↔ name registry. `to_iso2()` canonicalizes any input. |
+| `app/klaviyo_sync.py` | Klaviyo v3 profile push (list `XHgkXM`) |
+| `scripts/email_agent.py` | **Local browser agent** — residential IP, hands-free, multi-channel extractor |
+| `scripts/install-agent-daemon.sh` + `.plist` | macOS launchd installer (always-on agent) |
 
 ---
 
-## Migrations (current head: 0011)
+## Migrations (current head: 0012)
 
 | Rev | Adds |
 |---|---|
 | 0001 | Initial schema |
 | 0002 | Prospect discovery + tiering fields |
-| 0003 | Contact channels (phone, WA, IG, LI) on prospects |
+| 0003 | Contact channels on prospects |
 | 0004 | Discovery lists |
-| 0005 | KVK tables (companies, establishments, import logs) |
-| 0006 | KVK fields on prospects table |
-| 0007 | KVK social columns (whatsapp_number, whatsapp_url, instagram_url, linkedin_url) |
+| 0005 | KVK tables |
+| 0006 | KVK fields on prospects |
+| 0007 | KVK social columns (whatsapp_*, instagram_url, linkedin_url) |
 | 0008 | facebook_leads table |
-| 0009 | FB lead sales annotations (quality_score, progress, pic, etc.) |
+| 0009 | FB lead sales annotations (quality_score, progress, pic, …) |
 | 0010 | Customer rich fields (main_sector, sub_sector, customer_segment, contact_person, phone_primary, website) |
 | 0011 | KVK `search_attempts` counter + index |
+| 0012 | **`facebook_leads.main_sector` + `sub_sector` + `classifier_version`** |
 
-Alembic runs on container startup (`alembic upgrade head` in the start command in `railway.json`).
+Alembic runs on container startup (`alembic upgrade head` in start command).
 
 ---
 
 ## Important architectural decisions / gotchas
 
 ### KVK matching is STRICT
-After the user complained about 2,059 false "Klant" flags, we rewrote `match_kvk_company()` to ONLY match on:
-1. Exact email (lowercased)
-2. Exact `canonical_company_name_clean` + uppercased country
+ONLY two ways to be flagged Klant (existing customer):
+1. Exact lowercased email match
+2. Exact `canonical_company_name_clean` + uppercased country match
 
-**Domain matching and fuzzy name matching are DELIBERATELY REMOVED.**
-Don't reintroduce them.
+**Domain matching and fuzzy name matching are DELIBERATELY REMOVED.** Don't reintroduce.
+
+### Lead sector classifier
+- Pure regex keyword matching — no LLM, no API. ~10k rows/sec.
+- Vocabulary in `app/lead_classifier.py:SECTOR_KEYWORDS` — mixed NL/DE/FR/EN
+- `classifier_version` column on facebook_leads — bump `CURRENT_CLASSIFIER_VERSION` in `app/facebook_leads.py` when keywords change to force re-classification
+- Daemon: every 60s, picks up rows with `classifier_version < CURRENT` and classifies in batches of 2,000
+- Inline: webform endpoint classifies on the spot before save
 
 ### Agent endpoint pagination
 `/api/kvk/agent/pending`:
@@ -128,34 +152,48 @@ Don't reintroduce them.
 - Filters `search_attempts < max_attempts` (default 2)
 - Orders by `search_attempts ASC, id ASC` (never-searched first)
 
-`/api/kvk/agent/result` ALWAYS increments `search_attempts += 1`. So the priority shifts naturally.
+`/api/kvk/agent/result` ALWAYS increments `search_attempts += 1`.
 
-### Local agent CAPTCHA handling
-No prompts ever. When Google challenges → log + `wait_for_timeout(90s)` + skip + move on. Record stays in `/agent/pending` for a later retry.
+### Local agent (scripts/email_agent.py) is hands-free
+No prompts EVER. CAPTCHA → log + `wait_for_timeout(90s)` + skip + move on. Record stays in `/agent/pending` for later.
+
+### Webform ingest — `POST /api/leads/webform`
+- CORS-open (any origin can POST)
+- Accepts JSON OR form-encoded
+- Required: at least one of email/phone/company_name
+- Auto-classifies sector inline
+- Creates `fb_lead_id = webform:{source_site}:{source_form}:{email}` (dedupable)
+- Re-runs match classification against customers + KVK
+
+### Country code/name mismatch between tables
+- `customers.country_code` = ISO-2 (`NL`, `DE`, `FR`)
+- `facebook_leads.country` = full uppercase names (`NETHERLAND`, `GERMANY`, `FRANCE`, `USA`)
+- When combining for exports, map: `FR↔FRANCE`, `DE↔GERMANY`, `NL↔NETHERLAND/NETHERLANDS`
 
 ### KVK enrichment scheduler stability
-3 workers, 6s Playwright timeout, periodic stuck-record cleanup every batch. Sched runs in lifespan startup via `start_auto_enrichment_scheduler()` in `app/kvk_enrichment.py`. Module-level `_scheduler_started` flag makes it idempotent.
+3 workers, 6s Playwright timeout, periodic stuck-record cleanup every batch. Spawned via `start_auto_enrichment_scheduler()` in `app/kvk_enrichment.py`. Module-level `_scheduler_started` flag = idempotent.
 
 ### Playwright threading
-`sync_playwright()` from multiple threads = `RuntimeError: Racing with another loop`. Fixed by a module-level `threading.Lock()` in `app/playwright_search.py` that serializes only the launch step.
+`sync_playwright()` from multiple threads = `RuntimeError: Racing with another loop`. Fixed by module-level `threading.Lock()` in `app/playwright_search.py`.
 
 ### Brave Search circuit breaker
-After 5 consecutive `402 Payment Required` responses, `is_enabled()` returns `False` for the rest of the UTC day. State in `_breaker_state` dict. `_record_success()` resets the counter.
-
-### Country code canonicalization
-The user's historical CSVs have mixed country values: `Netherlands` / `NL` / `NLD` / `NET` (from the old normalizer's 3-letter truncation). Use `app.country_codes.to_iso2()` for any new normalization. Live DB was backfilled — 1,017 rows changed.
+After 5 consecutive 402 Payment Required, `is_enabled()` returns False for the rest of the UTC day. State in `_breaker_state` dict.
 
 ### Klaviyo
-- Private key in `KLAVIYO_PRIVATE_API_KEY` env var (Railway)
+- Key: `KLAVIYO_PRIVATE_API_KEY` env var
 - Target list: `XHgkXM` ("KVK Lead List")
 - v3 API, revision `2024-02-15`
-- Push: `POST /kvk/push-klaviyo`
+- Push endpoint: `POST /kvk/push-klaviyo`
 
 ### Google Sheet auto-sync (FB leads)
-- Sheet: `10k2UB3qefKvskF1YemikhVCPk0JI8xmScH2dj_I7h5g`, gid `1219149797`
-- Public CSV export URL (no OAuth needed)
+- Sheet ID: `10k2UB3qefKvskF1YemikhVCPk0JI8xmScH2dj_I7h5g`, gid `1219149797`
+- Public CSV export URL (no OAuth)
 - Polled every 15 min by `_fb_sync_loop()`
-- Importer dedupes by `fb_lead_id` via Postgres `ON CONFLICT (fb_lead_id) DO UPDATE`
+- Importer uses Postgres `ON CONFLICT (fb_lead_id) DO UPDATE`
+
+### FastAPI route ordering gotcha
+**Static-path GET routes MUST be declared BEFORE catch-all `/{int_param}` routes.** Otherwise FastAPI tries to parse the path segment as an int and returns 422.
+Example fix: `/kvk/export.csv` MUST be above `/kvk/{company_id}`.
 
 ---
 
@@ -163,20 +201,22 @@ The user's historical CSVs have mixed country values: `Netherlands` / `NL` / `NL
 
 | Var | Purpose |
 |---|---|
-| `DATABASE_URL` | Postgres connection (auto-injected) |
+| `DATABASE_URL` | Postgres (auto-injected) |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Basic auth credentials |
-| `GOOGLE_PLACES_API_KEY` | Places API (key starts `AIzaSyDUWj…`) |
-| `BRAVE_API_KEY` | Brave Search (out of credit currently) |
+| `GOOGLE_PLACES_API_KEY` | Places API |
+| `BRAVE_API_KEY` | Brave Search (out of credit) |
 | `BRAVE_DAILY_LIMIT` | Default 300 |
-| `KLAVIYO_PRIVATE_API_KEY` | `pk_6341a9b1914615abc527080b0ef797f2aa` |
+| `KLAVIYO_PRIVATE_API_KEY` | Klaviyo |
 | `KLAVIYO_LIST_ID` | `XHgkXM` |
 | `KVK_AUTO_ENRICH_ENABLED` | `true` |
 | `KVK_AUTO_ENRICH_BATCH` | Default 12 |
-| `KVK_AUTO_ENRICH_INTERVAL` | Default 30 (seconds between batches) |
+| `KVK_AUTO_ENRICH_INTERVAL` | Default 30 |
 | `KVK_AUTO_ENRICH_WORKERS` | Default 3 |
 | `PLAYWRIGHT_TIMEOUT_MS` | Default 6000 |
 | `FB_LEADS_AUTO_SYNC_ENABLED` | `true` |
-| `FB_LEADS_AUTO_SYNC_INTERVAL` | Default 900 |
+| `FB_LEADS_AUTO_SYNC_INTERVAL` | Default 900 (15 min) |
+| `FB_LEADS_CLASSIFIER_ENABLED` | `true` (NEW) |
+| `FB_LEADS_CLASSIFIER_INTERVAL` | Default 60s (NEW) |
 
 ---
 
@@ -186,31 +226,29 @@ The user's historical CSVs have mixed country values: `Netherlands` / `NL` / `NL
 ```bash
 cd "/Users/kevinolla/AI Project/B2B Prospect tool"
 source .venv/bin/activate
-# Run server pointing at LOCAL sqlite (or set DATABASE_URL for prod)
 uvicorn app.main:app --reload --port 8000
 ```
 
 ### Deploy to Railway
 ```bash
 cd "/Users/kevinolla/AI Project/B2B Prospect tool"
-railway login        # if token expired (every few weeks)
+railway login   # if token expired (every few weeks)
 railway up --service schild-prospect-engine
 ```
-Build takes ~10 min (nixpacks installs Playwright + Chromium every time).
+~10 min build (nixpacks reinstalls Playwright + Chromium every time).
 
 ### Run the local agent (manual)
 ```bash
-cd "/Users/kevinolla/AI Project/B2B Prospect tool"
-source .venv/bin/activate
-python scripts/email_agent.py            # default (visible Chrome, 1.5s delay)
-python scripts/email_agent.py --headless --delay 3.0 --quiet --max 100
+python scripts/email_agent.py                          # default
+python scripts/email_agent.py --headless --max 100     # quick test
+python scripts/email_agent.py --debug                  # explain misses
 ```
 
 ### Install always-on agent (launchd)
 ```bash
 bash scripts/install-agent-daemon.sh
 ```
-Starts immediately + on every login. Logs: `~/Library/Logs/schild-kvk-agent.log`. Unload: `launchctl unload ~/Library/LaunchAgents/com.schildinc.kvk-agent.plist`.
+Starts immediately + at every login. Logs at `~/Library/Logs/schild-kvk-agent.log`.
 
 ---
 
@@ -220,19 +258,37 @@ Starts immediately + on every login. Logs: `~/Library/Logs/schild-kvk-agent.log`
 from sqlalchemy import create_engine, text
 e = create_engine('postgresql+psycopg://postgres:LrTsgCYOvlJPvbcWgpqWUGycnyYUjYLq@switchyard.proxy.rlwy.net:13263/railway')
 with e.connect() as c:
-    print(c.execute(text("SELECT enrichment_status, COUNT(*) FROM kvk_companies GROUP BY 1 ORDER BY 2 DESC")).fetchall())
+    print(c.execute(text("SELECT main_sector, COUNT(*) FROM facebook_leads GROUP BY 1 ORDER BY 2 DESC")).fetchall())
 ```
 
-**Don't commit this connection string.** It rotates if Railway regenerates DB creds.
+**Don't commit this connection string** — rotates if Railway regenerates DB creds.
+
+---
+
+## Export endpoints + recipes
+
+### `/customers/export.csv`
+Filters: `sector`, `country` (multi-value: repeat `country=NL&country=DE`), `segment`, `search`, `sort`. Filename auto-reflects active filters.
+
+### `/kvk/export.csv`
+Filters: `tier`, `has_email` (1/0), `match`, `confidence`. Treats `all`/`any`/empty as no-op.
+
+### Combined Customer+Lead exports (one-off Python)
+Use the recipe at the bottom of `scripts/` history — query both tables, UNION ALL with a `source` column, map country names. Pattern documented at top of the export functions:
+
+```python
+LEAD_COUNTRY_NAMES = {'FR': ['FRANCE'], 'DE': ['GERMANY'], 'NL': ['NETHERLAND', 'NETHERLANDS']}
+```
 
 ---
 
 ## Pending items / open loops
 
-1. **Latest commits not yet deployed**: `143592b` (search_attempts), `1dbd812` (offline-only), `687bee1` (English UI + verify/reject buttons), `9b98a59` (multi-country checklist + name display) — user needs to run `railway login && railway up --service schild-prospect-engine`. Railway CLI OAuth token expired in last session.
-2. **Always-on agent**: code is ready (`scripts/install-agent-daemon.sh`), user hasn't installed yet
-3. **Customer DB import**: 2,052 of 2,092 unique customer names ingested (40 collapsed via entity_id slug collisions — known, expected behavior)
-4. **FB leads classification**: 8,345 of 8,508 still marked `new` — should re-run `_classify_lead()` across the table after a customer DB refresh
+1. **Webform HTML embed snippet** — endpoint live, need a copy-pasteable `<form>` snippet for external sites
+2. **Re-classify on classifier_version bump** — already works automatically, but consider showing pending-classification count on /leads page
+3. **Sector backfill on customers** — historical CSV provided sectors directly; KVK rows have no sector yet. Could run classifier across KVK too (would need a similar column on `kvk_companies`)
+4. **Lead-to-customer match propagation** — when a lead is marked `existing_customer`, copy the customer's `main_sector` if the classifier said `Uncategorized`
+5. **Trengo widget GTM tracking** — separate from app, user has setup guide already
 
 ## Common debug commands
 
@@ -240,20 +296,55 @@ with e.connect() as c:
 # Live status snapshot
 curl -s -u "schild:Schildinc#01" https://schild-prospect-engine-production.up.railway.app/api/kvk/progress | python3 -m json.tool
 
+# Quick sector counts on facebook_leads
+curl -s -u "schild:Schildinc#01" https://schild-prospect-engine-production.up.railway.app/leads | grep -oE "[A-Z][a-z &]+: <strong>[0-9,]+" | head -12
+
 # Railway logs (last 200 lines)
 railway logs --service schild-prospect-engine | tail -200
 
 # Find a route handler quickly
-grep -n '@app.get\|@app.post' app/main.py | grep -i "<route_name>"
+grep -n '@app.get\|@app.post' app/main.py | grep -i "<name>"
 
-# Validate all migrations apply cleanly
-alembic upgrade head
+# Test the webform endpoint
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"email":"test@bikecity.nl","company_name":"Test Bike Shop"}' \
+  -u "schild:Schildinc#01" \
+  https://schild-prospect-engine-production.up.railway.app/api/leads/webform
 ```
 
 ---
 
 ## Style / language
 
-- **All UI is English** (translated from Dutch on 2026-05-22). Don't reintroduce Dutch labels.
-- **No emoji in committed code** (Python source, SQL) unless user explicitly asks. UI templates DO use emoji freely.
-- **Co-Author tag**: every commit ends with `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` (or whatever model is active).
+- **UI is English** (translated from Dutch). Don't reintroduce Dutch labels.
+- **No emoji in committed Python/SQL** unless user explicitly asks. Templates DO use emoji freely.
+- **Co-Author tag**: every commit ends with `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` (or whichever model is active).
+- **Sector names**: exact case-sensitive matches with `SECTORS` constant in `app/lead_classifier.py`. Don't lowercase or rename.
+
+---
+
+## Recent session highlights (2026-05-22 → 2026-06-02)
+
+- **Strict KVK matching** — removed 1,932 false klants (was 2,059 → now 127 true klants)
+- **Search-attempts tracking** — KVK rows now show 🆕/1×/2×/🏪 badges, agent prioritizes never-searched first
+- **Offline-only label** — businesses with zero web presence (currently 6 records)
+- **Full English UI** — entire `/kvk` page + nav translated from Dutch
+- **Hands-free agent** — no more prompts, CAPTCHAs auto-skip
+- **One-click verify/reject email** — ✓/✗ buttons in KVK rows
+- **always-on agent installer** — launchd plist auto-starts on login
+- **Lead sector classifier** — 11-sector keyword matcher, multi-language, 10k rows/sec
+- **Classifier daemon** — runs every 60s on the FB leads pool
+- **Webform endpoint** — `POST /api/leads/webform`, CORS-open, classifies inline
+- **/leads sector chips + filter** — clickable counts per sector
+- **Migration 0012** — main_sector + classifier_version on facebook_leads
+- **Customer+Lead combined exports** — combined CSVs (Bike FR+DE, SteelWork NL+DE) with `source` column
+
+## How to start a new chat with this context
+
+1. Open Claude Code (`claude` command) in this directory:
+   ```bash
+   cd "/Users/kevinolla/AI Project/B2B Prospect tool"
+   claude
+   ```
+2. This `CLAUDE.md` is auto-loaded — Claude sees the full project state immediately.
+3. Tell Claude what you want next; no need to re-explain history.
