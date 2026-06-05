@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if flash %}
+<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>
+{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h2 style="margin:0;">Email Campaigns</h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">Send to KVK companies, warm leads, cold leads &amp; customers — all from your CRM.</p>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <a href="/emails/templates" class="btn" style="padding:9px 16px;background:#f0ece2;border-radius:8px;text-decoration:none;color:#1f2933;">Manage Templates</a>
+      <a href="/emails/campaigns/new" style="padding:9px 16px;background:#101010;color:#e4c977;border-radius:8px;text-decoration:none;font-weight:600;">+ New Campaign</a>
+    </div>
+  </div>
+</section>
+
+<!-- Gmail connection -->
+<section class="card">
+  <h3 style="margin-top:0;">Gmail connection</h3>
+  {% if gmail.connected %}
+    <p style="margin:0 0 8px 0;">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22c55e;margin-right:6px;"></span>
+      Connected as <strong>{{ gmail.account_email }}</strong>
+    </p>
+    {% if gmail.send_as_aliases %}
+    <p style="margin:0 0 8px 0;color:#6b7280;font-size:13px;">Verified send-as aliases:
+      {% for a in gmail.send_as_aliases %}<code>{{ a }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    </p>
+    {% endif %}
+    <p style="margin:0 0 12px 0;color:#6b7280;font-size:13px;">Sending from: <code>{{ gmail.default_send_as }}</code> · {{ sent_today }}/{{ daily_limit }} sent today</p>
+    {% if gmail.default_send_as and gmail.send_as_aliases and gmail.default_send_as not in gmail.send_as_aliases %}
+    <p style="margin:0 0 12px 0;color:#b45309;font-size:13px;">⚠️ <code>{{ gmail.default_send_as }}</code> is not a verified send-as alias on this account. Add it under Gmail → Settings → Accounts → "Send mail as", or sending will fail.</p>
+    {% endif %}
+    <form method="post" action="/emails/gmail/disconnect" onsubmit="return confirm('Disconnect Gmail?');">
+      <button type="submit" style="padding:7px 14px;background:#f0ece2;border:none;border-radius:8px;cursor:pointer;">Disconnect</button>
+    </form>
+  {% else %}
+    <p style="margin:0 0 8px 0;">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;margin-right:6px;"></span>
+      Not connected
+    </p>
+    {% if gmail.configured %}
+    <p style="margin:0 0 12px 0;color:#6b7280;font-size:13px;">Authorize the Gmail account that owns the <code>{{ gmail.default_send_as }}</code> send-as alias.</p>
+    <a href="/emails/gmail/connect" style="padding:9px 16px;background:#1a73e8;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">Connect Gmail</a>
+    {% else %}
+    <p style="margin:0 0 8px 0;color:#b45309;">Gmail OAuth client not configured. Set <code>GMAIL_CLIENT_ID</code> and <code>GMAIL_CLIENT_SECRET</code> in Railway, then add this redirect URI in Google Cloud Console:</p>
+    <p style="margin:0;"><code>{{ gmail.redirect_uri }}</code></p>
+    {% endif %}
+    {% if gmail.last_error %}<p style="margin:10px 0 0 0;color:#ef4444;font-size:12px;">Last error: {{ gmail.last_error }}</p>{% endif %}
+  {% endif %}
+</section>
+
+<!-- Campaigns -->
+<section class="card table-card">
+  <h2>Campaigns</h2>
+  {% if campaigns %}
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Audience</th><th>Temp</th><th>Status</th><th>Recipients</th><th>Sent</th><th>Opens</th><th>Clicks</th><th>Unsub</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for c in campaigns %}
+      <tr>
+        <td><a href="/emails/campaigns/{{ c.id }}" style="font-weight:600;color:#1f2933;">{{ c.name }}</a></td>
+        <td>{{ c.audience_type }}</td>
+        <td>{{ c.lead_temperature }}</td>
+        <td><span style="padding:2px 8px;border-radius:10px;font-size:12px;background:{% if c.status=='sent' %}#dcfce7{% elif c.status=='sending' %}#dbeafe{% elif c.status=='paused' %}#fef3c7{% elif c.status=='scheduled' %}#ede9fe{% else %}#f0ece2{% endif %};">{{ c.status }}</span></td>
+        <td>{{ c.total_recipients }}</td>
+        <td>{{ c.sent_count }}</td>
+        <td>{{ c.open_count }}{% if c.sent_count %} ({{ (100*c.open_count/c.sent_count)|round(0,'floor')|int }}%){% endif %}</td>
+        <td>{{ c.click_count }}{% if c.sent_count %} ({{ (100*c.click_count/c.sent_count)|round(0,'floor')|int }}%){% endif %}</td>
+        <td>{{ c.unsubscribe_count }}</td>
+        <td><a href="/emails/campaigns/{{ c.id }}">Open →</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#6b7280;">No campaigns yet. Click <a href="/emails/campaigns/new">+ New Campaign</a> to start.</p>
+  {% endif %}
+</section>
+
+<!-- Templates summary -->
+<section class="card table-card">
+  <h2>Templates <a href="/emails/templates" style="font-size:13px;font-weight:400;">manage →</a></h2>
+  <table>
+    <thead><tr><th>Name</th><th>Category</th><th>Subject</th></tr></thead>
+    <tbody>
+      {% for t in templates_list %}
+      <tr>
+        <td>{{ t.name }}{% if t.is_starter %} <span style="font-size:11px;color:#946f16;">starter</span>{% endif %}</td>
+        <td>{{ t.category }}</td>
+        <td style="color:#6b7280;">{{ t.subject }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% endblock %}

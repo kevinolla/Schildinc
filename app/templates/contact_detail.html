@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if flash %}
+<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>
+{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h2 style="margin:0;">{{ contact.display_name }}
+        {% if contact.is_customer %}<span style="font-size:13px;color:#16a34a;">● customer</span>{% endif %}
+        {% if contact.do_not_contact %}<span style="font-size:13px;color:#ef4444;">do-not-contact</span>{% endif %}
+      </h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">
+        {{ contact.company_name }}{% if contact.contact_person %} · {{ contact.contact_person }}{% endif %}
+        {% if contact.city %} · {{ contact.city }}{% endif %}{% if contact.country_code %}, {{ contact.country_code }}{% endif %}
+        {% if contact.sector %} · {{ contact.sector }}{% endif %}{% if contact.tier %} · {{ contact.tier }}{% endif %}
+      </p>
+      <p style="margin:6px 0 0 0;color:#6b7280;font-size:13px;">Sources: {{ contact.source_summary }}{% if contact.lifetime_value %} · Lifetime value €{{ '%.2f'|format(contact.lifetime_value) }}{% endif %}</p>
+    </div>
+    <a href="/contacts" style="text-decoration:none;color:#6b7280;">← All contacts</a>
+  </div>
+</section>
+
+<div style="display:grid;grid-template-columns:1fr 2fr;gap:16px;align-items:start;">
+
+  <!-- Left: channels + actions + note -->
+  <div>
+    <section class="card">
+      <h3 style="margin-top:0;">Channels</h3>
+      {% if channels %}
+      <table style="width:100%;">
+        <tbody>
+          {% for ch in channels %}
+          <tr>
+            <td style="color:#6b7280;font-size:12px;text-transform:uppercase;padding:4px 8px 4px 0;">{{ ch.channel_type }}</td>
+            <td style="padding:4px 0;">
+              {% if ch.channel_type == 'email' %}<a href="mailto:{{ ch.value }}">{{ ch.value }}</a>
+              {% elif ch.channel_type in ['phone','whatsapp'] %}{{ ch.value }}
+              {% elif ch.value.startswith('http') %}<a href="{{ ch.value }}" target="_blank">{{ ch.value }}</a>
+              {% else %}{{ ch.value }}{% endif %}
+              {% if ch.is_verified %}<span style="color:#16a34a;font-size:11px;">✓</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p style="color:#6b7280;">No channels on file.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h3 style="margin-top:0;">Quick actions</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        {% if contact.primary_email %}
+        <a href="/emails/campaigns/new?audience=contact" style="padding:8px 12px;background:#f0ece2;border-radius:8px;text-decoration:none;color:#1f2933;">✉️ Email (via campaign)</a>
+        {% endif %}
+        {% if wa_status and wa_status.configured and contact.primary_phone %}
+          {% if wa_templates %}
+          <form method="post" action="/contacts/{{ contact.id }}/whatsapp" style="border:1px solid #cdeccd;border-radius:8px;padding:8px;">
+            <div style="font-size:12px;color:#1f7a3d;margin-bottom:4px;">💬 Start WhatsApp (template)</div>
+            <select name="template_id" required style="width:100%;margin-bottom:4px;font-size:13px;">
+              <option value="">Pick approved template…</option>
+              {% for t in wa_templates %}<option value="{{ t.id }}">{{ t.name }} ({{ t.language }})</option>{% endfor %}
+            </select>
+            <input name="params" placeholder="params | separated" style="width:100%;margin-bottom:4px;font-size:13px;">
+            <button type="submit" style="width:100%;padding:7px;background:#25d366;color:#fff;border:none;border-radius:8px;cursor:pointer;">Send WhatsApp</button>
+          </form>
+          {% else %}
+          <span style="color:#9aa0a6;font-size:12px;">WhatsApp configured — add an approved template in Inbox → Settings to start a chat.</span>
+          {% endif %}
+        {% elif wa_status and wa_status.configured %}
+        <span style="color:#9aa0a6;font-size:12px;">No phone number on file for WhatsApp.</span>
+        {% else %}
+        <span style="color:#9aa0a6;font-size:12px;">Call button activates in Phase 4 (Vonage).</span>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 style="margin-top:0;">Add note</h3>
+      <form method="post" action="/contacts/{{ contact.id }}/note">
+        <textarea name="note" rows="3" placeholder="Internal note…" style="width:100%;" required></textarea>
+        <button type="submit" style="margin-top:8px;padding:8px 14px;background:#101010;color:#e4c977;border:none;border-radius:8px;cursor:pointer;">Save note</button>
+      </form>
+    </section>
+  </div>
+
+  <!-- Right: timeline -->
+  <section class="card">
+    <h3 style="margin-top:0;">Activity timeline</h3>
+    {% if timeline %}
+    <div style="display:flex;flex-direction:column;gap:0;">
+      {% for e in timeline %}
+      <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #f0ece2;">
+        <div style="width:90px;flex-shrink:0;color:#9aa0a6;font-size:12px;">
+          {{ e.when.strftime('%Y-%m-%d') if e.when else '' }}<br>{{ e.when.strftime('%H:%M') if e.when else '' }}
+        </div>
+        <div style="flex-shrink:0;width:24px;text-align:center;">
+          {% if e.channel == 'email' %}✉️{% elif e.channel == 'whatsapp' %}💬{% elif e.channel == 'call' %}📞{% elif e.type == 'note' %}📝{% else %}•{% endif %}
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:14px;">{{ e.title }}
+            {% if e.direction == 'in' %}<span style="font-size:11px;color:#1a73e8;">inbound</span>
+            {% elif e.direction == 'out' %}<span style="font-size:11px;color:#16a34a;">outbound</span>{% endif %}
+          </div>
+          {% if e.body %}<div style="color:#4b5563;font-size:13px;margin-top:2px;white-space:pre-wrap;">{{ e.body }}</div>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:#6b7280;">No activity yet. Emails, WhatsApp messages, calls and notes will appear here.</p>
+    {% endif %}
+  </section>
+
+</div>
+
+{% endblock %}

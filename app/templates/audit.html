@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2 style="margin:0;">Audit log</h2>
+  <p style="margin:4px 0 0 0;color:#6b7280;">Most recent 300 sensitive actions (admin only).</p>
+</section>
+<section class="card table-card">
+  <table>
+    <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td style="white-space:nowrap;color:#6b7280;font-size:12px;">{{ e.created_at.strftime('%Y-%m-%d %H:%M') if e.created_at }}</td>
+        <td>{{ e.actor }}</td>
+        <td><code>{{ e.action }}</code></td>
+        <td style="color:#6b7280;">{{ e.target_type }}{% if e.target_id %} #{{ e.target_id }}{% endif %}</td>
+        <td style="color:#6b7280;">{{ e.detail }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" style="color:#9aa0a6;">No audit entries yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

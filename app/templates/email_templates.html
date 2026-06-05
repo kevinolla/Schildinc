@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if flash %}
+<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>
+{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Email Templates</h2>
+    <a href="/emails" style="text-decoration:none;color:#6b7280;">← Back to Campaigns</a>
+  </div>
+</section>
+
+<!-- Editor -->
+<section class="card">
+  <h3 style="margin-top:0;">{% if editing %}Edit: {{ editing.name }}{% else %}Create new template{% endif %}</h3>
+  <p style="color:#6b7280;font-size:13px;margin-top:0;">
+    Merge fields: <code>{{ '{{company_name}}' }}</code> <code>{{ '{{contact_name}}' }}</code>
+    <code>{{ '{{city}}' }}</code> <code>{{ '{{country}}' }}</code> <code>{{ '{{website}}' }}</code>
+    <code>{{ '{{sender_name}}' }}</code> <code>{{ '{{reply_to}}' }}</code> <code>{{ '{{unsubscribe_url}}' }}</code>.
+    The open-tracking pixel &amp; click tracking are added automatically — don't add them yourself.
+  </p>
+  <form method="post" action="/emails/templates/save">
+    <input type="hidden" name="template_id" value="{{ editing.id if editing else 0 }}">
+    <div style="display:grid;grid-template-columns:1fr 200px;gap:12px;">
+      <input name="name" placeholder="Template name" required value="{{ editing.name if editing else '' }}">
+      <select name="category">
+        {% for cat in categories %}
+        <option value="{{ cat }}" {% if editing and editing.category==cat %}selected{% endif %}>{{ cat }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <input name="description" placeholder="Short description" style="width:100%;margin-top:10px;" value="{{ editing.description if editing else '' }}">
+    <input name="subject" placeholder="Subject line (merge fields allowed)" style="width:100%;margin-top:10px;" value="{{ editing.subject if editing else '' }}">
+    <label style="display:block;margin-top:12px;font-size:13px;color:#6b7280;">HTML body</label>
+    <textarea name="body_html" rows="14" style="width:100%;font-family:monospace;font-size:12px;">{{ editing.body_html if editing else '' }}</textarea>
+    <label style="display:block;margin-top:12px;font-size:13px;color:#6b7280;">Plain-text body (fallback)</label>
+    <textarea name="body_text" rows="8" style="width:100%;font-family:monospace;font-size:12px;">{{ editing.body_text if editing else '' }}</textarea>
+    <div style="margin-top:12px;">
+      <button type="submit" style="padding:9px 18px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Save template</button>
+      {% if editing %}<a href="/emails/templates" style="margin-left:10px;color:#6b7280;">Cancel</a>{% endif %}
+    </div>
+  </form>
+</section>
+
+<!-- List -->
+<section class="card table-card">
+  <h2>All templates</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Category</th><th>Subject</th><th>Active</th><th></th></tr></thead>
+    <tbody>
+      {% for t in templates_list %}
+      <tr>
+        <td>{{ t.name }}{% if t.is_starter %} <span style="font-size:11px;color:#946f16;">starter</span>{% endif %}</td>
+        <td>{{ t.category }}</td>
+        <td style="color:#6b7280;">{{ t.subject }}</td>
+        <td>{{ '✓' if t.is_active else '—' }}</td>
+        <td style="white-space:nowrap;">
+          <a href="/emails/templates?edit={{ t.id }}">Edit</a>
+          <a href="/emails/campaigns/new?template_id={{ t.id }}" style="margin-left:8px;">Use →</a>
+          <form method="post" action="/emails/templates/{{ t.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete / hide this template?');">
+            <button type="submit" style="margin-left:8px;background:none;border:none;color:#ef4444;cursor:pointer;">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% endblock %}

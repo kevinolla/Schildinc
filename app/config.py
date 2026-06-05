@@ -86,5 +86,50 @@ class Settings:
     fb_leads_classifier_enabled: bool = _as_bool(os.getenv("FB_LEADS_CLASSIFIER_ENABLED"), True)
     fb_leads_classifier_interval: int = int(os.getenv("FB_LEADS_CLASSIFIER_INTERVAL", "60"))
 
+    # ── Gmail email engine ─────────────────────────────────────────────────
+    # OAuth2 "Web application" client from Google Cloud Console. The
+    # redirect URI registered there MUST equal {APP_BASE_URL}/emails/gmail/callback.
+    gmail_client_id: str = os.getenv("GMAIL_CLIENT_ID", "")
+    gmail_client_secret: str = os.getenv("GMAIL_CLIENT_SECRET", "")
+    # The verified "Send mail as" alias to send FROM (e.g. sales@schildinc.com).
+    # Must be configured under Gmail → Settings → Accounts → "Send mail as"
+    # for the authorized account. Falls back to the authorized account itself.
+    gmail_send_as: str = os.getenv("GMAIL_SEND_AS", "sales@schildinc.com")
+    gmail_sender_name: str = os.getenv("GMAIL_SENDER_NAME", "Schild Inc")
+    # Daily send ceiling. Gmail's hard cap is ~500/day (consumer) / 2000
+    # (Workspace), but a NEW sending identity should ramp up gradually to
+    # protect deliverability. Start at 80/day and raise weekly once your
+    # open rate looks healthy (e.g. 80 -> 150 -> 250 -> 400).
+    gmail_daily_limit: int = int(os.getenv("GMAIL_DAILY_LIMIT", "80"))
+    # Seconds between sends inside a campaign (throttle to look human + avoid
+    # rate spikes). 8s ≈ 450/hour, well within Gmail's per-minute limits.
+    gmail_send_spacing_seconds: float = float(os.getenv("GMAIL_SEND_SPACING_SECONDS", "8"))
+    # Background campaign sender daemon — drains scheduled/sending campaigns.
+    email_sender_enabled: bool = _as_bool(os.getenv("EMAIL_SENDER_ENABLED"), True)
+    email_sender_interval: int = int(os.getenv("EMAIL_SENDER_INTERVAL", "60"))
+    # Two-way email: poll the connected Gmail inbox for replies and thread them
+    # into the shared inbox. Requires the gmail.readonly scope (reconnect Gmail).
+    gmail_inbound_enabled: bool = _as_bool(os.getenv("GMAIL_INBOUND_ENABLED"), True)
+    gmail_inbound_interval: int = int(os.getenv("GMAIL_INBOUND_INTERVAL", "120"))
+    # On first poll, how many days back to look for replies.
+    gmail_inbound_lookback_days: int = int(os.getenv("GMAIL_INBOUND_LOOKBACK_DAYS", "3"))
+
+    # ── WhatsApp Business Cloud API (direct Meta) ──────────────────────────
+    # Set these from Meta → WhatsApp → API setup. The webhook callback URL to
+    # register in Meta is {APP_BASE_URL}/webhooks/whatsapp with the verify token.
+    whatsapp_phone_number_id: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+    whatsapp_business_account_id: str = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
+    whatsapp_access_token: str = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
+    whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+    whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "")
+    whatsapp_api_version: str = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+    whatsapp_default_lang: str = os.getenv("WHATSAPP_DEFAULT_LANG", "en")
+
+    # ── Agent sessions (Phase 6 roles) ─────────────────────────────────────
+    # Secret used to sign the agent session cookie. Falls back to the
+    # unsubscribe secret so it works out-of-the-box, but set a dedicated one.
+    session_secret: str = os.getenv("SESSION_SECRET", "") or os.getenv("UNSUBSCRIBE_SECRET", "change-me-too")
+    session_ttl_hours: int = int(os.getenv("SESSION_TTL_HOURS", "168"))  # 7 days
+
 
 settings = Settings()
