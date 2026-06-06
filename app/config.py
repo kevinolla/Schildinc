@@ -96,6 +96,14 @@ class Settings:
     # for the authorized account. Falls back to the authorized account itself.
     gmail_send_as: str = os.getenv("GMAIL_SEND_AS", "sales@schildinc.com")
     gmail_sender_name: str = os.getenv("GMAIL_SENDER_NAME", "Schild Inc")
+    # Signature + legal footer (CAN-SPAM / GDPR require a real identity +
+    # physical address + opt-out on commercial mail). Protects deliverability
+    # and brand reputation. Override in Railway with your real details.
+    sender_title: str = os.getenv("SENDER_TITLE", "Sales Team")
+    company_legal_name: str = os.getenv("COMPANY_LEGAL_NAME", "Schild Inc")
+    company_address: str = os.getenv("COMPANY_ADDRESS", "Schild Inc, Netherlands")
+    company_phone: str = os.getenv("COMPANY_PHONE", "")
+    company_website: str = os.getenv("COMPANY_WEBSITE", "https://schildinc.com")
     # Daily send ceiling. Gmail's hard cap is ~500/day (consumer) / 2000
     # (Workspace), but a NEW sending identity should ramp up gradually to
     # protect deliverability. Start at 80/day and raise weekly once your

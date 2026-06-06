@@ -116,6 +116,21 @@ def render_for_recipient(
     values.setdefault("contact_name", recipient.contact_name)
     values.setdefault("sender_name", campaign.sender_name or settings.gmail_sender_name)
     values.setdefault("reply_to", campaign.reply_to or settings.reply_to_email)
+
+    # Owner personalization with a graceful fallback so a cold email never
+    # reads "Hi ," — uses owner first name → company name → "there".
+    contact_name = (values.get("contact_name") or "").strip()
+    first_name = contact_name.split()[0] if contact_name else ""
+    values["first_name"] = first_name
+    values["greeting_name"] = first_name or (values.get("company_name") or "").strip() or "there"
+
+    # Signature + legal footer (brand-safe, compliant cold outreach).
+    values.setdefault("sender_title", settings.sender_title)
+    values.setdefault("company_legal_name", settings.company_legal_name)
+    values.setdefault("company_address", settings.company_address)
+    values.setdefault("company_phone", settings.company_phone)
+    values.setdefault("company_website", settings.company_website)
+
     values["unsubscribe_url"] = unsubscribe_url_for(recipient.tracking_token)
 
     subject = render_merge(campaign.subject, values, escape=False)
@@ -131,7 +146,8 @@ def render_for_recipient(
 def _kvk_merge(company: KvkCompany) -> dict[str, str]:
     return {
         "company_name": company.company_name or "",
-        "contact_name": "",
+        # Owner name (from the enrichment agent) drives the personalized greeting.
+        "contact_name": company.owner_name or "",
         "city": company.primary_city or "",
         "country": company.country_code or "",
         "website": company.website or "",

@@ -2565,6 +2565,90 @@ def kvk_agent_result(
     })
 
 
+# ── Owner / decision-maker enrichment agent (Google-snippet) ────────────────
+
+
+@app.get("/api/enrich/owner/pending")
+def owner_enrich_pending(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    limit: int = 25,
+    max_attempts: int = 2,
+) -> JSONResponse:
+    """Records needing an owner name. Prioritizes never-searched first.
+
+    Only hands out records that aren't already clients and still need a name
+    (owner_status='pending'), capped by attempts so we don't loop forever.
+    """
+    limit = max(1, min(100, limit))
+    rows = db.scalars(
+        select(KvkCompany)
+        .where(KvkCompany.already_client_flag.is_(False))
+        .where(KvkCompany.owner_status == "pending")
+        .where(KvkCompany.owner_search_attempts < max_attempts)
+        .order_by(KvkCompany.owner_search_attempts.asc(), KvkCompany.id.asc())
+        .limit(limit)
+    ).all()
+    return JSONResponse([
+        {
+            "id": r.id,
+            "company_name": r.company_name,
+            "city": r.primary_city or "",
+            "country": r.country_code or "",
+            "website": r.website or "",
+            "instagram_url": r.instagram_url or "",
+            "linkedin_url": r.linkedin_url or "",
+            "owner_search_attempts": r.owner_search_attempts,
+        }
+        for r in rows
+    ])
+
+
+@app.post("/api/enrich/owner/result")
+def owner_enrich_result(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    company_id: int = Form(...),
+    owner_name: str = Form(""),
+    owner_role: str = Form(""),
+    instagram_url: str = Form(""),
+    linkedin_url: str = Form(""),
+    source: str = Form(""),
+) -> JSONResponse:
+    """Save an owner name found from PUBLIC search snippets. Empty owner_name
+    marks 'checked, nothing found' so the record isn't handed back forever.
+    Propagates the name to the linked Contact so campaigns personalize.
+    """
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+
+    company.owner_search_attempts = (company.owner_search_attempts or 0) + 1
+
+    name = " ".join((owner_name or "").split()).strip()
+    if name:
+        company.owner_name = name
+        company.owner_role = (owner_role or "").strip()
+        company.owner_source = (source or "")[:500]
+        company.owner_status = "found"
+        if instagram_url and not (company.instagram_url or "").strip():
+            company.instagram_url = instagram_url.strip()
+        if linkedin_url and not (company.linkedin_url or "").strip():
+            company.linkedin_url = linkedin_url.strip()
+        # Propagate to the unified Contact (so the inbox + campaigns greet by name).
+        contact = db.scalar(select(Contact).where(Contact.kvk_company_id == company.id))
+        if contact and not (contact.contact_person or "").strip():
+            contact.contact_person = name
+    elif company.owner_search_attempts >= 2:
+        company.owner_status = "none"
+
+    db.commit()
+    return JSONResponse({
+        "ok": True, "id": company.id, "owner_name": company.owner_name,
+        "owner_role": company.owner_role, "owner_status": company.owner_status,
+    })
+
+
 # (Old kvk_export_csv route moved up before /kvk/{company_id} —
 # leaving it duplicated here was the source of the int_parsing error.)
 

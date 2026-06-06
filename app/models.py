@@ -319,6 +319,14 @@ class KvkCompany(Base):
     instagram_url: Mapped[str] = mapped_column(Text, default="")
     linkedin_url: Mapped[str] = mapped_column(Text, default="")
 
+    # Owner / decision-maker enrichment (Google-snippet agent) — used to
+    # personalize cold outreach ("Hi {{greeting_name}}").
+    owner_name: Mapped[str] = mapped_column(Text, default="", index=True)
+    owner_role: Mapped[str] = mapped_column(Text, default="")
+    owner_source: Mapped[str] = mapped_column(Text, default="")  # url the name came from
+    owner_status: Mapped[str] = mapped_column(Text, default="pending", index=True)  # pending|found|none
+    owner_search_attempts: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
     enrichment_status: Mapped[str] = mapped_column(Text, default="pending", index=True)
     google_maps_query: Mapped[str] = mapped_column(Text, default="")
     contact_search_query: Mapped[str] = mapped_column(Text, default="")

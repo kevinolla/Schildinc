@@ -105,6 +105,7 @@ def _kvk_to_record(k: KvkCompany) -> SourceRecord:
     return SourceRecord(
         source="kvk",
         company_name=k.company_name or "",
+        contact_person=k.owner_name or "",
         city=k.primary_city or "",
         country_code=k.country_code or "",
         tier=k.bike_shop_tier or "",

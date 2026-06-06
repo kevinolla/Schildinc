@@ -16,9 +16,11 @@
 <section class="card">
   <h3 style="margin-top:0;">{% if editing %}Edit: {{ editing.name }}{% else %}Create new template{% endif %}</h3>
   <p style="color:#6b7280;font-size:13px;margin-top:0;">
-    Merge fields: <code>{{ '{{company_name}}' }}</code> <code>{{ '{{contact_name}}' }}</code>
+    Merge fields: <code>{{ '{{greeting_name}}' }}</code> (owner first name → company → "there"),
+    <code>{{ '{{first_name}}' }}</code> <code>{{ '{{company_name}}' }}</code> <code>{{ '{{contact_name}}' }}</code>
     <code>{{ '{{city}}' }}</code> <code>{{ '{{country}}' }}</code> <code>{{ '{{website}}' }}</code>
-    <code>{{ '{{sender_name}}' }}</code> <code>{{ '{{reply_to}}' }}</code> <code>{{ '{{unsubscribe_url}}' }}</code>.
+    <code>{{ '{{sender_name}}' }}</code> <code>{{ '{{sender_title}}' }}</code> <code>{{ '{{reply_to}}' }}</code>
+    <code>{{ '{{company_address}}' }}</code> <code>{{ '{{company_website}}' }}</code> <code>{{ '{{unsubscribe_url}}' }}</code>.
     The open-tracking pixel &amp; click tracking are added automatically — don't add them yourself.
   </p>
   <form method="post" action="/emails/templates/save">
