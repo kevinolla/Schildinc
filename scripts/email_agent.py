@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -43,6 +44,10 @@ from urllib.request import Request, urlopen
 API_BASE = "https://schild-prospect-engine-production.up.railway.app"
 USERNAME = "schild"
 PASSWORD = "Schildinc#01"
+
+# Persistent browser profile — the search engine's consent cookie sticks here,
+# so Google challenges us far less often across runs.
+EMAIL_PROFILE_DIR = os.path.expanduser("~/.cache/schild-email-agent")
 
 # ── Email regex + filters (mirror server logic) ─────────────────────────────
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.I)
@@ -428,13 +433,35 @@ def _empty_result() -> dict:
     }
 
 
+def _try_duckduckgo(page, query: str) -> str:
+    """Fetch DuckDuckGo's HTML results page (rarely challenges a real browser).
+    Returns extracted text, or "" on any problem. Never raises."""
+    try:
+        page.goto("https://html.duckduckgo.com/html/?q=" + urlencode({"q": query})[2:],
+                  wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(500)
+        return _collect_text_from_page(page)
+    except Exception:
+        return ""
+
+
 def _do_google_query(page, query: str) -> tuple[str, str]:
     """
-    Navigate to Google with `query`, wait for results to render
-    (including scroll-triggered AI Overview / Knowledge Panel),
-    return (full_extracted_text, status). status is "" on success,
+    Search for `query`. Tries DuckDuckGo first (to dodge Google's CAPTCHAs) and
+    only falls through to Google when DDG didn't surface a usable contact.
+    Returns (full_extracted_text, status). status is "" on success,
     "captcha" if Google challenged us, "error" on exceptions.
     """
+    # DuckDuckGo first — only short-circuit Google when DDG actually yields a
+    # usable email or social link, so the hit-rate never regresses.
+    try:
+        ddg = _try_duckduckgo(page, query)
+        if ddg and (filter_emails(ddg) or "instagram.com/" in ddg
+                    or "linkedin.com/" in ddg or "wa.me/" in ddg):
+            return ddg, ""
+    except Exception:
+        pass
+
     url = "https://www.google.com/search?q=" + urlencode({"q": query})[2:]
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=20000)
@@ -610,17 +637,18 @@ def main() -> int:
     miss_count = 0
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
+        os.makedirs(EMAIL_PROFILE_DIR, exist_ok=True)
+        # Persistent profile keeps the consent cookie => far fewer CAPTCHAs.
+        ctx = pw.chromium.launch_persistent_context(
+            EMAIL_PROFILE_DIR,
             headless=args.headless,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        ctx = browser.new_context(
+            locale="nl-NL",
             user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
                         "Chrome/124.0.0.0 Safari/537.36"),
-            locale="nl-NL",
+            args=["--disable-blink-features=AutomationControlled"],
         )
-        page = ctx.new_page()
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
         try:
             while True:
@@ -744,7 +772,7 @@ def main() -> int:
         except KeyboardInterrupt:
             print(f"\n\n[interrupted] Processed {processed} records, saved {found_count} emails.")
         finally:
-            browser.close()
+            ctx.close()
 
     print(f"\n=== Done ===")
     print(f"  Processed: {processed}")
