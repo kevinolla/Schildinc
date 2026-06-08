@@ -132,6 +132,30 @@ def get_or_create_whatsapp_conversation(
     return conv
 
 
+def get_or_create_instagram_conversation(
+    session: Session, *, contact: Contact | None, igsid: str,
+) -> Conversation:
+    """Find an existing Instagram conversation by IGSID, else create one."""
+    conv = session.scalar(
+        select(Conversation).where(
+            Conversation.channel == "instagram",
+            Conversation.external_thread_id == igsid,
+        )
+    )
+    if conv is None:
+        conv = Conversation(
+            contact_id=contact.id if contact else None,
+            channel="instagram",
+            subject="Instagram",
+            status="open",
+            external_thread_id=igsid,
+            created_at=datetime.utcnow(),
+        )
+        session.add(conv)
+        session.flush()
+    return conv
+
+
 def _touch(conv: Conversation, *, preview: str, direction: str, when: datetime, unread: bool) -> None:
     conv.last_message_at = when
     conv.last_message_preview = (preview or "")[:200]
@@ -163,8 +187,9 @@ def add_inbound_message(
         conv.status = "open"  # reopen on new customer reply
     _touch(conv, preview=body_text or subject, direction="in", when=when, unread=True)
     if conv.contact_id:
-        act_type = "wa_in" if channel == "whatsapp" else "email_reply"
-        label = "WhatsApp received" if channel == "whatsapp" else f"Email reply: {subject}"
+        act_type = {"whatsapp": "wa_in", "instagram": "ig_in"}.get(channel, "email_reply")
+        label = {"whatsapp": "WhatsApp received", "instagram": "Instagram DM received"}.get(
+            channel, f"Email reply: {subject}")
         contacts_module.log_activity(
             session, conv.contact_id, act_type, channel=channel, direction="in",
             title=label[:200], body=(body_text or "")[:1000],
@@ -195,8 +220,9 @@ def add_outbound_message(
         conv.status = "pending"  # waiting on customer
     _touch(conv, preview=body_text or subject, direction="out", when=when, unread=False)
     if conv.contact_id and status == "sent":
-        act_type = "wa_out" if channel == "whatsapp" else "email_sent"
-        label = "WhatsApp sent" if channel == "whatsapp" else f"Email reply sent: {subject}"
+        act_type = {"whatsapp": "wa_out", "instagram": "ig_out"}.get(channel, "email_sent")
+        label = {"whatsapp": "WhatsApp sent", "instagram": "Instagram DM sent"}.get(
+            channel, f"Email reply sent: {subject}")
         contacts_module.log_activity(
             session, conv.contact_id, act_type, channel=channel, direction="out",
             title=label[:200], body=(body_text or "")[:1000],

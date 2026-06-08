@@ -41,7 +41,7 @@
     <a href="/inbox?conv={{ c.id }}&status={{ status }}&scope={{ scope }}" style="display:block;padding:12px;border-bottom:1px solid #f5f2ea;text-decoration:none;color:#1f2933;{% if selected and selected.id==c.id %}background:#f8f4e6;{% endif %}">
       <div style="display:flex;justify-content:space-between;">
         <strong style="font-size:14px;{% if c.unread %}font-weight:700;{% else %}font-weight:500;{% endif %}">
-          {% if c.channel=='email' %}✉️{% elif c.channel=='whatsapp' %}💬{% else %}•{% endif %}
+          {% if c.channel=='email' %}✉️{% elif c.channel=='whatsapp' %}💬{% elif c.channel=='instagram' %}📷{% else %}•{% endif %}
           {{ (c.contact.display_name if c.contact else c.contact_email) or 'Unknown' }}
         </strong>
         {% if c.unread %}<span style="width:8px;height:8px;background:#1a73e8;border-radius:50%;"></span>{% endif %}

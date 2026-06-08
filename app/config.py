@@ -133,6 +133,16 @@ class Settings:
     whatsapp_api_version: str = os.getenv("WHATSAPP_API_VERSION", "v21.0")
     whatsapp_default_lang: str = os.getenv("WHATSAPP_DEFAULT_LANG", "en")
 
+    # ── Instagram Messaging (official Meta Graph API) ──────────────────────
+    # Inbound DMs + replies within the 24h window only (Meta does NOT permit
+    # cold/proactive DMs via the API). Needs an IG Business account linked to a
+    # Facebook Page. Webhook callback: {APP_BASE_URL}/webhooks/instagram.
+    instagram_account_id: str = os.getenv("INSTAGRAM_ACCOUNT_ID", "")
+    instagram_access_token: str = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+    instagram_verify_token: str = os.getenv("INSTAGRAM_VERIFY_TOKEN", "")
+    instagram_app_secret: str = os.getenv("INSTAGRAM_APP_SECRET", "")
+    instagram_api_version: str = os.getenv("INSTAGRAM_API_VERSION", "v21.0")
+
     # ── Agent sessions (Phase 6 roles) ─────────────────────────────────────
     # Secret used to sign the agent session cookie. Falls back to the
     # unsubscribe secret so it works out-of-the-box, but set a dedicated one.

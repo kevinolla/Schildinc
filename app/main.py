@@ -50,6 +50,7 @@ from app import inbox as inbox_module
 from app.inbox import seed_inbox_defaults
 from app.gmail_inbound import poll_inbound, start_gmail_inbound_scheduler
 from app import whatsapp as whatsapp_module
+from app import instagram as instagram_module
 from app import auth as auth_module
 from app.auth import require_admin_role
 from app.audit import log_audit
@@ -3225,8 +3226,17 @@ def track_unsubscribe_oneclick(token: str, db: Session = Depends(get_db)) -> Pla
 # ===========================================================================
 
 
-def _contacts_query(search: str, sector: str, country: str, source: str, has_email: str, customers_only: str):
+def _contacts_query(search: str, sector: str, country: str, source: str, has_email: str, customers_only: str, cold: str = ""):
     q = select(Contact)
+    if cold == "1":
+        # Cold-outreach pool: KVK + Google-Maps prospects only — never existing
+        # customers, never form-submitted leads.
+        q = q.where(
+            (Contact.source_summary.like("%kvk%") | Contact.source_summary.like("%prospect%")),
+            Contact.is_customer.is_(False),
+            ~Contact.source_summary.like("%lead%"),
+            ~Contact.source_summary.like("%customer%"),
+        )
     if search:
         like = f"%{search.lower()}%"
         q = q.where(
@@ -3263,9 +3273,10 @@ def contacts_export(
     source: str = "",
     has_email: str = "",
     customers_only: str = "",
+    cold: str = "",
 ) -> StreamingResponse:
     rows = db.scalars(
-        _contacts_query(search, sector, country, source, has_email, customers_only)
+        _contacts_query(search, sector, country, source, has_email, customers_only, cold)
         .order_by(Contact.lifetime_value.desc(), Contact.id.asc())
     ).all()
     output = StringIO()
@@ -3316,11 +3327,12 @@ def contacts_page(
     source: str = "",
     has_email: str = "",
     customers_only: str = "",
+    cold: str = "",
     flash: str = "",
 ) -> HTMLResponse:
     page = max(1, page)
     per_page = max(10, min(200, per_page))
-    base = _contacts_query(search, sector, country, source, has_email, customers_only)
+    base = _contacts_query(search, sector, country, source, has_email, customers_only, cold)
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = min(page, total_pages)
@@ -3342,7 +3354,7 @@ def contacts_page(
             "total_pages": total_pages, "grand_total": grand_total,
             "customer_count": customer_count, "sectors": sectors,
             "search": search, "sector": sector, "country": country, "source": source,
-            "has_email": has_email, "customers_only": customers_only, "flash": flash,
+            "has_email": has_email, "customers_only": customers_only, "cold": cold, "flash": flash,
         },
     )
 
@@ -3363,6 +3375,24 @@ def contact_detail(
     wa_templates = db.scalars(
         select(WhatsappTemplate).where(WhatsappTemplate.is_active.is_(True)).order_by(WhatsappTemplate.name)
     ).all() if wa_status["configured"] else []
+
+    # LinkedIn manual-outreach helper: profile URL + a ready-to-paste opener.
+    linkedin_url = next(
+        (c.value for c in contact.channels if c.channel_type == "linkedin" and c.value), ""
+    )
+    first_name = (contact.contact_person or "").split()[0] if contact.contact_person else "there"
+    company = contact.company_name or contact.display_name
+    linkedin_opener = (
+        f"Hi {first_name}, I came across {company} and wanted to reach out. "
+        f"Schild Inc makes premium metal labels and branded accessories for bike shops "
+        f"— would a couple of free design samples be useful? No pressure either way."
+    )
+    # Cold-outreach eligibility: KVK/Maps prospects only, never customers or form leads.
+    src = contact.source_summary or ""
+    is_cold_eligible = (("kvk" in src or "prospect" in src)
+                        and not contact.is_customer
+                        and "lead" not in src and "customer" not in src)
+
     return templates.TemplateResponse(
         request,
         "contact_detail.html",
@@ -3370,6 +3400,8 @@ def contact_detail(
             "request": request, "app_name": settings.app_name,
             "contact": contact, "channels": contact.channels, "timeline": timeline,
             "wa_status": wa_status, "wa_templates": wa_templates,
+            "linkedin_url": linkedin_url, "linkedin_opener": linkedin_opener,
+            "is_cold_eligible": is_cold_eligible,
             "flash": flash,
         },
     )
@@ -3389,6 +3421,25 @@ def contact_add_note(
         db, contact_id, "note", channel="system", title=f"Note by {user}", body=note,
     )
     return RedirectResponse(f"/contacts/{contact_id}?flash={quote_plus('Note added')}", status_code=303)
+
+
+@app.post("/contacts/{contact_id}/linkedin-log")
+def contact_linkedin_log(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_admin),
+    message: str = Form(""),
+) -> RedirectResponse:
+    """Log a manual LinkedIn outreach to the timeline (you send it by hand on
+    LinkedIn — this is compliant tracking, no automation)."""
+    contact = db.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    contacts_module.log_activity(
+        db, contact_id, "linkedin_out", channel="linkedin", direction="out",
+        title=f"LinkedIn message sent (by {user})", body=message[:1000],
+    )
+    return RedirectResponse(f"/contacts/{contact_id}?flash={quote_plus('Logged LinkedIn outreach')}", status_code=303)
 
 
 # ===========================================================================
@@ -3514,6 +3565,24 @@ def inbox_reply(
             channel="whatsapp",
         )
         msg = "WhatsApp sent" if result.ok else f"Send failed: {result.error[:140]}"
+        return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus(msg)}", status_code=303)
+
+    # Instagram reply (only inside the 24h window; Meta blocks cold/late DMs).
+    if conv.channel == "instagram":
+        igsid = conv.external_thread_id
+        if not igsid:
+            return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('No Instagram recipient on this conversation.')}", status_code=303)
+        if not instagram_module.within_service_window(db, conv):
+            return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Outside the 24h Instagram window — Meta does not allow a reply now.')}", status_code=303)
+        result = instagram_module.send_text(igsid, body_text)
+        inbox_module.add_outbound_message(
+            db, conv, agent=agent, from_addr=settings.instagram_account_id, to_addr=igsid,
+            subject="Instagram", body_text=body_text, body_html="",
+            external_message_id=result.message_id, external_thread_id=igsid,
+            status="sent" if result.ok else "failed", error="" if result.ok else result.error,
+            channel="instagram",
+        )
+        msg = "Instagram reply sent" if result.ok else f"Send failed: {result.error[:140]}"
         return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus(msg)}", status_code=303)
 
     to_email = conv.contact_email or (conv.contact.primary_email if conv.contact else "")
@@ -3764,6 +3833,37 @@ async def whatsapp_webhook_receive(request: Request, db: Session = Depends(get_d
     except Exception as exc:  # noqa: BLE001
         print(f"[whatsapp] webhook processing error: {exc}")
     # Always 200 quickly so Meta doesn't retry/disable the webhook.
+    return PlainTextResponse("ok")
+
+
+@app.get("/webhooks/instagram")
+def instagram_webhook_verify(
+    mode: str = Query("", alias="hub.mode"),
+    token: str = Query("", alias="hub.verify_token"),
+    challenge: str = Query("", alias="hub.challenge"),
+) -> PlainTextResponse:
+    """Meta webhook verification handshake for Instagram (public, no auth)."""
+    result = instagram_module.verify_webhook(mode, token, challenge)
+    if result is None:
+        raise HTTPException(status_code=403, detail="verification failed")
+    return PlainTextResponse(result)
+
+
+@app.post("/webhooks/instagram")
+async def instagram_webhook_receive(request: Request, db: Session = Depends(get_db)) -> PlainTextResponse:
+    """Inbound Instagram DMs (public, signature-verified). Threads into /inbox."""
+    raw = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    if settings.instagram_app_secret and not instagram_module.verify_signature(raw, signature):
+        raise HTTPException(status_code=403, detail="bad signature")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return PlainTextResponse("ok")
+    try:
+        instagram_module.process_webhook(db, payload)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[instagram] webhook processing error: {exc}")
     return PlainTextResponse("ok")
 
 

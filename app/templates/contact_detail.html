@@ -79,6 +79,24 @@
       </div>
     </section>
 
+    {% if linkedin_url %}
+    <section class="card">
+      <h3 style="margin-top:0;">LinkedIn outreach <span style="font-size:11px;color:#0a66c2;">manual</span></h3>
+      {% if not is_cold_eligible %}
+      <p style="font-size:12px;color:#b45309;margin-top:0;">Note: this contact is a customer or form lead — not part of the cold pool. Reach out only if appropriate.</p>
+      {% endif %}
+      <p style="font-size:12px;color:#6b7280;margin-top:0;">Open the profile, paste the opener, send it yourself on LinkedIn (compliant — no automation), then log it.</p>
+      <a href="{{ linkedin_url }}" target="_blank" rel="noopener" style="display:inline-block;padding:7px 12px;background:#0a66c2;color:#fff;border-radius:8px;text-decoration:none;margin-bottom:8px;">Open LinkedIn profile ↗</a>
+      <form method="post" action="/contacts/{{ contact.id }}/linkedin-log">
+        <textarea name="message" rows="4" style="width:100%;font-size:13px;">{{ linkedin_opener }}</textarea>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button type="button" onclick="navigator.clipboard.writeText(this.closest('form').querySelector('textarea').value)" style="padding:7px 12px;background:#f0ece2;border:none;border-radius:8px;cursor:pointer;">Copy</button>
+          <button type="submit" style="padding:7px 12px;background:#101010;color:#e4c977;border:none;border-radius:8px;cursor:pointer;">Mark as messaged</button>
+        </div>
+      </form>
+    </section>
+    {% endif %}
+
     <section class="card">
       <h3 style="margin-top:0;">Add note</h3>
       <form method="post" action="/contacts/{{ contact.id }}/note">

@@ -31,7 +31,13 @@
 {% endif %}
 
 <section class="card">
+  <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;">
+    <a href="/contacts" style="padding:5px 12px;border-radius:14px;text-decoration:none;{% if cold!='1' %}background:#101010;color:#e4c977;{% else %}background:#f0ece2;color:#1f2933;{% endif %}">All contacts</a>
+    <a href="/contacts?cold=1" style="padding:5px 12px;border-radius:14px;text-decoration:none;{% if cold=='1' %}background:#101010;color:#e4c977;{% else %}background:#f0ece2;color:#1f2933;{% endif %}">❄️ Cold outreach pool</a>
+    {% if cold=='1' %}<span style="font-size:12px;color:#6b7280;">KVK + Google-Maps prospects only — customers &amp; form leads excluded.</span>{% endif %}
+  </div>
   <form method="get" action="/contacts" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto auto;gap:10px;align-items:center;">
+    <input type="hidden" name="cold" value="{{ cold }}">
     <input name="search" placeholder="Search name, company, email, phone…" value="{{ search }}">
     <select name="sector">
       <option value="">Any sector</option>
