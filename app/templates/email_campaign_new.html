@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">New Campaign</h2>
+    <a href="/emails" style="text-decoration:none;color:#6b7280;">← Back</a>
+  </div>
+</section>
+
+{% if not gmail.connected %}
+<section class="card" style="background:#fef3c7;border:1px solid #e6d7a8;">
+  Gmail is not connected yet. You can build the campaign now, but <a href="/emails/gmail/connect">connect Gmail</a> before sending.
+</section>
+{% endif %}
+
+<section class="card">
+  <form method="post" action="/emails/campaigns/create">
+    <h3 style="margin-top:0;">1. Basics</h3>
+    <input name="name" placeholder="Campaign name (e.g. NL Bike Cold — June)" required style="width:100%;">
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;">
+      <div>
+        <label style="font-size:13px;color:#6b7280;">Template</label>
+        <select name="template_id" required style="width:100%;">
+          <option value="">— pick a template —</option>
+          {% for t in templates_list %}
+          <option value="{{ t.id }}" {% if preset_template_id and preset_template_id==t.id %}selected{% endif %}>{{ t.category }} · {{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:13px;color:#6b7280;">Lead temperature</label>
+        <select name="lead_temperature" style="width:100%;">
+          <option value="cold">Cold</option>
+          <option value="warm">Warm</option>
+        </select>
+      </div>
+    </div>
+
+    <h3>2. Audience</h3>
+    {% if preset_ids %}
+    <p style="color:#6b7280;font-size:13px;">Pre-selected {{ preset_ids.split(',')|length }} record(s) from your last page.</p>
+    <input type="hidden" name="ids_csv" value="{{ preset_ids }}">
+    {% endif %}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div>
+        <label style="font-size:13px;color:#6b7280;">Source</label>
+        <select name="audience_type" id="audience_type" style="width:100%;" onchange="toggleAud()">
+          <option value="kvk" {% if audience=='kvk' %}selected{% endif %}>KVK companies (prospect pool)</option>
+          <option value="lead" {% if audience=='lead' %}selected{% endif %}>Facebook / web leads</option>
+          <option value="customer" {% if audience=='customer' %}selected{% endif %}>Existing customers</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:13px;color:#6b7280;">Max recipients</label>
+        <input name="limit" type="number" value="500" min="1" max="5000" style="width:100%;">
+      </div>
+    </div>
+
+    <div id="aud_kvk" class="aud-block" style="margin-top:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <label style="font-size:13px;color:#6b7280;">KVK tier (optional)</label>
+          <select name="tier" style="width:100%;">
+            <option value="">Any tier</option>
+            {% for t in tiers %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:13px;color:#6b7280;">Country code (optional)</label>
+          <input name="country" placeholder="NL / DE / FR" style="width:100%;">
+        </div>
+      </div>
+      <p style="color:#6b7280;font-size:12px;margin:6px 0 0 0;">Only KVK records with an email and not already a client are included.</p>
+    </div>
+
+    <div id="aud_lead" class="aud-block" style="margin-top:10px;display:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <label style="font-size:13px;color:#6b7280;">Sector (optional)</label>
+          <select name="sector" style="width:100%;">
+            <option value="">Any sector</option>
+            {% for s in sectors %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:13px;color:#6b7280;">Country (optional)</label>
+          <input name="country" placeholder="NETHERLAND / GERMANY ..." style="width:100%;">
+        </div>
+      </div>
+    </div>
+
+    <h3>3. Sender</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div>
+        <label style="font-size:13px;color:#6b7280;">From alias</label>
+        <input name="sender_alias" value="{{ default_sender_alias }}" style="width:100%;">
+      </div>
+      <div>
+        <label style="font-size:13px;color:#6b7280;">From name</label>
+        <input name="sender_name" value="{{ default_sender_name }}" style="width:100%;">
+      </div>
+      <div>
+        <label style="font-size:13px;color:#6b7280;">Reply-to</label>
+        <input name="reply_to" value="{{ default_reply_to }}" style="width:100%;">
+      </div>
+    </div>
+
+    <div style="margin-top:18px;">
+      <button type="submit" style="padding:11px 22px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Build campaign →</button>
+      <span style="color:#6b7280;font-size:13px;margin-left:10px;">You'll review recipients &amp; send a test before anything goes out.</span>
+    </div>
+  </form>
+</section>
+
+<script>
+function toggleAud() {
+  var v = document.getElementById('audience_type').value;
+  document.getElementById('aud_kvk').style.display  = (v === 'kvk')  ? 'block' : 'none';
+  document.getElementById('aud_lead').style.display = (v === 'lead' || v === 'customer') ? 'block' : 'none';
+}
+toggleAud();
+</script>
+
+{% endblock %}

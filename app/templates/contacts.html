@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if flash %}
+<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>
+{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h2 style="margin:0;">Contacts</h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">
+        Unified 360° audience hub — {{ "{:,}".format(grand_total) }} contacts ·
+        {{ "{:,}".format(customer_count) }} are customers.
+      </p>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <a href="/contacts/export.csv?search={{ search }}&sector={{ sector }}&country={{ country }}&source={{ source }}&has_email={{ has_email }}&customers_only={{ customers_only }}"
+         style="padding:9px 16px;background:#f0ece2;border-radius:8px;text-decoration:none;color:#1f2933;">Export CSV</a>
+      <form method="post" action="/contacts/backfill" onsubmit="return confirm('Rebuild/refresh contacts from customers, KVK, leads & prospects? This is safe to run anytime.');">
+        <button type="submit" style="padding:9px 16px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;cursor:pointer;">⟳ Build / refresh contacts</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+{% if grand_total == 0 %}
+<section class="card" style="background:#eef6ff;border:1px solid #cfe3ff;">
+  No contacts yet. Click <strong>Build / refresh contacts</strong> above to merge your customers, KVK companies, leads and prospects into one unified hub.
+</section>
+{% endif %}
+
+<section class="card">
+  <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;">
+    <a href="/contacts" style="padding:5px 12px;border-radius:14px;text-decoration:none;{% if cold!='1' %}background:#101010;color:#e4c977;{% else %}background:#f0ece2;color:#1f2933;{% endif %}">All contacts</a>
+    <a href="/contacts?cold=1" style="padding:5px 12px;border-radius:14px;text-decoration:none;{% if cold=='1' %}background:#101010;color:#e4c977;{% else %}background:#f0ece2;color:#1f2933;{% endif %}">❄️ Cold outreach pool</a>
+    {% if cold=='1' %}<span style="font-size:12px;color:#6b7280;">KVK + Google-Maps prospects only — customers &amp; form leads excluded.</span>{% endif %}
+  </div>
+  <form method="get" action="/contacts" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto auto;gap:10px;align-items:center;">
+    <input type="hidden" name="cold" value="{{ cold }}">
+    <input name="search" placeholder="Search name, company, email, phone…" value="{{ search }}">
+    <select name="sector">
+      <option value="">Any sector</option>
+      {% for s in sectors %}<option value="{{ s }}" {% if sector==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <input name="country" placeholder="Country (NL/DE…)" value="{{ country }}">
+    <select name="source">
+      <option value="">Any source</option>
+      {% for s in ['customer','kvk','lead','prospect'] %}<option value="{{ s }}" {% if source==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <label style="white-space:nowrap;font-size:13px;color:#6b7280;"><input type="checkbox" name="customers_only" value="1" {% if customers_only=='1' %}checked{% endif %}> Customers</label>
+    <button type="submit" style="padding:8px 16px;background:#101010;color:#e4c977;border:none;border-radius:8px;cursor:pointer;">Filter</button>
+  </form>
+</section>
+
+<section class="card table-card">
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Email</th><th>Phone</th><th>City</th><th>Country</th><th>Sector</th><th>Sources</th><th>LTV</th></tr>
+    </thead>
+    <tbody>
+      {% for c in contacts %}
+      <tr>
+        <td>
+          <a href="/contacts/{{ c.id }}" style="font-weight:600;color:#1f2933;">{{ c.display_name }}</a>
+          {% if c.is_customer %}<span style="font-size:11px;color:#16a34a;">● customer</span>{% endif %}
+          {% if c.do_not_contact %}<span style="font-size:11px;color:#ef4444;">do-not-contact</span>{% endif %}
+        </td>
+        <td>{{ c.primary_email or '—' }}</td>
+        <td>{{ c.primary_phone or '—' }}</td>
+        <td>{{ c.city or '—' }}</td>
+        <td>{{ c.country_code or '—' }}</td>
+        <td>{{ c.sector or '—' }}</td>
+        <td style="font-size:12px;color:#6b7280;">{{ c.source_summary }}</td>
+        <td>{{ '€%.0f'|format(c.lifetime_value) if c.lifetime_value else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if total_pages > 1 %}
+<section class="card" style="display:flex;justify-content:space-between;align-items:center;">
+  <span style="color:#6b7280;">Page {{ page }} of {{ total_pages }} · {{ "{:,}".format(total) }} results</span>
+  <span>
+    {% if page > 1 %}<a href="/contacts?page={{ page-1 }}&search={{ search }}&sector={{ sector }}&country={{ country }}&source={{ source }}&has_email={{ has_email }}&customers_only={{ customers_only }}">← Prev</a>{% endif %}
+    {% if page < total_pages %}<a href="/contacts?page={{ page+1 }}&search={{ search }}&sector={{ sector }}&country={{ country }}&source={{ source }}&has_email={{ has_email }}&customers_only={{ customers_only }}" style="margin-left:14px;">Next →</a>{% endif %}
+  </span>
+</section>
+{% endif %}
+
+{% endblock %}

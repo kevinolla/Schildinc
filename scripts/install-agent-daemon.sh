@@ -1,57 +1,72 @@
 #!/usr/bin/env bash
-# install-agent-daemon.sh — install the always-on KVK email agent on macOS
+# install-agent-daemon.sh - install the always-on Schild Inc local agents (macOS)
+#
+# Installs BOTH:
+#   - com.schildinc.kvk-agent    : email/contact finder (always-on)
+#   - com.schildinc.owner-agent  : owner-name enrichment (runs at login + every 6h)
 #
 # Run once. After this:
-#   - the agent starts immediately
-#   - it relaunches automatically on every login
-#   - if it crashes / hits a hopeless run, launchd restarts it after 60s
+#   - both agents start immediately and relaunch on every login
 #   - logs live at ~/Library/Logs/schild-kvk-agent.log
+#                  ~/Library/Logs/schild-owner-agent.log
 #
 # To uninstall later:
 #   launchctl unload ~/Library/LaunchAgents/com.schildinc.kvk-agent.plist
+#   launchctl unload ~/Library/LaunchAgents/com.schildinc.owner-agent.plist
 #   rm ~/Library/LaunchAgents/com.schildinc.kvk-agent.plist
-set -euo pipefail
+#   rm ~/Library/LaunchAgents/com.schildinc.owner-agent.plist
+#
+# Note: written for macOS's default bash 3.2 (ASCII-only, no fancy syntax).
+set -eu
 
-PROJECT_DIR="$(cd -- "$(dirname -- "$0")/.." &> /dev/null && pwd)"
-SRC_PLIST="$PROJECT_DIR/scripts/com.schildinc.kvk-agent.plist"
+PROJECT_DIR="$(cd -- "$(dirname -- "$0")/.." > /dev/null 2>&1 && pwd)"
 LAUNCHAGENTS_DIR="$HOME/Library/LaunchAgents"
-TARGET_PLIST="$LAUNCHAGENTS_DIR/com.schildinc.kvk-agent.plist"
 LOG_DIR="$HOME/Library/Logs"
 
-if [ ! -f "$SRC_PLIST" ]; then
-  echo "✗ Cannot find $SRC_PLIST — run from inside the project."
-  exit 1
-fi
-
-# Quick sanity: venv + agent script exist
+# Quick sanity: venv exists
 if [ ! -x "$PROJECT_DIR/.venv/bin/python" ]; then
-  echo "✗ Python venv missing at $PROJECT_DIR/.venv/bin/python"
-  echo "  Run:   python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
-  exit 1
-fi
-if [ ! -f "$PROJECT_DIR/scripts/email_agent.py" ]; then
-  echo "✗ email_agent.py missing at $PROJECT_DIR/scripts/email_agent.py"
+  echo "[x] Python venv missing at $PROJECT_DIR/.venv/bin/python"
+  echo "    Run: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+  echo "         python -m playwright install chromium"
   exit 1
 fi
 
 mkdir -p "$LAUNCHAGENTS_DIR" "$LOG_DIR"
 
-# If already loaded, unload first so we pick up the new plist cleanly
-if launchctl list 2>/dev/null | grep -q "com.schildinc.kvk-agent"; then
-  echo "→ Unloading existing agent…"
-  launchctl unload "$TARGET_PLIST" 2>/dev/null || true
-fi
+install_one() {
+  label="$1"
+  script="$2"
+  src="$PROJECT_DIR/scripts/$label.plist"
+  target="$LAUNCHAGENTS_DIR/$label.plist"
 
-cp "$SRC_PLIST" "$TARGET_PLIST"
-chmod 644 "$TARGET_PLIST"
+  if [ ! -f "$src" ]; then
+    echo "[x] Cannot find $src - run from inside the project."
+    exit 1
+  fi
+  if [ ! -f "$PROJECT_DIR/scripts/$script" ]; then
+    echo "[x] $script missing at $PROJECT_DIR/scripts/$script"
+    exit 1
+  fi
 
-echo "→ Loading new agent…"
-launchctl load -w "$TARGET_PLIST"
+  # If already loaded, unload first so we pick up the new plist cleanly
+  if launchctl list 2>/dev/null | grep -q "$label"; then
+    echo "-> Unloading existing $label ..."
+    launchctl unload "$target" 2>/dev/null || true
+  fi
+
+  cp "$src" "$target"
+  chmod 644 "$target"
+  echo "-> Loading $label ..."
+  launchctl load -w "$target"
+}
+
+install_one "com.schildinc.kvk-agent" "email_agent.py"
+install_one "com.schildinc.owner-agent" "owner_agent.py"
 
 echo
-echo "✓ Agent installed and running."
+echo "[ok] Both agents installed and running."
 echo
-echo "  Status:   launchctl list | grep schildinc"
-echo "  Logs:     tail -f $LOG_DIR/schild-kvk-agent.log"
-echo "  Stop:     launchctl unload $TARGET_PLIST"
-echo "  Restart:  launchctl unload $TARGET_PLIST && launchctl load $TARGET_PLIST"
+echo "  Status:    launchctl list | grep schildinc"
+echo "  Email log: tail -f $LOG_DIR/schild-kvk-agent.log"
+echo "  Owner log: tail -f $LOG_DIR/schild-owner-agent.log"
+echo "  Stop all:  launchctl unload $LAUNCHAGENTS_DIR/com.schildinc.kvk-agent.plist $LAUNCHAGENTS_DIR/com.schildinc.owner-agent.plist"

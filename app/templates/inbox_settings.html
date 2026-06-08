@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if flash %}
+<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>
+{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Inbox Settings</h2>
+    <a href="/inbox" style="text-decoration:none;color:#6b7280;">← Back to Inbox</a>
+  </div>
+</section>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;">
+
+  <!-- Agents -->
+  <section class="card">
+    <h3 style="margin-top:0;">Team members</h3>
+    <table style="width:100%;margin-bottom:12px;">
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Login</th><th>Set password</th><th></th></tr></thead>
+      <tbody>
+        {% for a in agents %}
+        <tr>
+          <td>{{ a.name }}</td>
+          <td style="color:#6b7280;">{{ a.email }}</td>
+          <td>{{ a.role }}</td>
+          <td>{% if a.password_hash %}<span style="color:#16a34a;">✓ enabled</span>{% else %}<span style="color:#9aa0a6;">no password</span>{% endif %}</td>
+          <td>
+            <form method="post" action="/inbox/settings/agents/{{ a.id }}/password" style="display:flex;gap:4px;">
+              <input name="password" type="password" placeholder="new password" required style="font-size:12px;width:120px;">
+              <button type="submit" style="font-size:12px;padding:3px 8px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;">Set</button>
+            </form>
+          </td>
+          <td>
+            {% if a.is_active %}
+            <form method="post" action="/inbox/settings/agents/{{ a.id }}/delete" style="display:inline;" onsubmit="return confirm('Deactivate {{ a.name }}?');">
+              <button type="submit" style="background:none;border:none;color:#ef4444;cursor:pointer;">Deactivate</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <h4>Add / update teammate</h4>
+    <form method="post" action="/inbox/settings/agents">
+      <input name="name" placeholder="Full name" required style="width:100%;margin-bottom:6px;">
+      <input name="email" type="email" placeholder="email@schildinc.com" required style="width:100%;margin-bottom:6px;">
+      <input name="password" type="password" placeholder="Initial password (optional)" style="width:100%;margin-bottom:6px;">
+      <select name="role" style="width:100%;margin-bottom:8px;">
+        <option value="agent">Agent</option>
+        <option value="admin">Admin</option>
+      </select>
+      <button type="submit" style="padding:8px 16px;background:#101010;color:#e4c977;border:none;border-radius:8px;cursor:pointer;">Save teammate</button>
+      <p style="color:#9aa0a6;font-size:12px;margin-top:6px;">Admin actions (delete campaigns/templates, manage teammates, audit log) require an admin role. The owner via HTTP Basic is always admin.</p>
+    </form>
+  </section>
+
+  <!-- Canned replies -->
+  <section class="card">
+    <h3 style="margin-top:0;">Canned replies</h3>
+    {% for cr in canned %}
+    <div style="border-bottom:1px solid #f0ece2;padding:8px 0;">
+      <div style="display:flex;justify-content:space-between;">
+        <strong>{{ cr.title }}</strong>
+        <span>
+          <span style="font-size:11px;color:#946f16;">{{ cr.category }}</span>
+          <form method="post" action="/inbox/settings/canned/{{ cr.id }}/delete" style="display:inline;" onsubmit="return confirm('Remove this reply?');">
+            <button type="submit" style="background:none;border:none;color:#ef4444;cursor:pointer;">✕</button>
+          </form>
+        </span>
+      </div>
+      <div style="color:#6b7280;font-size:12px;white-space:pre-wrap;">{{ cr.body[:160] }}{% if cr.body|length > 160 %}…{% endif %}</div>
+    </div>
+    {% endfor %}
+    <h4 style="margin-top:14px;">Add canned reply</h4>
+    <form method="post" action="/inbox/settings/canned">
+      <input name="title" placeholder="Title" required style="width:100%;margin-bottom:6px;">
+      <input name="category" placeholder="Category (e.g. sales)" value="general" style="width:100%;margin-bottom:6px;">
+      <textarea name="body" rows="4" placeholder="Reply text…" required style="width:100%;margin-bottom:8px;"></textarea>
+      <button type="submit" style="padding:8px 16px;background:#101010;color:#e4c977;border:none;border-radius:8px;cursor:pointer;">Save reply</button>
+    </form>
+  </section>
+
+</div>
+
+<!-- WhatsApp -->
+<section class="card">
+  <h3 style="margin-top:0;">WhatsApp (Meta Cloud API)</h3>
+  {% if wa_status.configured %}
+    <p style="margin:0 0 8px 0;"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#25d366;margin-right:6px;"></span>Configured · phone number id <code>{{ wa_status.phone_number_id }}</code></p>
+  {% else %}
+    <p style="margin:0 0 8px 0;"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#ef4444;margin-right:6px;"></span>Not configured — set the <code>WHATSAPP_*</code> env vars in Railway.</p>
+  {% endif %}
+  <p style="margin:0 0 4px 0;color:#6b7280;font-size:13px;">Webhook callback URL (register in Meta, subscribe to <code>messages</code>):</p>
+  <p style="margin:0 0 6px 0;"><code>{{ wa_status.webhook_url }}</code></p>
+  <p style="margin:0 0 14px 0;color:#6b7280;font-size:12px;">
+    Verify token set: {{ 'yes' if wa_status.verify_token_set else 'NO' }} ·
+    App secret (signature check): {{ 'yes' if wa_status.has_app_secret else 'NO' }} ·
+    API {{ wa_status.api_version }}
+  </p>
+
+  <h4>Approved templates</h4>
+  <p style="color:#6b7280;font-size:12px;margin-top:0;">Register the names of templates you've had approved in Meta Business Manager. Use these to message contacts outside the 24-hour window.</p>
+  <table style="width:100%;margin-bottom:12px;">
+    <thead><tr><th>Name</th><th>Lang</th><th>Category</th><th>Params</th><th>Preview</th><th></th></tr></thead>
+    <tbody>
+      {% for t in wa_templates %}
+      <tr>
+        <td>{{ t.name }}</td><td>{{ t.language }}</td><td>{{ t.category }}</td><td>{{ t.param_count }}</td>
+        <td style="color:#6b7280;font-size:12px;">{{ t.body_preview[:60] }}</td>
+        <td>
+          <form method="post" action="/inbox/settings/wa-template/{{ t.id }}/delete" style="display:inline;" onsubmit="return confirm('Remove template?');">
+            <button type="submit" style="background:none;border:none;color:#ef4444;cursor:pointer;">✕</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <form method="post" action="/inbox/settings/wa-template" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px;align-items:end;">
+    <div><label style="font-size:12px;color:#6b7280;">Template name</label><input name="name" required style="width:100%;"></div>
+    <div><label style="font-size:12px;color:#6b7280;">Language</label><input name="language" value="en" style="width:100%;"></div>
+    <div><label style="font-size:12px;color:#6b7280;">Category</label><input name="category" placeholder="marketing" style="width:100%;"></div>
+    <div><label style="font-size:12px;color:#6b7280;"># params</label><input name="param_count" type="number" value="0" min="0" style="width:100%;"></div>
+    <div style="grid-column:1 / -1;"><label style="font-size:12px;color:#6b7280;">Body preview (for your reference)</label><input name="body_preview" style="width:100%;"></div>
+    <div><button type="submit" style="padding:8px 16px;background:#25d366;color:#fff;border:none;border-radius:8px;cursor:pointer;">Save template</button></div>
+  </form>
+</section>
+
+{% endblock %}

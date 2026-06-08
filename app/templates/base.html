@@ -18,17 +18,61 @@
       {% set path = request.url.path if request else '/' %}
       <nav class="topnav">
         <a href="/"            {% if path == '/' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
+        <a href="/setup"       {% if path.startswith('/setup') %}class="active" aria-current="page"{% endif %}>⚙️ Setup</a>
+        <a href="/inbox"       {% if path.startswith('/inbox') %}class="active" aria-current="page"{% endif %}>Inbox <span id="inbox-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:2px;"></span></a>
+        <a href="/contacts"    {% if path.startswith('/contacts') %}class="active" aria-current="page"{% endif %}>Contacts</a>
         <a href="/customers"   {% if path.startswith('/customers') %}class="active" aria-current="page"{% endif %}>Customers</a>
         <a href="/leads"       {% if path.startswith('/leads') %}class="active" aria-current="page"{% endif %}>Leads</a>
         <a href="/kvk"         {% if path.startswith('/kvk') %}class="active" aria-current="page"{% endif %}>KVK Companies</a>
         <a href="/prospects"   {% if path.startswith('/prospects') %}class="active" aria-current="page"{% endif %}>Prospects</a>
+        <a href="/emails"      {% if path.startswith('/emails') %}class="active" aria-current="page"{% endif %}>Email Campaigns</a>
         <a href="/queue"       {% if path.startswith('/queue') %}class="active" aria-current="page"{% endif %}>Queue</a>
+        <a href="/reports"     {% if path.startswith('/reports') %}class="active" aria-current="page"{% endif %}>Reports</a>
+        <a href="/audit" id="nav-audit" style="display:none;" {% if path.startswith('/audit') %}class="active" aria-current="page"{% endif %}>Audit</a>
         <a href="/suppression" {% if path.startswith('/suppression') %}class="active" aria-current="page"{% endif %}>Suppression</a>
         <a href="/logs"        {% if path.startswith('/logs') %}class="active" aria-current="page"{% endif %}>Logs</a>
       </nav>
+      <div class="topnav" style="margin-top:8px;font-size:12px;color:#6b7280;">
+        <span id="who">Owner</span>
+        <a href="/login" id="login-link">Login</a>
+        <a href="/logout" id="logout-link" style="display:none;">Logout</a>
+      </div>
     </aside>
     <main class="page-shell">
       {% block content %}{% endblock %}
     </main>
+    <script>
+      // Live identity + unread badge. /api/me for identity + initial counts,
+      // then Server-Sent Events for real-time updates (with polling fallback).
+      function applyCounts(d) {
+        var b = document.getElementById('inbox-badge');
+        if (!b) return;
+        if (d && d.unread > 0) { b.textContent = d.unread; b.style.display = 'inline-block'; }
+        else { b.style.display = 'none'; }
+      }
+      function applyMe(d) {
+        var who = document.getElementById('who');
+        var loginL = document.getElementById('login-link');
+        var logoutL = document.getElementById('logout-link');
+        var auditL = document.getElementById('nav-audit');
+        if (d.agent) {
+          if (who) who.textContent = d.agent + ' (' + d.role + ')';
+          if (loginL) loginL.style.display = 'none';
+          if (logoutL) logoutL.style.display = 'inline';
+        } else {
+          if (who) who.textContent = 'Owner (admin)';
+        }
+        if (auditL) auditL.style.display = d.is_admin ? 'inline' : 'none';
+        applyCounts(d);
+      }
+      fetch('/api/me').then(r => r.json()).then(applyMe).catch(function(){});
+      try {
+        var es = new EventSource('/api/stream');
+        es.onmessage = function(e) { try { applyCounts(JSON.parse(e.data)); } catch(_){} };
+        es.onerror = function() { es.close(); setInterval(function(){ fetch('/api/me').then(r=>r.json()).then(applyCounts).catch(function(){}); }, 20000); };
+      } catch (_) {
+        setInterval(function(){ fetch('/api/me').then(r=>r.json()).then(applyCounts).catch(function(){}); }, 20000);
+      }
+    </script>
   </body>
 </html>

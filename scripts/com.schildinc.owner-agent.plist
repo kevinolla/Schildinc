@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd config for the owner-enrichment agent (Google-snippet, brand-safe).
+  Unlike the email agent (always-on), this one only needs to top up owner
+  names, so it runs at login and then every 6 hours, processes all pending
+  records, and exits until the next interval.
+
+  Install via scripts/install-agent-daemon.sh (installs both agents), or:
+    launchctl load -w ~/Library/LaunchAgents/com.schildinc.owner-agent.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.schildinc.owner-agent</string>
+
+  <!-- Headless browser + persistent profile = background, hands-free, no CAPTCHA
+       prompts (challenges auto-skip). --delay keeps it polite. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/kevinolla/AI Project/B2B Prospect tool/.venv/bin/python</string>
+    <string>/Users/kevinolla/AI Project/B2B Prospect tool/scripts/owner_agent.py</string>
+    <string>--delay</string>
+    <string>4.0</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/kevinolla/AI Project/B2B Prospect tool</string>
+
+  <!-- Run at login, then every 6 hours (21600s). It exits when no pending
+       records remain; the next interval picks up any newly-added companies. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>21600</integer>
+
+  <!-- Low priority so it never fights your foreground apps -->
+  <key>Nice</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/kevinolla/Library/Logs/schild-owner-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/kevinolla/Library/Logs/schild-owner-agent.err.log</string>
+</dict>
+</plist>

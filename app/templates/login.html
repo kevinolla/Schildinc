@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" style="max-width:420px;margin:40px auto;">
+  <h2 style="margin-top:0;">Agent sign-in</h2>
+  <p style="color:#6b7280;font-size:13px;">Sign in with your Schild Inc agent account to work the inbox and be attributed on replies. The owner (HTTP Basic) always has admin access.</p>
+  {% if flash %}<p style="color:#ef4444;">{{ flash }}</p>{% endif %}
+  {% if current %}<p style="color:#16a34a;">Currently signed in as <strong>{{ current.name }}</strong> ({{ current.role }}). <a href="/logout">Logout</a></p>{% endif %}
+  <form method="post" action="/login">
+    <input name="email" type="email" placeholder="you@schildinc.com" required style="width:100%;margin-bottom:8px;">
+    <input name="password" type="password" placeholder="Password" required style="width:100%;margin-bottom:12px;">
+    <button type="submit" style="width:100%;padding:10px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Sign in</button>
+  </form>
+  <p style="color:#9aa0a6;font-size:12px;margin-top:12px;">No account? An admin creates teammates and sets passwords in <strong>Inbox → Settings</strong>.</p>
+</section>
+{% endblock %}

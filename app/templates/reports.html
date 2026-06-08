@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <h2 style="margin:0;">Reports</h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">Last {{ report.days }} days · since {{ report.since.strftime('%Y-%m-%d') }}</p>
+    </div>
+    <div>
+      {% for d in [7,30,90,365] %}
+      <a href="/reports?days={{ d }}" style="padding:5px 12px;border-radius:12px;text-decoration:none;{% if days==d %}background:#101010;color:#e4c977;{% else %}background:#f0ece2;color:#1f2933;{% endif %}">{{ d }}d</a>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<!-- Email -->
+<section class="card">
+  <h3 style="margin-top:0;">📧 Email outreach</h3>
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;text-align:center;">
+    <div><div style="font-size:24px;font-weight:700;">{{ report.email.campaigns_total }}</div><div style="color:#6b7280;font-size:12px;">Campaigns</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.email.sent }}</div><div style="color:#6b7280;font-size:12px;">Sent</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.email.open_rate }}%</div><div style="color:#6b7280;font-size:12px;">Open rate</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.email.click_rate }}%</div><div style="color:#6b7280;font-size:12px;">Click rate</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.email.unsub_rate }}%</div><div style="color:#6b7280;font-size:12px;">Unsub rate</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.email.opened }}/{{ report.email.clicked }}</div><div style="color:#6b7280;font-size:12px;">Opens/Clicks</div></div>
+  </div>
+</section>
+
+<!-- Inbox -->
+<section class="card">
+  <h3 style="margin-top:0;">💬 Inbox &amp; support</h3>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;text-align:center;margin-bottom:14px;">
+    <div><div style="font-size:24px;font-weight:700;">{{ report.inbox.messages_in }}</div><div style="color:#6b7280;font-size:12px;">Inbound msgs</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.inbox.messages_out }}</div><div style="color:#6b7280;font-size:12px;">Replies sent</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.inbox.avg_first_response_min if report.inbox.avg_first_response_min is not none else '—' }}{% if report.inbox.avg_first_response_min is not none %}m{% endif %}</div><div style="color:#6b7280;font-size:12px;">Avg 1st response</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.inbox.by_status.get('open',0) }}</div><div style="color:#6b7280;font-size:12px;">Open now</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.inbox.by_status.get('closed',0) }}</div><div style="color:#6b7280;font-size:12px;">Closed</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div>
+      <h4 style="margin:0 0 6px 0;">Replies per agent</h4>
+      <table style="width:100%;">
+        <thead><tr><th>Agent</th><th>Replies</th></tr></thead>
+        <tbody>
+          {% for row in report.inbox.per_agent %}<tr><td>{{ row.agent }}</td><td>{{ row.replies }}</td></tr>{% endfor %}
+          {% if not report.inbox.per_agent %}<tr><td colspan="2" style="color:#9aa0a6;">No replies in window</td></tr>{% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h4 style="margin:0 0 6px 0;">Conversations by channel</h4>
+      <table style="width:100%;">
+        <tbody>
+          {% for ch, n in report.inbox.by_channel.items() %}<tr><td>{{ ch }}</td><td>{{ n }}</td></tr>{% endfor %}
+          {% if not report.inbox.by_channel %}<tr><td colspan="2" style="color:#9aa0a6;">None yet</td></tr>{% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Contacts -->
+<section class="card">
+  <h3 style="margin-top:0;">👥 Audience</h3>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;text-align:center;margin-bottom:14px;">
+    <div><div style="font-size:24px;font-weight:700;">{{ "{:,}".format(report.contacts.total) }}</div><div style="color:#6b7280;font-size:12px;">Total contacts</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ "{:,}".format(report.contacts.customers) }}</div><div style="color:#6b7280;font-size:12px;">Customers</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.contacts.new_in_window }}</div><div style="color:#6b7280;font-size:12px;">New in window</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ report.contacts.by_source.get('kvk',0) }}</div><div style="color:#6b7280;font-size:12px;">From KVK</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div>
+      <h4 style="margin:0 0 6px 0;">Top sectors</h4>
+      <table style="width:100%;"><tbody>
+        {% for s in report.contacts.top_sectors %}<tr><td>{{ s.name }}</td><td>{{ "{:,}".format(s.count) }}</td></tr>{% endfor %}
+      </tbody></table>
+    </div>
+    <div>
+      <h4 style="margin:0 0 6px 0;">Top countries</h4>
+      <table style="width:100%;"><tbody>
+        {% for s in report.contacts.top_countries %}<tr><td>{{ s.name }}</td><td>{{ "{:,}".format(s.count) }}</td></tr>{% endfor %}
+      </tbody></table>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import csv
+import html as html_lib
 import io
+import json
 import secrets
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
@@ -29,6 +32,29 @@ from app.kvk_enrichment import (
     run_kvk_enrichment_job, start_auto_enrichment_scheduler,
 )
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
+from app import gmail_sender
+from app.email_engine import (
+    build_recipients,
+    process_due_campaigns,
+    record_click,
+    record_open,
+    record_unsubscribe,
+    render_for_recipient,
+    send_campaign_batch,
+    sent_today,
+    start_email_sender_scheduler,
+)
+from app.email_library import seed_starter_templates
+from app import contacts as contacts_module
+from app import inbox as inbox_module
+from app.inbox import seed_inbox_defaults
+from app.gmail_inbound import poll_inbound, start_gmail_inbound_scheduler
+from app import whatsapp as whatsapp_module
+from app import instagram as instagram_module
+from app import auth as auth_module
+from app.auth import require_admin_role
+from app.audit import log_audit
+from app import reporting as reporting_module
 from app.google_places import place_to_prospect_record, search_google_places
 from app.importers import (
     prepare_kvk_prospects_dataframe,
@@ -43,9 +69,22 @@ from app.jobs import run_daily_queue_build, run_daily_queue_send
 from app.klaviyo import KlaviyoExportError, export_prospects_to_klaviyo
 from app.matching import apply_kvk_matching, apply_matching
 from app.models import (
+    Activity,
+    Agent,
+    AuditLog,
+    CannedReply,
+    Contact,
+    ContactChannel,
+    Conversation,
     Customer,
+    EmailCampaign,
+    EmailCampaignRecipient,
+    EmailEvent,
     EmailLog,
+    EmailTemplate,
     FacebookLead,
+    Message,
+    GmailAccount,
     KvkCompany,
     KvkEstablishment,
     KvkImportLog,
@@ -57,6 +96,7 @@ from app.models import (
     QueueState,
     SuppressionEntry,
     WebhookLog,
+    WhatsappTemplate,
 )
 from app.outreach_templates import build_outreach_bundle
 from app.tiering import apply_bike_tier, score_kvk_company_tier
@@ -74,6 +114,18 @@ async def lifespan(app: FastAPI):
         start_lead_classifier_scheduler()
     except Exception as exc:
         print(f"[lifespan] FB leads schedulers not started: {exc}")
+    # Email engine: seed starter templates + start the campaign sender daemon.
+    try:
+        seed_session = SessionLocal()
+        try:
+            seed_starter_templates(seed_session)
+            seed_inbox_defaults(seed_session, admin_email=settings.reply_to_email)
+        finally:
+            seed_session.close()
+        start_email_sender_scheduler()
+        start_gmail_inbound_scheduler()
+    except Exception as exc:
+        print(f"[lifespan] Email engine / inbox not started: {exc}")
     yield
 
 
@@ -2514,6 +2566,90 @@ def kvk_agent_result(
     })
 
 
+# ── Owner / decision-maker enrichment agent (Google-snippet) ────────────────
+
+
+@app.get("/api/enrich/owner/pending")
+def owner_enrich_pending(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    limit: int = 25,
+    max_attempts: int = 2,
+) -> JSONResponse:
+    """Records needing an owner name. Prioritizes never-searched first.
+
+    Only hands out records that aren't already clients and still need a name
+    (owner_status='pending'), capped by attempts so we don't loop forever.
+    """
+    limit = max(1, min(100, limit))
+    rows = db.scalars(
+        select(KvkCompany)
+        .where(KvkCompany.already_client_flag.is_(False))
+        .where(KvkCompany.owner_status == "pending")
+        .where(KvkCompany.owner_search_attempts < max_attempts)
+        .order_by(KvkCompany.owner_search_attempts.asc(), KvkCompany.id.asc())
+        .limit(limit)
+    ).all()
+    return JSONResponse([
+        {
+            "id": r.id,
+            "company_name": r.company_name,
+            "city": r.primary_city or "",
+            "country": r.country_code or "",
+            "website": r.website or "",
+            "instagram_url": r.instagram_url or "",
+            "linkedin_url": r.linkedin_url or "",
+            "owner_search_attempts": r.owner_search_attempts,
+        }
+        for r in rows
+    ])
+
+
+@app.post("/api/enrich/owner/result")
+def owner_enrich_result(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    company_id: int = Form(...),
+    owner_name: str = Form(""),
+    owner_role: str = Form(""),
+    instagram_url: str = Form(""),
+    linkedin_url: str = Form(""),
+    source: str = Form(""),
+) -> JSONResponse:
+    """Save an owner name found from PUBLIC search snippets. Empty owner_name
+    marks 'checked, nothing found' so the record isn't handed back forever.
+    Propagates the name to the linked Contact so campaigns personalize.
+    """
+    company = db.get(KvkCompany, company_id)
+    if not company:
+        return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
+
+    company.owner_search_attempts = (company.owner_search_attempts or 0) + 1
+
+    name = " ".join((owner_name or "").split()).strip()
+    if name:
+        company.owner_name = name
+        company.owner_role = (owner_role or "").strip()
+        company.owner_source = (source or "")[:500]
+        company.owner_status = "found"
+        if instagram_url and not (company.instagram_url or "").strip():
+            company.instagram_url = instagram_url.strip()
+        if linkedin_url and not (company.linkedin_url or "").strip():
+            company.linkedin_url = linkedin_url.strip()
+        # Propagate to the unified Contact (so the inbox + campaigns greet by name).
+        contact = db.scalar(select(Contact).where(Contact.kvk_company_id == company.id))
+        if contact and not (contact.contact_person or "").strip():
+            contact.contact_person = name
+    elif company.owner_search_attempts >= 2:
+        company.owner_status = "none"
+
+    db.commit()
+    return JSONResponse({
+        "ok": True, "id": company.id, "owner_name": company.owner_name,
+        "owner_role": company.owner_role, "owner_status": company.owner_status,
+    })
+
+
 # (Old kvk_export_csv route moved up before /kvk/{company_id} —
 # leaving it duplicated here was the source of the int_parsing error.)
 
@@ -2558,3 +2694,1459 @@ async def kvk_push_klaviyo(
 @app.get("/api/klaviyo/test")
 def klaviyo_test(_: str = Depends(require_admin)) -> JSONResponse:
     return JSONResponse(test_klaviyo_connection())
+
+
+# ===========================================================================
+# Email engine — campaigns, templates, Gmail OAuth, open/click tracking
+# ===========================================================================
+
+# 1x1 transparent GIF for open tracking.
+_TRACKING_PIXEL = (
+    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x01"
+    b"\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+)
+
+EMAIL_CATEGORIES = ["cold", "warm", "followup", "vip", "custom"]
+
+
+def _kick_campaign_send(campaign_id: int) -> None:
+    """Run one send batch in a background thread for instant start."""
+    def _run() -> None:
+        session = SessionLocal()
+        try:
+            campaign = session.get(EmailCampaign, campaign_id)
+            if campaign and campaign.status == "sending":
+                send_campaign_batch(session, campaign)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[email] kick send error: {exc}")
+        finally:
+            session.close()
+
+    Thread(target=_run, daemon=True, name=f"email-kick-{campaign_id}").start()
+
+
+def _resolve_audience_ids(
+    db: Session,
+    audience_type: str,
+    *,
+    ids_csv: str = "",
+    tier: str = "",
+    sector: str = "",
+    country: str = "",
+    limit: int = 500,
+) -> dict[str, list[int]]:
+    """Return {kvk_ids|lead_ids|customer_ids: [...]} for a campaign audience.
+
+    Only includes records with an email. KVK excludes existing clients.
+    Explicit ids_csv (from a quick-send button) takes precedence over filters.
+    """
+    explicit = [int(i) for i in ids_csv.split(",") if i.strip().isdigit()] if ids_csv else []
+    limit = max(1, min(5000, limit))
+
+    if audience_type == "kvk":
+        q = select(KvkCompany.id).where(
+            KvkCompany.email_public != "",
+            KvkCompany.already_client_flag.is_(False),
+        )
+        if explicit:
+            q = q.where(KvkCompany.id.in_(explicit))
+        if tier:
+            q = q.where(KvkCompany.bike_shop_tier == tier)
+        if country:
+            q = q.where(func.upper(KvkCompany.country_code) == country.upper())
+        ids = [r for (r,) in db.execute(q.limit(limit)).all()]
+        return {"kvk_ids": ids}
+
+    if audience_type == "lead":
+        q = select(FacebookLead.id).where(FacebookLead.email != "")
+        if explicit:
+            q = q.where(FacebookLead.id.in_(explicit))
+        if sector:
+            q = q.where(FacebookLead.main_sector == sector)
+        if country:
+            q = q.where(func.upper(FacebookLead.country) == country.upper())
+        ids = [r for (r,) in db.execute(q.limit(limit)).all()]
+        return {"lead_ids": ids}
+
+    if audience_type == "customer":
+        q = select(Customer.id).where(Customer.customer_email_primary != "")
+        if explicit:
+            q = q.where(Customer.id.in_(explicit))
+        if sector:
+            q = q.where(func.lower(Customer.main_sector) == sector.lower())
+        if country:
+            q = q.where(func.upper(Customer.country_code) == country.upper())
+        ids = [r for (r,) in db.execute(q.limit(limit)).all()]
+        return {"customer_ids": ids}
+
+    return {}
+
+
+@app.get("/emails", response_class=HTMLResponse)
+def emails_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    flash: str = "",
+) -> HTMLResponse:
+    gmail = gmail_sender.connection_status(db)
+    campaigns = db.scalars(
+        select(EmailCampaign).order_by(EmailCampaign.created_at.desc()).limit(100)
+    ).all()
+    template_rows = db.scalars(
+        select(EmailTemplate)
+        .where(EmailTemplate.is_active.is_(True))
+        .order_by(EmailTemplate.category, EmailTemplate.name)
+    ).all()
+    return templates.TemplateResponse(
+        request,
+        "emails.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "gmail": gmail,
+            "campaigns": campaigns,
+            "templates_list": template_rows,
+            "sent_today": sent_today(db),
+            "daily_limit": settings.gmail_daily_limit,
+            "flash": flash,
+        },
+    )
+
+
+# ── Gmail OAuth ─────────────────────────────────────────────────────────────
+
+
+@app.get("/emails/gmail/connect")
+def gmail_connect(_: str = Depends(require_admin)) -> RedirectResponse:
+    state = secrets.token_urlsafe(16)
+    try:
+        url = gmail_sender.build_authorization_url(state)
+    except gmail_sender.GmailConfigError as exc:
+        return RedirectResponse(f"/emails?flash={quote_plus(str(exc))}", status_code=303)
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/emails/gmail/callback")
+def gmail_callback(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    code: str = "",
+    state: str = "",
+    error: str = "",
+) -> RedirectResponse:
+    if error or not code:
+        return RedirectResponse(
+            f"/emails?flash={quote_plus('Gmail authorization failed: ' + (error or 'no code'))}",
+            status_code=303,
+        )
+    try:
+        account = gmail_sender.exchange_code(db, code)
+        msg = f"Gmail connected as {account.account_email}"
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Gmail connect error: {str(exc)[:160]}"
+    return RedirectResponse(f"/emails?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/emails/gmail/disconnect")
+def gmail_disconnect(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    gmail_sender.disconnect(db)
+    return RedirectResponse(f"/emails?flash={quote_plus('Gmail disconnected')}", status_code=303)
+
+
+# ── Templates ───────────────────────────────────────────────────────────────
+
+
+@app.get("/emails/templates", response_class=HTMLResponse)
+def email_templates_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    edit: int = 0,
+    flash: str = "",
+) -> HTMLResponse:
+    rows = db.scalars(
+        select(EmailTemplate).order_by(EmailTemplate.category, EmailTemplate.name)
+    ).all()
+    editing = db.get(EmailTemplate, edit) if edit else None
+    return templates.TemplateResponse(
+        request,
+        "email_templates.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "templates_list": rows,
+            "editing": editing,
+            "categories": EMAIL_CATEGORIES,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/emails/templates/save")
+def email_template_save(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    template_id: int = Form(0),
+    name: str = Form(...),
+    category: str = Form("custom"),
+    description: str = Form(""),
+    subject: str = Form(""),
+    body_html: str = Form(""),
+    body_text: str = Form(""),
+) -> RedirectResponse:
+    tpl = db.get(EmailTemplate, template_id) if template_id else None
+    if tpl is None:
+        tpl = EmailTemplate(is_starter=False)
+        db.add(tpl)
+    tpl.name = name.strip()
+    tpl.category = category if category in EMAIL_CATEGORIES else "custom"
+    tpl.description = description
+    tpl.subject = subject
+    tpl.body_html = body_html
+    tpl.body_text = body_text
+    db.commit()
+    return RedirectResponse(f"/emails/templates?flash={quote_plus('Template saved')}", status_code=303)
+
+
+@app.post("/emails/templates/{tpl_id}/delete")
+def email_template_delete(
+    tpl_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> RedirectResponse:
+    tpl = db.get(EmailTemplate, tpl_id)
+    if tpl and not tpl.is_starter:
+        db.delete(tpl)
+        db.commit()
+        msg = "Template deleted"
+    elif tpl:
+        tpl.is_active = False
+        db.commit()
+        msg = "Starter template hidden"
+    else:
+        msg = "Template not found"
+    return RedirectResponse(f"/emails/templates?flash={quote_plus(msg)}", status_code=303)
+
+
+# ── Campaign builder ────────────────────────────────────────────────────────
+
+
+@app.get("/emails/campaigns/new", response_class=HTMLResponse)
+def campaign_new_form(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    audience: str = "kvk",
+    ids: str = "",
+    template_id: int = 0,
+) -> HTMLResponse:
+    template_rows = db.scalars(
+        select(EmailTemplate)
+        .where(EmailTemplate.is_active.is_(True))
+        .order_by(EmailTemplate.category, EmailTemplate.name)
+    ).all()
+    gmail = gmail_sender.connection_status(db)
+    sectors = [s for (s,) in db.execute(
+        select(FacebookLead.main_sector)
+        .where(FacebookLead.main_sector != "")
+        .group_by(FacebookLead.main_sector)
+        .order_by(FacebookLead.main_sector)
+    ).all()]
+    return templates.TemplateResponse(
+        request,
+        "email_campaign_new.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "templates_list": template_rows,
+            "gmail": gmail,
+            "audience": audience,
+            "preset_ids": ids,
+            "preset_template_id": template_id,
+            "tiers": KVK_TIER_FILTERS,
+            "sectors": sectors,
+            "default_sender_alias": settings.gmail_send_as,
+            "default_sender_name": settings.gmail_sender_name,
+            "default_reply_to": settings.reply_to_email,
+        },
+    )
+
+
+@app.post("/emails/campaigns/create")
+def campaign_create(
+    db: Session = Depends(get_db),
+    user: str = Depends(require_admin),
+    name: str = Form(...),
+    template_id: int = Form(...),
+    audience_type: str = Form("kvk"),
+    lead_temperature: str = Form("cold"),
+    sender_alias: str = Form(""),
+    sender_name: str = Form(""),
+    reply_to: str = Form(""),
+    ids_csv: str = Form(""),
+    tier: str = Form(""),
+    sector: str = Form(""),
+    country: str = Form(""),
+    limit: int = Form(500),
+) -> RedirectResponse:
+    tpl = db.get(EmailTemplate, template_id)
+    if tpl is None:
+        return RedirectResponse(f"/emails?flash={quote_plus('Pick a template first')}", status_code=303)
+
+    campaign = EmailCampaign(
+        name=name.strip() or "Untitled campaign",
+        template_id=tpl.id,
+        subject=tpl.subject,
+        body_html=tpl.body_html,
+        body_text=tpl.body_text,
+        audience_type=audience_type,
+        lead_temperature=lead_temperature,
+        status="draft",
+        sender_alias=sender_alias.strip() or settings.gmail_send_as,
+        sender_name=sender_name.strip() or settings.gmail_sender_name,
+        reply_to=reply_to.strip() or settings.reply_to_email,
+        created_by=user,
+    )
+    db.add(campaign)
+    db.commit()
+
+    audience = _resolve_audience_ids(
+        db, audience_type, ids_csv=ids_csv, tier=tier, sector=sector, country=country, limit=limit
+    )
+    stats = build_recipients(db, campaign, **audience)
+    msg = (
+        f"Campaign '{campaign.name}' created with {stats['total']} recipients "
+        f"(skipped {stats['skipped_no_email']} no-email, "
+        f"{stats['skipped_suppressed']} suppressed, {stats['skipped_duplicate']} duplicate)."
+    )
+    return RedirectResponse(f"/emails/campaigns/{campaign.id}?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.get("/emails/campaigns/{campaign_id}", response_class=HTMLResponse)
+def campaign_detail(
+    campaign_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    flash: str = "",
+) -> HTMLResponse:
+    campaign = db.get(EmailCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    recipients = db.scalars(
+        select(EmailCampaignRecipient)
+        .where(EmailCampaignRecipient.campaign_id == campaign_id)
+        .order_by(EmailCampaignRecipient.id.asc())
+        .limit(500)
+    ).all()
+    status_counts = dict(db.execute(
+        select(EmailCampaignRecipient.status, func.count(EmailCampaignRecipient.id))
+        .where(EmailCampaignRecipient.campaign_id == campaign_id)
+        .group_by(EmailCampaignRecipient.status)
+    ).all())
+    gmail = gmail_sender.connection_status(db)
+    return templates.TemplateResponse(
+        request,
+        "email_campaign_detail.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "campaign": campaign,
+            "recipients": recipients,
+            "status_counts": status_counts,
+            "gmail": gmail,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/emails/campaigns/{campaign_id}/send")
+def campaign_send(
+    campaign_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> RedirectResponse:
+    campaign = db.get(EmailCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if gmail_sender.get_active_account(db) is None:
+        return RedirectResponse(
+            f"/emails/campaigns/{campaign_id}?flash={quote_plus('Connect Gmail before sending')}",
+            status_code=303,
+        )
+    if campaign.total_recipients == 0:
+        return RedirectResponse(
+            f"/emails/campaigns/{campaign_id}?flash={quote_plus('No recipients to send to')}",
+            status_code=303,
+        )
+    campaign.status = "sending"
+    campaign.started_at = campaign.started_at or datetime.utcnow()
+    db.commit()
+    _kick_campaign_send(campaign.id)
+    msg = "Sending started — emails go out in the background (throttled). Refresh for live stats."
+    return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/emails/campaigns/{campaign_id}/pause")
+def campaign_pause(
+    campaign_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> RedirectResponse:
+    campaign = db.get(EmailCampaign, campaign_id)
+    if campaign and campaign.status == "sending":
+        campaign.status = "paused"
+        db.commit()
+    return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus('Campaign paused')}", status_code=303)
+
+
+@app.post("/emails/campaigns/{campaign_id}/schedule")
+def campaign_schedule(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    scheduled_at: str = Form(""),
+) -> RedirectResponse:
+    campaign = db.get(EmailCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    try:
+        # Expecting HTML datetime-local format: YYYY-MM-DDTHH:MM
+        dt = datetime.fromisoformat(scheduled_at)
+        campaign.scheduled_at = dt
+        campaign.status = "scheduled"
+        db.commit()
+        msg = f"Scheduled for {dt.isoformat(sep=' ', timespec='minutes')}"
+    except Exception:
+        msg = "Invalid date/time"
+    return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/emails/campaigns/{campaign_id}/test")
+def campaign_test_send(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    test_email: str = Form(...),
+) -> RedirectResponse:
+    campaign = db.get(EmailCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    # Build an in-memory recipient (not persisted) to reuse the renderer.
+    sample = EmailCampaignRecipient(
+        campaign_id=campaign.id,
+        to_email=normalize_email(test_email),
+        company_name="Sample Bike Shop",
+        contact_name="there",
+        merge_data='{"company_name": "Sample Bike Shop", "city": "Amsterdam", "country": "NL", "website": "example.com"}',
+        tracking_token=f"test-{secrets.token_urlsafe(10)}",
+    )
+    subject, html_body, text_body = render_for_recipient(campaign, sample)
+    result = gmail_sender.send_message(
+        db,
+        to_email=sample.to_email,
+        subject=f"[TEST] {subject}",
+        body_html=html_body,
+        body_text=text_body,
+        from_alias=campaign.sender_alias,
+        from_name=campaign.sender_name,
+        reply_to=campaign.reply_to,
+    )
+    msg = f"Test sent to {sample.to_email}" if result.ok else f"Test failed: {result.error[:160]}"
+    return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/emails/campaigns/{campaign_id}/delete")
+def campaign_delete(
+    campaign_id: int, request: Request, db: Session = Depends(get_db),
+    _: str = Depends(require_admin), __: bool = Depends(require_admin_role),
+) -> RedirectResponse:
+    campaign = db.get(EmailCampaign, campaign_id)
+    if campaign:
+        log_audit(db, actor=auth_module.actor_label(request, db), action="campaign.delete",
+                  target_type="campaign", target_id=campaign_id, detail=campaign.name, commit=False)
+        db.delete(campaign)
+        db.commit()
+    return RedirectResponse(f"/emails?flash={quote_plus('Campaign deleted')}", status_code=303)
+
+
+# ── Public tracking endpoints (NO auth — recipients hit these) ──────────────
+
+
+@app.get("/e/o/{token}.gif")
+def track_open(token: str, request: Request, db: Session = Depends(get_db)) -> StreamingResponse:
+    try:
+        record_open(
+            db, token,
+            user_agent=request.headers.get("user-agent", ""),
+            ip=request.client.host if request.client else "",
+        )
+    except Exception:
+        pass
+    return StreamingResponse(
+        io.BytesIO(_TRACKING_PIXEL),
+        media_type="image/gif",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, private", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/e/c/{token}")
+def track_click(token: str, request: Request, u: str = "", db: Session = Depends(get_db)) -> RedirectResponse:
+    target = u or settings.app_base_url
+    if not (target.startswith("http://") or target.startswith("https://")):
+        target = settings.app_base_url
+    try:
+        record_click(
+            db, token, target,
+            user_agent=request.headers.get("user-agent", ""),
+            ip=request.client.host if request.client else "",
+        )
+    except Exception:
+        pass
+    return RedirectResponse(target, status_code=302)
+
+
+@app.get("/e/u/{token}", response_class=HTMLResponse)
+def track_unsubscribe(token: str, db: Session = Depends(get_db)) -> HTMLResponse:
+    recipient = record_unsubscribe(db, token)
+    email = recipient.to_email if recipient else "your address"
+    return HTMLResponse(
+        f"""<!doctype html><html><body style="font-family:Arial,sans-serif;max-width:520px;margin:60px auto;text-align:center;color:#1f2933;">
+        <h2>You're unsubscribed</h2>
+        <p>{email} has been removed from Schild Inc outreach. You won't receive further emails from us.</p>
+        <p style="color:#8a8f98;font-size:13px;">If this was a mistake, reply to any previous email and we'll add you back.</p>
+        </body></html>"""
+    )
+
+
+@app.post("/e/u/{token}")
+def track_unsubscribe_oneclick(token: str, db: Session = Depends(get_db)) -> PlainTextResponse:
+    """RFC 8058 List-Unsubscribe-Post one-click endpoint."""
+    record_unsubscribe(db, token)
+    return PlainTextResponse("unsubscribed", status_code=200)
+
+
+# ===========================================================================
+# In-house CRM — Phase 1: Unified Contact Hub
+# ===========================================================================
+
+
+def _contacts_query(search: str, sector: str, country: str, source: str, has_email: str, customers_only: str, cold: str = ""):
+    q = select(Contact)
+    if cold == "1":
+        # Cold-outreach pool: KVK + Google-Maps prospects only — never existing
+        # customers, never form-submitted leads.
+        q = q.where(
+            (Contact.source_summary.like("%kvk%") | Contact.source_summary.like("%prospect%")),
+            Contact.is_customer.is_(False),
+            ~Contact.source_summary.like("%lead%"),
+            ~Contact.source_summary.like("%customer%"),
+        )
+    if search:
+        like = f"%{search.lower()}%"
+        q = q.where(
+            or_(
+                func.lower(Contact.display_name).like(like),
+                func.lower(Contact.company_name).like(like),
+                func.lower(Contact.primary_email).like(like),
+                func.lower(Contact.primary_phone).like(like),
+                func.lower(Contact.contact_person).like(like),
+            )
+        )
+    if sector:
+        q = q.where(func.lower(Contact.sector) == sector.lower())
+    if country:
+        q = q.where(func.upper(Contact.country_code) == country.upper())
+    if source:
+        q = q.where(Contact.source_summary.like(f"%{source}%"))
+    if has_email == "1":
+        q = q.where(Contact.primary_email != "")
+    elif has_email == "0":
+        q = q.where(Contact.primary_email == "")
+    if customers_only == "1":
+        q = q.where(Contact.is_customer.is_(True))
+    return q
+
+
+@app.get("/contacts/export.csv")
+def contacts_export(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    search: str = "",
+    sector: str = "",
+    country: str = "",
+    source: str = "",
+    has_email: str = "",
+    customers_only: str = "",
+    cold: str = "",
+) -> StreamingResponse:
+    rows = db.scalars(
+        _contacts_query(search, sector, country, source, has_email, customers_only, cold)
+        .order_by(Contact.lifetime_value.desc(), Contact.id.asc())
+    ).all()
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "display_name", "company_name", "contact_person", "email",
+                     "phone", "city", "country", "sector", "tier", "is_customer",
+                     "lifetime_value", "sources", "do_not_contact"])
+    for c in rows:
+        writer.writerow([c.id, c.display_name, c.company_name, c.contact_person,
+                         c.primary_email, c.primary_phone, c.city, c.country_code,
+                         c.sector, c.tier, c.is_customer, c.lifetime_value,
+                         c.source_summary, c.do_not_contact])
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=contacts.csv"},
+    )
+
+
+@app.post("/contacts/backfill")
+def contacts_backfill(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    """Build/refresh contacts from customers + KVK + leads + prospects (background)."""
+    def _run() -> None:
+        session = SessionLocal()
+        try:
+            stats = contacts_module.backfill_contacts(session)
+            print(f"[contacts] backfill done: {stats}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[contacts] backfill error: {exc}")
+        finally:
+            session.close()
+
+    Thread(target=_run, daemon=True, name="contacts-backfill").start()
+    msg = "Contact backfill started in the background. Refresh in a minute to see contacts."
+    return RedirectResponse(f"/contacts?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.get("/contacts", response_class=HTMLResponse)
+def contacts_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    page: int = 1,
+    per_page: int = 50,
+    search: str = "",
+    sector: str = "",
+    country: str = "",
+    source: str = "",
+    has_email: str = "",
+    customers_only: str = "",
+    cold: str = "",
+    flash: str = "",
+) -> HTMLResponse:
+    page = max(1, page)
+    per_page = max(10, min(200, per_page))
+    base = _contacts_query(search, sector, country, source, has_email, customers_only, cold)
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    rows = db.scalars(
+        base.order_by(Contact.last_activity_at.desc().nullslast(), Contact.lifetime_value.desc(), Contact.id.asc())
+        .offset((page - 1) * per_page).limit(per_page)
+    ).all()
+    grand_total = db.scalar(select(func.count(Contact.id))) or 0
+    customer_count = db.scalar(select(func.count(Contact.id)).where(Contact.is_customer.is_(True))) or 0
+    sectors = [s for (s,) in db.execute(
+        select(Contact.sector).where(Contact.sector != "").group_by(Contact.sector).order_by(Contact.sector)
+    ).all()]
+    return templates.TemplateResponse(
+        request,
+        "contacts.html",
+        {
+            "request": request, "app_name": settings.app_name,
+            "contacts": rows, "page": page, "per_page": per_page, "total": total,
+            "total_pages": total_pages, "grand_total": grand_total,
+            "customer_count": customer_count, "sectors": sectors,
+            "search": search, "sector": sector, "country": country, "source": source,
+            "has_email": has_email, "customers_only": customers_only, "cold": cold, "flash": flash,
+        },
+    )
+
+
+@app.get("/contacts/{contact_id}", response_class=HTMLResponse)
+def contact_detail(
+    contact_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    flash: str = "",
+) -> HTMLResponse:
+    contact = db.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    timeline = contacts_module.get_timeline(db, contact)
+    wa_status = whatsapp_module.status()
+    wa_templates = db.scalars(
+        select(WhatsappTemplate).where(WhatsappTemplate.is_active.is_(True)).order_by(WhatsappTemplate.name)
+    ).all() if wa_status["configured"] else []
+
+    # LinkedIn manual-outreach helper: profile URL + a ready-to-paste opener.
+    linkedin_url = next(
+        (c.value for c in contact.channels if c.channel_type == "linkedin" and c.value), ""
+    )
+    first_name = (contact.contact_person or "").split()[0] if contact.contact_person else "there"
+    company = contact.company_name or contact.display_name
+    linkedin_opener = (
+        f"Hi {first_name}, I came across {company} and wanted to reach out. "
+        f"Schild Inc makes premium metal labels and branded accessories for bike shops "
+        f"— would a couple of free design samples be useful? No pressure either way."
+    )
+    # Cold-outreach eligibility: KVK/Maps prospects only, never customers or form leads.
+    src = contact.source_summary or ""
+    is_cold_eligible = (("kvk" in src or "prospect" in src)
+                        and not contact.is_customer
+                        and "lead" not in src and "customer" not in src)
+
+    return templates.TemplateResponse(
+        request,
+        "contact_detail.html",
+        {
+            "request": request, "app_name": settings.app_name,
+            "contact": contact, "channels": contact.channels, "timeline": timeline,
+            "wa_status": wa_status, "wa_templates": wa_templates,
+            "linkedin_url": linkedin_url, "linkedin_opener": linkedin_opener,
+            "is_cold_eligible": is_cold_eligible,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/contacts/{contact_id}/note")
+def contact_add_note(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_admin),
+    note: str = Form(...),
+) -> RedirectResponse:
+    contact = db.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    contacts_module.log_activity(
+        db, contact_id, "note", channel="system", title=f"Note by {user}", body=note,
+    )
+    return RedirectResponse(f"/contacts/{contact_id}?flash={quote_plus('Note added')}", status_code=303)
+
+
+@app.post("/contacts/{contact_id}/linkedin-log")
+def contact_linkedin_log(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_admin),
+    message: str = Form(""),
+) -> RedirectResponse:
+    """Log a manual LinkedIn outreach to the timeline (you send it by hand on
+    LinkedIn — this is compliant tracking, no automation)."""
+    contact = db.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    contacts_module.log_activity(
+        db, contact_id, "linkedin_out", channel="linkedin", direction="out",
+        title=f"LinkedIn message sent (by {user})", body=message[:1000],
+    )
+    return RedirectResponse(f"/contacts/{contact_id}?flash={quote_plus('Logged LinkedIn outreach')}", status_code=303)
+
+
+# ===========================================================================
+# In-house CRM — Phase 2: Shared Inbox (Trengo-style) + two-way email
+# ===========================================================================
+
+
+def _current_agent(db: Session, agent_id: int | None = None) -> Agent | None:
+    if agent_id:
+        a = db.get(Agent, agent_id)
+        if a:
+            return a
+    return db.scalar(select(Agent).where(Agent.is_active.is_(True)).order_by(Agent.id.asc()))
+
+
+def _text_to_html(text: str) -> str:
+    return html_lib.escape(text or "").replace("\n", "<br>")
+
+
+@app.get("/inbox", response_class=HTMLResponse)
+def inbox_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    status: str = "open",
+    channel: str = "",
+    assignee: int = 0,
+    scope: str = "",        # ""|mine|unassigned|all
+    search: str = "",
+    conv: int = 0,
+    flash: str = "",
+) -> HTMLResponse:
+    status_filter = "" if (status == "all" or scope == "all") else status
+    conversations = inbox_module.list_conversations(
+        db,
+        status=status_filter,
+        channel=channel,
+        assignee_id=(assignee or None) if scope != "unassigned" else None,
+        unassigned=(scope == "unassigned"),
+        search=search,
+    )
+    selected = db.get(Conversation, conv) if conv else (conversations[0] if conversations else None)
+    messages = []
+    contact = None
+    if selected is not None:
+        inbox_module.mark_read(db, selected)
+        messages = db.scalars(
+            select(Message).where(Message.conversation_id == selected.id).order_by(Message.occurred_at.asc(), Message.id.asc())
+        ).all()
+        contact = selected.contact
+    agents = db.scalars(select(Agent).where(Agent.is_active.is_(True)).order_by(Agent.name)).all()
+    canned = db.scalars(select(CannedReply).where(CannedReply.is_active.is_(True)).order_by(CannedReply.title)).all()
+    gmail = gmail_sender.connection_status(db)
+    wa_templates = db.scalars(select(WhatsappTemplate).where(WhatsappTemplate.is_active.is_(True)).order_by(WhatsappTemplate.name)).all()
+    wa_window_open = (
+        whatsapp_module.within_service_window(db, selected)
+        if (selected is not None and selected.channel == "whatsapp") else False
+    )
+    return templates.TemplateResponse(
+        request,
+        "inbox.html",
+        {
+            "request": request, "app_name": settings.app_name,
+            "conversations": conversations, "selected": selected, "messages": messages,
+            "contact": contact, "agents": agents, "canned": canned,
+            "counts": inbox_module.status_counts(db), "gmail": gmail,
+            "wa_status": whatsapp_module.status(), "wa_templates": wa_templates,
+            "wa_window_open": wa_window_open,
+            "status": status, "channel": channel, "scope": scope, "search": search,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/inbox/poll")
+def inbox_poll(db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    if gmail_sender.get_active_account(db) is None:
+        return RedirectResponse(f"/inbox?flash={quote_plus('Connect Gmail first (on the Email Campaigns page).')}", status_code=303)
+
+    def _run() -> None:
+        session = SessionLocal()
+        try:
+            stats = poll_inbound(session)
+            print(f"[inbox] manual poll: {stats}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[inbox] manual poll error: {exc}")
+        finally:
+            session.close()
+
+    Thread(target=_run, daemon=True, name="inbox-manual-poll").start()
+    return RedirectResponse(f"/inbox?flash={quote_plus('Checking for new replies… refresh in a few seconds.')}", status_code=303)
+
+
+@app.post("/inbox/{conv_id}/reply")
+def inbox_reply(
+    conv_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    body_text: str = Form(...),
+    agent_id: int = Form(0),
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Prefer the logged-in agent for attribution; fall back to the dropdown.
+    agent = auth_module.current_agent(request, db) or _current_agent(db, agent_id)
+
+    # WhatsApp reply (free-form text only inside the 24h service window).
+    if conv.channel == "whatsapp":
+        to_phone = conv.contact_phone or (conv.contact.primary_phone if conv.contact else "")
+        if not to_phone:
+            return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('No WhatsApp number on this conversation.')}", status_code=303)
+        if not whatsapp_module.within_service_window(db, conv):
+            return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Outside the 24h window — send an approved template instead.')}", status_code=303)
+        result = whatsapp_module.send_text(to_phone, body_text)
+        inbox_module.add_outbound_message(
+            db, conv, agent=agent, from_addr=settings.whatsapp_phone_number_id, to_addr=to_phone,
+            subject="WhatsApp", body_text=body_text, body_html="",
+            external_message_id=result.message_id, external_thread_id=conv.external_thread_id,
+            status="sent" if result.ok else "failed", error="" if result.ok else result.error,
+            channel="whatsapp",
+        )
+        msg = "WhatsApp sent" if result.ok else f"Send failed: {result.error[:140]}"
+        return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus(msg)}", status_code=303)
+
+    # Instagram reply (only inside the 24h window; Meta blocks cold/late DMs).
+    if conv.channel == "instagram":
+        igsid = conv.external_thread_id
+        if not igsid:
+            return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('No Instagram recipient on this conversation.')}", status_code=303)
+        if not instagram_module.within_service_window(db, conv):
+            return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Outside the 24h Instagram window — Meta does not allow a reply now.')}", status_code=303)
+        result = instagram_module.send_text(igsid, body_text)
+        inbox_module.add_outbound_message(
+            db, conv, agent=agent, from_addr=settings.instagram_account_id, to_addr=igsid,
+            subject="Instagram", body_text=body_text, body_html="",
+            external_message_id=result.message_id, external_thread_id=igsid,
+            status="sent" if result.ok else "failed", error="" if result.ok else result.error,
+            channel="instagram",
+        )
+        msg = "Instagram reply sent" if result.ok else f"Send failed: {result.error[:140]}"
+        return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus(msg)}", status_code=303)
+
+    to_email = conv.contact_email or (conv.contact.primary_email if conv.contact else "")
+    if not to_email:
+        return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('No recipient email on this conversation.')}", status_code=303)
+
+    subject = conv.subject if conv.subject.lower().startswith("re:") else f"Re: {conv.subject}"
+    last_in = db.scalar(
+        select(Message).where(Message.conversation_id == conv.id, Message.direction == "in")
+        .order_by(Message.id.desc())
+    )
+    in_reply_to = last_in.external_message_id if last_in else ""
+
+    result = gmail_sender.send_message(
+        db,
+        to_email=to_email,
+        subject=subject,
+        body_html=_text_to_html(body_text),
+        body_text=body_text,
+        from_alias=settings.gmail_send_as,
+        from_name=settings.gmail_sender_name,
+        reply_to=settings.reply_to_email,
+        thread_id=conv.external_thread_id,
+        in_reply_to=in_reply_to,
+    )
+    inbox_module.add_outbound_message(
+        db, conv, agent=agent, from_addr=settings.gmail_send_as, to_addr=to_email,
+        subject=subject, body_text=body_text, body_html=_text_to_html(body_text),
+        external_message_id=result.message_id, external_thread_id=conv.external_thread_id,
+        status="sent" if result.ok else "failed", error="" if result.ok else result.error,
+    )
+    msg = "Reply sent" if result.ok else f"Send failed: {result.error[:140]}"
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/inbox/{conv_id}/note")
+def inbox_note(
+    conv_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    body: str = Form(...),
+    agent_id: int = Form(0),
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    agent = auth_module.current_agent(request, db) or _current_agent(db, agent_id)
+    inbox_module.add_internal_note(db, conv, agent=agent, body=body)
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Internal note added')}", status_code=303)
+
+
+@app.post("/inbox/{conv_id}/assign")
+def inbox_assign(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    agent_id: int = Form(0),
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    inbox_module.assign(db, conv, agent_id or None)
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Assignment updated')}", status_code=303)
+
+
+@app.post("/inbox/{conv_id}/status")
+def inbox_status(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    status: str = Form(...),
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    inbox_module.set_status(db, conv, status)
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Status: ' + status)}", status_code=303)
+
+
+@app.post("/inbox/{conv_id}/labels")
+def inbox_labels(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    labels: str = Form(""),
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    inbox_module.set_labels(db, conv, labels)
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Labels updated')}", status_code=303)
+
+
+# ── Inbox settings: agents + canned replies ─────────────────────────────────
+
+
+@app.get("/inbox/settings", response_class=HTMLResponse)
+def inbox_settings(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    flash: str = "",
+) -> HTMLResponse:
+    agents = db.scalars(select(Agent).order_by(Agent.id.asc())).all()
+    canned = db.scalars(select(CannedReply).order_by(CannedReply.category, CannedReply.title)).all()
+    wa_templates = db.scalars(select(WhatsappTemplate).order_by(WhatsappTemplate.name)).all()
+    return templates.TemplateResponse(
+        request,
+        "inbox_settings.html",
+        {
+            "request": request, "app_name": settings.app_name,
+            "agents": agents, "canned": canned, "flash": flash,
+            "wa_status": whatsapp_module.status(), "wa_templates": wa_templates,
+        },
+    )
+
+
+@app.post("/inbox/settings/agents")
+def inbox_add_agent(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+    name: str = Form(...),
+    email: str = Form(...),
+    role: str = Form("agent"),
+    password: str = Form(""),
+) -> RedirectResponse:
+    norm = normalize_email(email)
+    existing = db.scalar(select(Agent).where(Agent.email == norm))
+    if existing:
+        existing.name = name.strip()
+        existing.role = role if role in ("admin", "agent") else "agent"
+        existing.is_active = True
+        if password.strip():
+            existing.password_hash = auth_module.hash_password(password.strip())
+    else:
+        db.add(Agent(
+            name=name.strip(), email=norm,
+            role=role if role in ("admin", "agent") else "agent", is_active=True,
+            password_hash=auth_module.hash_password(password.strip()) if password.strip() else "",
+        ))
+    log_audit(db, actor=auth_module.actor_label(request, db), action="agent.save",
+              target_type="agent", target_id=norm, detail=f"role={role}", commit=False)
+    db.commit()
+    return RedirectResponse(f"/inbox/settings?flash={quote_plus('Teammate saved')}", status_code=303)
+
+
+@app.post("/inbox/settings/agents/{agent_id}/password")
+def inbox_set_agent_password(
+    agent_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+    password: str = Form(...),
+) -> RedirectResponse:
+    agent = db.get(Agent, agent_id)
+    if agent and password.strip():
+        agent.password_hash = auth_module.hash_password(password.strip())
+        log_audit(db, actor=auth_module.actor_label(request, db), action="agent.set_password",
+                  target_type="agent", target_id=agent.email, commit=False)
+        db.commit()
+    return RedirectResponse(f"/inbox/settings?flash={quote_plus('Password set for ' + (agent.name if agent else 'agent'))}", status_code=303)
+
+
+@app.post("/inbox/settings/agents/{agent_id}/delete")
+def inbox_remove_agent(
+    agent_id: int, request: Request, db: Session = Depends(get_db),
+    _: str = Depends(require_admin), __: bool = Depends(require_admin_role),
+) -> RedirectResponse:
+    agent = db.get(Agent, agent_id)
+    if agent:
+        agent.is_active = False
+        log_audit(db, actor=auth_module.actor_label(request, db), action="agent.deactivate",
+                  target_type="agent", target_id=agent.email, commit=False)
+        db.commit()
+    return RedirectResponse(f"/inbox/settings?flash={quote_plus('Teammate deactivated')}", status_code=303)
+
+
+@app.post("/inbox/settings/canned")
+def inbox_add_canned(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    title: str = Form(...),
+    category: str = Form("general"),
+    body: str = Form(...),
+    canned_id: int = Form(0),
+) -> RedirectResponse:
+    cr = db.get(CannedReply, canned_id) if canned_id else None
+    if cr is None:
+        cr = CannedReply(is_starter=False)
+        db.add(cr)
+    cr.title = title.strip()
+    cr.category = category.strip() or "general"
+    cr.body = body
+    cr.is_active = True
+    db.commit()
+    return RedirectResponse(f"/inbox/settings?flash={quote_plus('Canned reply saved')}", status_code=303)
+
+
+@app.post("/inbox/settings/canned/{canned_id}/delete")
+def inbox_remove_canned(
+    canned_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> RedirectResponse:
+    cr = db.get(CannedReply, canned_id)
+    if cr:
+        if cr.is_starter:
+            cr.is_active = False
+        else:
+            db.delete(cr)
+        db.commit()
+    return RedirectResponse(f"/inbox/settings?flash={quote_plus('Canned reply removed')}", status_code=303)
+
+
+# ===========================================================================
+# In-house CRM — Phase 3: WhatsApp (Meta Cloud API)
+# ===========================================================================
+
+
+@app.get("/webhooks/whatsapp")
+def whatsapp_webhook_verify(
+    mode: str = Query("", alias="hub.mode"),
+    token: str = Query("", alias="hub.verify_token"),
+    challenge: str = Query("", alias="hub.challenge"),
+) -> PlainTextResponse:
+    """Meta webhook verification handshake (public, no auth)."""
+    result = whatsapp_module.verify_webhook(mode, token, challenge)
+    if result is None:
+        raise HTTPException(status_code=403, detail="verification failed")
+    return PlainTextResponse(result)
+
+
+@app.post("/webhooks/whatsapp")
+async def whatsapp_webhook_receive(request: Request, db: Session = Depends(get_db)) -> PlainTextResponse:
+    """Inbound WhatsApp messages + delivery statuses (public, signature-verified)."""
+    raw = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    if settings.whatsapp_app_secret and not whatsapp_module.verify_signature(raw, signature):
+        raise HTTPException(status_code=403, detail="bad signature")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return PlainTextResponse("ok")
+    try:
+        whatsapp_module.process_webhook(db, payload)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[whatsapp] webhook processing error: {exc}")
+    # Always 200 quickly so Meta doesn't retry/disable the webhook.
+    return PlainTextResponse("ok")
+
+
+@app.get("/webhooks/instagram")
+def instagram_webhook_verify(
+    mode: str = Query("", alias="hub.mode"),
+    token: str = Query("", alias="hub.verify_token"),
+    challenge: str = Query("", alias="hub.challenge"),
+) -> PlainTextResponse:
+    """Meta webhook verification handshake for Instagram (public, no auth)."""
+    result = instagram_module.verify_webhook(mode, token, challenge)
+    if result is None:
+        raise HTTPException(status_code=403, detail="verification failed")
+    return PlainTextResponse(result)
+
+
+@app.post("/webhooks/instagram")
+async def instagram_webhook_receive(request: Request, db: Session = Depends(get_db)) -> PlainTextResponse:
+    """Inbound Instagram DMs (public, signature-verified). Threads into /inbox."""
+    raw = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    if settings.instagram_app_secret and not instagram_module.verify_signature(raw, signature):
+        raise HTTPException(status_code=403, detail="bad signature")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return PlainTextResponse("ok")
+    try:
+        instagram_module.process_webhook(db, payload)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[instagram] webhook processing error: {exc}")
+    return PlainTextResponse("ok")
+
+
+@app.post("/contacts/{contact_id}/whatsapp")
+def contact_start_whatsapp(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    template_id: int = Form(...),
+    params: str = Form(""),
+) -> RedirectResponse:
+    contact = db.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    phone = contact.primary_phone
+    if not phone:
+        ch = db.scalar(
+            select(ContactChannel).where(
+                ContactChannel.contact_id == contact.id,
+                ContactChannel.channel_type.in_(["whatsapp", "phone"]),
+            )
+        )
+        phone = ch.value_normalized if ch else ""
+    if not phone:
+        return RedirectResponse(f"/contacts/{contact_id}?flash={quote_plus('No phone/WhatsApp number on this contact.')}", status_code=303)
+    tpl = db.get(WhatsappTemplate, template_id)
+    if tpl is None:
+        return RedirectResponse(f"/contacts/{contact_id}?flash={quote_plus('Pick an approved template to open a WhatsApp chat.')}", status_code=303)
+    conv = inbox_module.get_or_create_whatsapp_conversation(
+        db, contact=contact, phone=phone, external_thread_id=whatsapp_module.to_wa_number(phone),
+    )
+    body_params = [p.strip() for p in params.split("|") if p.strip()] or None
+    result = whatsapp_module.send_template(phone, tpl.name, tpl.language, body_params)
+    inbox_module.add_outbound_message(
+        db, conv, agent=None, from_addr=settings.whatsapp_phone_number_id, to_addr=phone,
+        subject="WhatsApp", body_text=f"[template: {tpl.name}] {tpl.body_preview}", body_html="",
+        external_message_id=result.message_id, external_thread_id=conv.external_thread_id,
+        status="sent" if result.ok else "failed", error="" if result.ok else result.error, channel="whatsapp",
+    )
+    msg = "WhatsApp started" if result.ok else f"Send failed: {result.error[:140]}"
+    return RedirectResponse(f"/inbox?conv={conv.id}&flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/inbox/settings/wa-template")
+def add_wa_template(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+    name: str = Form(...),
+    language: str = Form("en"),
+    category: str = Form(""),
+    body_preview: str = Form(""),
+    param_count: int = Form(0),
+) -> RedirectResponse:
+    existing = db.scalar(select(WhatsappTemplate).where(WhatsappTemplate.name == name.strip(), WhatsappTemplate.language == language.strip()))
+    if existing:
+        existing.category = category
+        existing.body_preview = body_preview
+        existing.param_count = param_count
+        existing.is_active = True
+    else:
+        db.add(WhatsappTemplate(
+            name=name.strip(), language=language.strip() or "en", category=category,
+            body_preview=body_preview, param_count=param_count, is_active=True,
+        ))
+    db.commit()
+    return RedirectResponse(f"/inbox/settings?flash={quote_plus('WhatsApp template saved')}", status_code=303)
+
+
+@app.post("/inbox/settings/wa-template/{tpl_id}/delete")
+def delete_wa_template(
+    tpl_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+) -> RedirectResponse:
+    tpl = db.get(WhatsappTemplate, tpl_id)
+    if tpl:
+        db.delete(tpl)
+        db.commit()
+    return RedirectResponse(f"/inbox/settings?flash={quote_plus('WhatsApp template removed')}", status_code=303)
+
+
+# NOTE: declared AFTER the static /inbox/settings/* routes above so the literal
+# "settings" path can't be captured as {conv_id} (FastAPI matches in order).
+@app.post("/inbox/{conv_id}/wa-template")
+def inbox_wa_template(
+    conv_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    template_id: int = Form(...),
+    params: str = Form(""),
+    agent_id: int = Form(0),
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    if conv is None or conv.channel != "whatsapp":
+        return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Not a WhatsApp conversation.')}", status_code=303)
+    tpl = db.get(WhatsappTemplate, template_id)
+    if tpl is None:
+        return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Pick a template.')}", status_code=303)
+    to_phone = conv.contact_phone or (conv.contact.primary_phone if conv.contact else "")
+    body_params = [p.strip() for p in params.split("|") if p.strip()] or None
+    result = whatsapp_module.send_template(to_phone, tpl.name, tpl.language, body_params)
+    inbox_module.add_outbound_message(
+        db, conv, agent=_current_agent(db, agent_id), from_addr=settings.whatsapp_phone_number_id,
+        to_addr=to_phone, subject="WhatsApp", body_text=f"[template: {tpl.name}] {tpl.body_preview}",
+        body_html="", external_message_id=result.message_id, external_thread_id=conv.external_thread_id,
+        status="sent" if result.ok else "failed", error="" if result.ok else result.error, channel="whatsapp",
+    )
+    msg = "Template sent" if result.ok else f"Send failed: {result.error[:140]}"
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus(msg)}", status_code=303)
+
+
+# ===========================================================================
+# In-house CRM — Phase 6: agent login (roles), reporting, audit, real-time
+# ===========================================================================
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin), flash: str = "") -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "login.html",
+        {"request": request, "app_name": settings.app_name,
+         "current": auth_module.current_agent(request, db), "flash": flash},
+    )
+
+
+@app.post("/login")
+def login_submit(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    email: str = Form(...),
+    password: str = Form(...),
+) -> RedirectResponse:
+    agent = auth_module.authenticate(db, email, password)
+    if agent is None:
+        return RedirectResponse(f"/login?flash={quote_plus('Invalid email or password.')}", status_code=303)
+    agent.last_login_at = datetime.utcnow()
+    log_audit(db, actor=agent.name, action="agent.login", agent_id=agent.id, target_type="agent", target_id=agent.email)
+    resp = RedirectResponse("/inbox", status_code=303)
+    resp.set_cookie(
+        auth_module.COOKIE_NAME, auth_module.make_session_token(agent.id),
+        max_age=settings.session_ttl_hours * 3600, httponly=True, samesite="lax",
+    )
+    return resp
+
+
+@app.get("/logout")
+def logout() -> RedirectResponse:
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(auth_module.COOKIE_NAME)
+    return resp
+
+
+@app.get("/api/me")
+def api_me(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> JSONResponse:
+    agent = auth_module.current_agent(request, db)
+    counts = reporting_module.live_counts(db)
+    return JSONResponse({
+        "agent": agent.name if agent else "",
+        "role": agent.role if agent else "owner",
+        "is_admin": auth_module.is_admin(request, db),
+        "unread": counts["unread"], "open": counts["open"],
+    })
+
+
+@app.get("/api/stream")
+async def api_stream(request: Request, _: str = Depends(require_admin)):
+    """Server-Sent Events: pushes live inbox counts when they change."""
+    async def event_gen():
+        last = None
+        # Cap lifetime so connections recycle (proxies, redeploys).
+        for _ in range(450):  # ~1h at 8s
+            if await request.is_disconnected():
+                break
+            try:
+                counts = await asyncio.to_thread(_live_counts_safe)
+            except Exception:
+                counts = {}
+            data = json.dumps(counts)
+            if data != last:
+                yield f"data: {data}\n\n"
+                last = data
+            else:
+                yield ": keep-alive\n\n"
+            await asyncio.sleep(8)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive",
+    })
+
+
+def _live_counts_safe() -> dict:
+    session = SessionLocal()
+    try:
+        return reporting_module.live_counts(session)
+    finally:
+        session.close()
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_center(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    """One-stop setup dashboard — live status + copy-paste values + buttons."""
+    gmail = gmail_sender.connection_status(db)
+    wa = whatsapp_module.status()
+    ig = instagram_module.status()
+    contact_count = db.scalar(select(func.count(Contact.id))) or 0
+    cold_count = db.scalar(
+        select(func.count(Contact.id)).where(
+            (Contact.source_summary.like("%kvk%") | Contact.source_summary.like("%prospect%")),
+            Contact.is_customer.is_(False),
+            ~Contact.source_summary.like("%lead%"),
+            ~Contact.source_summary.like("%customer%"),
+        )
+    ) or 0
+    agent_count = db.scalar(select(func.count(Agent.id))) or 0
+    address_set = bool(settings.company_address) and "<" not in settings.company_address
+
+    # Email (Gmail) checklist
+    email_steps = [
+        {"label": "OAuth client set in Railway (GMAIL_CLIENT_ID + SECRET)", "done": gmail["configured"]},
+        {"label": "Gmail account connected", "done": gmail["connected"]},
+        {"label": f"Send-as alias verified ({gmail.get('default_send_as','')})",
+         "done": gmail["connected"] and (gmail.get("default_send_as", "") in gmail.get("send_as_aliases", []))},
+        {"label": "Company address set (legal footer)", "done": address_set},
+    ]
+    # Instagram checklist
+    ig_steps = [
+        {"label": "INSTAGRAM_ACCOUNT_ID + ACCESS_TOKEN set", "done": ig["configured"]},
+        {"label": "Verify token set", "done": ig["verify_token_set"]},
+        {"label": "App secret set (signature check)", "done": ig["has_app_secret"]},
+        {"label": "Webhook registered in Meta (subscribe to 'messages')", "done": False, "manual": True},
+    ]
+    # Contacts checklist
+    contacts_steps = [
+        {"label": f"Contacts built ({contact_count:,} total, {cold_count:,} cold-eligible)", "done": contact_count > 0},
+    ]
+
+    def pct(steps):
+        auto = [s for s in steps if not s.get("manual")]
+        return int(100 * sum(1 for s in auto if s["done"]) / max(1, len(auto)))
+
+    return templates.TemplateResponse(
+        request,
+        "setup.html",
+        {
+            "request": request, "app_name": settings.app_name,
+            "gmail": gmail, "wa": wa, "ig": ig,
+            "email_steps": email_steps, "ig_steps": ig_steps, "contacts_steps": contacts_steps,
+            "email_pct": pct(email_steps), "ig_pct": pct(ig_steps), "contacts_pct": pct(contacts_steps),
+            "contact_count": contact_count, "cold_count": cold_count, "agent_count": agent_count,
+            "redirect_uri": gmail.get("redirect_uri", ""),
+        },
+    )
+
+
+@app.get("/reports", response_class=HTMLResponse)
+def reports_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    days: int = 30,
+) -> HTMLResponse:
+    days = max(1, min(365, days))
+    report = reporting_module.build_report(db, days=days)
+    return templates.TemplateResponse(
+        request, "reports.html",
+        {"request": request, "app_name": settings.app_name, "report": report, "days": days},
+    )
+
+
+@app.get("/audit", response_class=HTMLResponse)
+def audit_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+) -> HTMLResponse:
+    entries = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(300)).all()
+    return templates.TemplateResponse(
+        request, "audit.html",
+        {"request": request, "app_name": settings.app_name, "entries": entries},
+    )

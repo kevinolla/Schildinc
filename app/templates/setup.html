@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="card">
+  <h2 style="margin:0;">Setup Center</h2>
+  <p style="margin:4px 0 0 0;color:#6b7280;">Connect your channels here. Each card shows what's done (✓) and what's left. Copy the values into Google / Meta / Railway, then come back and refresh.</p>
+</section>
+
+{% macro steps_card(title, icon, pct, steps) %}
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;">{{ icon }} {{ title }}</h3>
+    <span style="font-size:13px;color:#6b7280;">{{ pct }}% ready</span>
+  </div>
+  <div style="height:6px;background:#f0ece2;border-radius:4px;margin:8px 0 14px 0;">
+    <div style="height:6px;border-radius:4px;width:{{ pct }}%;background:{% if pct==100 %}#16a34a{% else %}#e4c977{% endif %};"></div>
+  </div>
+  <ul style="list-style:none;padding:0;margin:0 0 12px 0;">
+    {% for s in steps %}
+    <li style="padding:4px 0;font-size:14px;">
+      {% if s.done %}<span style="color:#16a34a;">✓</span>
+      {% elif s.manual %}<span style="color:#9aa0a6;">○</span>
+      {% else %}<span style="color:#ef4444;">○</span>{% endif %}
+      <span style="margin-left:6px;{% if s.done %}color:#6b7280;{% endif %}">{{ s.label }}{% if s.manual %} <em style="color:#9aa0a6;font-size:12px;">(do this in Meta)</em>{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {{ caller() }}
+</section>
+{% endmacro %}
+
+<!-- 1. Contacts -->
+{% call steps_card("Step 1 — Build your audience", "👥", contacts_pct, contacts_steps) %}
+  {% if contact_count == 0 %}
+  <p style="color:#6b7280;font-size:13px;margin-top:0;">Merge your customers, KVK companies, leads & prospects into one contact hub. Safe to run anytime.</p>
+  <form method="post" action="/contacts/backfill">
+    <button type="submit" style="padding:9px 16px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Build / refresh contacts</button>
+  </form>
+  {% else %}
+  <p style="margin:0;">✓ {{ "{:,}".format(contact_count) }} contacts · <a href="/contacts?cold=1">{{ "{:,}".format(cold_count) }} in the cold-outreach pool</a> (KVK + Maps, no customers/leads).</p>
+  {% endif %}
+{% endcall %}
+
+<!-- 2. Email -->
+{% call steps_card("Step 2 — Email campaigns (Gmail)", "✉️", email_pct, email_steps) %}
+  {% if not gmail.configured %}
+  <p style="font-size:13px;color:#6b7280;margin-top:0;">In <strong>Google Cloud Console</strong>: enable the Gmail API, create an OAuth <em>Web application</em> client, and add this redirect URI:</p>
+  <div style="display:flex;gap:6px;margin-bottom:8px;">
+    <input id="redir" readonly value="{{ redirect_uri }}" style="flex:1;font-family:monospace;font-size:12px;">
+    <button onclick="navigator.clipboard.writeText(document.getElementById('redir').value)" style="padding:7px 12px;background:#f0ece2;border:none;border-radius:8px;cursor:pointer;">Copy</button>
+  </div>
+  <p style="font-size:13px;color:#6b7280;">Then in <strong>Railway → Variables</strong> set: <code>GMAIL_CLIENT_ID</code>, <code>GMAIL_CLIENT_SECRET</code>, <code>GMAIL_SEND_AS</code>, <code>GMAIL_SENDER_NAME</code>, plus <code>COMPANY_ADDRESS</code>/<code>COMPANY_WEBSITE</code> for the legal footer. Railway redeploys, then refresh this page.</p>
+  {% elif not gmail.connected %}
+  <p style="margin-top:0;">OAuth client detected. Now authorize the sending account:</p>
+  <a href="/emails/gmail/connect" style="padding:9px 16px;background:#1a73e8;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">Connect Gmail</a>
+  {% else %}
+  <p style="margin:0 0 8px 0;">✓ Connected as <strong>{{ gmail.account_email }}</strong>, sending as <code>{{ gmail.default_send_as }}</code>.</p>
+  {% if gmail.default_send_as and gmail.send_as_aliases and gmail.default_send_as not in gmail.send_as_aliases %}
+  <p style="color:#b45309;font-size:13px;">⚠️ <code>{{ gmail.default_send_as }}</code> isn't a verified "Send mail as" alias yet — add it in Gmail → Settings → Accounts, or sending will fail.</p>
+  {% endif %}
+  <a href="/emails/campaigns/new" style="padding:9px 16px;background:#101010;color:#e4c977;border-radius:8px;text-decoration:none;font-weight:600;">Create a campaign →</a>
+  {% endif %}
+{% endcall %}
+
+<!-- 3. Instagram -->
+{% call steps_card("Step 3 — Instagram inbox (optional)", "📷", ig_pct, ig_steps) %}
+  <p style="font-size:13px;color:#6b7280;margin-top:0;">Receive Instagram DMs in your inbox and reply within 24h. <strong>Cold DMs aren't possible via the API</strong> (Meta rule) — cold outreach stays on email.</p>
+  <p style="font-size:13px;color:#6b7280;">In <strong>Railway</strong> set <code>INSTAGRAM_ACCOUNT_ID</code>, <code>INSTAGRAM_ACCESS_TOKEN</code>, <code>INSTAGRAM_VERIFY_TOKEN</code>, <code>INSTAGRAM_APP_SECRET</code>. Then in <strong>Meta</strong> register this webhook and subscribe to <code>messages</code>:</p>
+  <div style="display:flex;gap:6px;margin-bottom:6px;">
+    <input id="ighook" readonly value="{{ ig.webhook_url }}" style="flex:1;font-family:monospace;font-size:12px;">
+    <button onclick="navigator.clipboard.writeText(document.getElementById('ighook').value)" style="padding:7px 12px;background:#f0ece2;border:none;border-radius:8px;cursor:pointer;">Copy</button>
+  </div>
+  {% if ig.configured %}<p style="margin:0;color:#16a34a;">✓ Instagram keys detected — finish the Meta webhook step and inbound DMs will appear in <a href="/inbox">/inbox</a>.</p>{% endif %}
+{% endcall %}
+
+<!-- 4. LinkedIn -->
+{% call steps_card("Step 4 — LinkedIn (manual, no setup)", "in", 100, []) %}
+  <p style="margin:0;color:#16a34a;">✓ Nothing to configure. On any contact with a LinkedIn URL you'll see a <strong>"Message on LinkedIn"</strong> helper — open the profile, paste the ready-made opener, send it yourself, and it's logged. Start from the <a href="/contacts?cold=1">cold-outreach pool</a>.</p>
+  <p style="font-size:12px;color:#9aa0a6;margin:6px 0 0 0;">Automated LinkedIn messaging isn't ToS-compliant and risks account bans, so we keep it human + safe.</p>
+{% endcall %}
+
+<section class="card" style="background:#f8f6f0;">
+  <strong>Daily flow once set up:</strong> agents fill emails + owner names automatically →
+  <a href="/contacts?cold=1">cold pool</a> → <a href="/emails">email campaigns</a> →
+  replies land in <a href="/inbox">inbox</a> → track in <a href="/reports">reports</a>.
+</section>
+
+{% endblock %}

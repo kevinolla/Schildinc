@@ -105,10 +105,50 @@ Uncategorized 1,217 · Service 800ish · SteelWork 412 · others.
 | `app/klaviyo_sync.py` | Klaviyo v3 profile push (list `XHgkXM`) |
 | `scripts/email_agent.py` | **Local browser agent** — residential IP, hands-free, multi-channel extractor |
 | `scripts/install-agent-daemon.sh` + `.plist` | macOS launchd installer (always-on agent) |
+| `app/gmail_sender.py` | **Gmail OAuth + send** — refresh token stored in `gmail_accounts` table (Railway FS is ephemeral). Sends via Gmail API `users.messages.send` with send-as alias. |
+| `app/email_engine.py` | **Email campaign engine** — merge fields, open-pixel + click-rewrite + unsubscribe injection, recipient build from KVK/leads/customers, throttled send loop + background daemon. |
+| `app/email_library.py` | **5 starter templates** (English, bike) — cold intro, warm intro, cold follow-up, warm follow-up, VIP. Idempotent seeding via `seed_starter_templates()`; bump `STARTER_SEED_VERSION` to re-seed. |
+| `app/emailing.py` | OLDER prospect-centric outreach (Resend/SMTP, Dutch templates, /queue). Separate from the new Gmail engine. |
+| `app/contacts.py` | **CRM Contact Hub** — strict identity resolution (merge on exact email/phone/name+country), idempotent backfill from customers+KVK+leads+prospects, unified timeline. Page `/contacts`. See `CRM_INHOUSE_BUILD_SPEC.md`. |
+| `app/inbox.py` | **CRM Shared Inbox** — conversation/message logic, assignment, statuses, canned replies, seeding. Page `/inbox` (3-pane Trengo-style). |
+| `app/gmail_inbound.py` | **Two-way email** — polls connected Gmail for replies (needs `gmail.readonly` scope), threads into conversations, auto-creates contacts for unknown senders. Background daemon `start_gmail_inbound_scheduler()`. |
+| `app/whatsapp.py` | **WhatsApp Business Cloud API** (direct Meta) — Graph API send text/template, webhook verify + X-Hub-Signature-256, inbound threading into inbox, 24h service-window check. Routes `GET/POST /webhooks/whatsapp`. Needs `WHATSAPP_*` env vars. |
+| `app/instagram.py` | **Instagram Messaging** (official Meta) — inbound DMs into inbox + replies within 24h window only (NO cold DMs via API). Webhook `GET/POST /webhooks/instagram`. Reuses conversations/messages (channel='instagram'). Needs `INSTAGRAM_*` env vars. LinkedIn cold = manual helper on `/contacts/{id}` (no automation — ToS/ban safe). Cold pool = `/contacts?cold=1` (KVK+Maps, excludes customers+form leads). |
+| `app/auth.py` | **Agent login + roles** (Phase 6) — PBKDF2 passwords, signed session cookie, `current_agent`/`is_admin`/`require_admin_role`. Layered on HTTP Basic: owner=admin, teammates role-limited. `/login` `/logout`. |
+| `app/reporting.py` | **Reports** — email/inbox/contacts rollups + per-agent + avg first-response. Page `/reports`. `live_counts()` powers the SSE badge. |
+| `app/audit.py` | **Audit log** — `log_audit()` on sensitive actions; admin-only `/audit` view. |
 
 ---
 
-## Migrations (current head: 0012)
+## Email engine (Gmail-backed campaigns) — added 2026-06-02
+
+A full CRM email system at **`/emails`** (nav: "Email Campaigns"), separate
+from the older `/queue` prospect outreach.
+
+- **Send transport**: Gmail API (free tier). OAuth "Web app" client →
+  `GMAIL_CLIENT_ID`/`GMAIL_CLIENT_SECRET`. Refresh token stored in
+  `gmail_accounts` table. Redirect URI = `{APP_BASE_URL}/emails/gmail/callback`
+  (must be registered in Google Cloud Console).
+- **Send-as alias**: `GMAIL_SEND_AS` (e.g. `sales@schildinc.com`) MUST be a
+  *verified* "Send mail as" alias on the authorized Gmail account — a plain
+  forwarding address is NOT enough (Gmail rejects the From header).
+- **Audiences**: KVK companies (excludes already-clients + no-email), FB/web
+  leads, existing customers — filter by tier/sector/country or pass explicit
+  `?ids=` from a list page.
+- **Tracking**: open pixel `GET /e/o/{token}.gif`, click redirect
+  `GET /e/c/{token}?u=`, unsubscribe `GET|POST /e/u/{token}` (RFC 8058
+  one-click + adds a `SuppressionEntry`). These 3 endpoints are PUBLIC (no auth).
+- **Throttling**: `GMAIL_DAILY_LIMIT` (default 80 — gradual warm-up; consumer
+  cap ~500), `GMAIL_SEND_SPACING_SECONDS` (default 8s). Background daemon
+  `start_email_sender_scheduler()` drains `sending` + due `scheduled` campaigns
+  one-at-a-time, never all at once. Ramp the limit up weekly as reputation builds.
+- **Templates**: 5 starter templates seeded on startup; operator can add/edit
+  custom ones at `/emails/templates`. Merge fields:
+  `{{company_name}} {{contact_name}} {{city}} {{country}} {{website}}
+  {{sender_name}} {{reply_to}} {{unsubscribe_url}}`.
+- Suppression is re-checked at send time, so an unsubscribe mid-campaign is honored.
+
+## Migrations (current head: 0013)
 
 | Rev | Adds |
 |---|---|
@@ -124,6 +164,11 @@ Uncategorized 1,217 · Service 800ish · SteelWork 412 · others.
 | 0010 | Customer rich fields (main_sector, sub_sector, customer_segment, contact_person, phone_primary, website) |
 | 0011 | KVK `search_attempts` counter + index |
 | 0012 | **`facebook_leads.main_sector` + `sub_sector` + `classifier_version`** |
+| 0013 | **Email engine**: `email_templates`, `email_campaigns`, `email_campaign_recipients`, `email_events`, `gmail_accounts` |
+| 0014 | **CRM Contact Hub**: `contacts`, `contact_channels`, `activities` |
+| 0015 | **CRM Shared Inbox**: `agents`, `conversations`, `messages`, `canned_replies` + `gmail_accounts.last_poll_at` |
+| 0016 | **CRM WhatsApp**: `whatsapp_templates` (send/receive reuses conversations/messages, channel='whatsapp') |
+| 0017 | **CRM roles + audit**: `agents.password_hash`/`last_login_at`, `audit_logs` |
 
 Alembic runs on container startup (`alembic upgrade head` in start command).
 
