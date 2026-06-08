@@ -157,6 +157,29 @@ body {
   font-weight: 600;
   padding: 12px 12px 4px;
 }
+/* Collapsible nav groups (native <details>) */
+.nav-group { display: block; }
+.nav-group > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 6px;
+}
+.nav-group > summary:hover { background: var(--surface-2, rgba(0,0,0,0.04)); }
+.nav-group > summary::-webkit-details-marker { display: none; }
+.nav-group > summary::after {
+  content: "›";
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  transition: transform .15s ease;
+  transform: rotate(0deg);
+  margin-right: 6px;
+}
+.nav-group[open] > summary::after { transform: rotate(90deg); }
 .topnav a {
   color: var(--text-2);
   font-weight: 500;
