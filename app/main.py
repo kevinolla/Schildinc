@@ -84,6 +84,8 @@ from app.models import (
     EmailTemplate,
     FacebookLead,
     Message,
+    MessageAttachment,
+    Notification,
     GmailAccount,
     KvkCompany,
     KvkEstablishment,
@@ -2798,6 +2800,22 @@ def emails_dashboard(
         .where(EmailTemplate.is_active.is_(True))
         .order_by(EmailTemplate.category, EmailTemplate.name)
     ).all()
+    # Aggregate metrics for the dashboard cards (Klaviyo/Instantly style).
+    agg = db.execute(select(
+        func.coalesce(func.sum(EmailCampaign.sent_count), 0),
+        func.coalesce(func.sum(EmailCampaign.open_count), 0),
+        func.coalesce(func.sum(EmailCampaign.click_count), 0),
+        func.coalesce(func.sum(EmailCampaign.unsubscribe_count), 0),
+    )).one()
+    total_sent, total_open, total_click, total_unsub = (int(x) for x in agg)
+    metrics = {
+        "total_sent": total_sent,
+        "open_rate": round(100 * total_open / total_sent, 1) if total_sent else 0.0,
+        "click_rate": round(100 * total_click / total_sent, 1) if total_sent else 0.0,
+        "unsub_rate": round(100 * total_unsub / total_sent, 1) if total_sent else 0.0,
+        "active": sum(1 for c in campaigns if c.status in ("sending", "scheduled")),
+        "total_campaigns": len(campaigns),
+    }
     return templates.TemplateResponse(
         request,
         "emails.html",
@@ -2809,6 +2827,7 @@ def emails_dashboard(
             "templates_list": template_rows,
             "sent_today": sent_today(db),
             "daily_limit": settings.gmail_daily_limit,
+            "metrics": metrics,
             "flash": flash,
         },
     )
@@ -3475,19 +3494,37 @@ def inbox_page(
     me = auth_module.current_agent(request, db)
     mine_id = me.id if me else None
     team_ids = inbox_module.team_agent_ids(db, team) if team else None
-    conversations = inbox_module.list_conversations(
-        db, view=view, channel=channel, label=label,
-        team_agent_ids=team_ids, mine_id=mine_id, search=search,
-    )
+    if view == "mentions":
+        conv_ids = inbox_module.mention_conversation_ids(db, mine_id) if mine_id else []
+        seen, ordered = set(), []
+        for ci in conv_ids:
+            if ci not in seen:
+                seen.add(ci)
+                c_obj = db.get(Conversation, ci)
+                if c_obj:
+                    ordered.append(c_obj)
+        conversations = ordered
+        if mine_id:
+            inbox_module.mark_mentions_read(db, mine_id)
+    else:
+        conversations = inbox_module.list_conversations(
+            db, view=view, channel=channel, label=label,
+            team_agent_ids=team_ids, mine_id=mine_id, search=search,
+        )
     selected = db.get(Conversation, conv) if conv else (conversations[0] if conversations else None)
     messages = []
     contact = None
+    attachments_by_msg: dict[int, list] = {}
     if selected is not None:
         inbox_module.mark_read(db, selected)
         messages = db.scalars(
             select(Message).where(Message.conversation_id == selected.id).order_by(Message.occurred_at.asc(), Message.id.asc())
         ).all()
         contact = selected.contact
+        msg_ids = [m.id for m in messages]
+        if msg_ids:
+            for att in db.scalars(select(MessageAttachment).where(MessageAttachment.message_id.in_(msg_ids))).all():
+                attachments_by_msg.setdefault(att.message_id, []).append(att)
     agents = db.scalars(select(Agent).where(Agent.is_active.is_(True)).order_by(Agent.name)).all()
     canned = db.scalars(select(CannedReply).where(CannedReply.is_active.is_(True)).order_by(CannedReply.title)).all()
     gmail = gmail_sender.connection_status(db)
@@ -3503,7 +3540,9 @@ def inbox_page(
             "request": request, "app_name": settings.app_name,
             "conversations": conversations, "selected": selected, "messages": messages,
             "contact": contact, "agents": agents, "canned": canned,
+            "attachments_by_msg": attachments_by_msg,
             "counts": inbox_module.rail_counts(db, mine_id), "gmail": gmail,
+            "mention_count": inbox_module.unread_mention_count(db, mine_id),
             "labels": inbox_module.list_labels(db), "teams": inbox_module.list_teams(db),
             "wa_status": whatsapp_module.status(), "wa_templates": wa_templates,
             "wa_window_open": wa_window_open,
@@ -3530,6 +3569,31 @@ def inbox_toggle_favorite(
     conv = db.get(Conversation, conv_id)
     fav = inbox_module.toggle_favorite(db, conv) if conv else False
     return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Added to favorites' if fav else 'Removed from favorites')}", status_code=303)
+
+
+@app.get("/inbox/attachment/{att_id}")
+def inbox_attachment(att_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)):
+    """Stream an inbound email attachment, fetched on-demand from Gmail."""
+    att = db.get(MessageAttachment, att_id)
+    if att is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    try:
+        import base64 as _b64
+        service, _acct = gmail_sender.get_gmail_service(db)
+        data = service.users().messages().attachments().get(
+            userId="me", messageId=att.gmail_message_id, id=att.gmail_attachment_id
+        ).execute()
+        raw = _b64.urlsafe_b64decode(data.get("data", "").encode("utf-8"))
+    except gmail_sender.GmailNotConnected:
+        raise HTTPException(status_code=409, detail="Gmail not connected")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not fetch attachment: {str(exc)[:120]}")
+    safe_name = (att.filename or "attachment").replace('"', "")
+    return StreamingResponse(
+        io.BytesIO(raw),
+        media_type=att.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
 
 
 @app.post("/inbox/poll")
@@ -3649,8 +3713,10 @@ def inbox_note(
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     agent = auth_module.current_agent(request, db) or _current_agent(db, agent_id)
-    inbox_module.add_internal_note(db, conv, agent=agent, body=body)
-    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Internal note added')}", status_code=303)
+    note_msg = inbox_module.add_internal_note(db, conv, agent=agent, body=body)
+    mentioned = inbox_module.create_mentions(db, conv, note_msg, body, agent)
+    flash = "Internal note added" + (f" · {mentioned} teammate(s) mentioned" if mentioned else "")
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus(flash)}", status_code=303)
 
 
 @app.post("/inbox/{conv_id}/assign")
@@ -4046,6 +4112,7 @@ def api_me(request: Request, db: Session = Depends(get_db), _: str = Depends(req
         "role": agent.role if agent else "owner",
         "is_admin": auth_module.is_admin(request, db),
         "unread": counts["unread"], "open": counts["open"],
+        "mentions": inbox_module.unread_mention_count(db, agent.id if agent else None),
     })
 
 

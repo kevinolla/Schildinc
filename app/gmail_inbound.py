@@ -25,7 +25,7 @@ from app import inbox as inbox_module
 from app.config import settings
 from app.db import SessionLocal
 from app.gmail_sender import GmailNotConnected, get_active_account, get_gmail_service
-from app.models import Contact, ContactChannel
+from app.models import Contact, ContactChannel, MessageAttachment
 from app.utils import normalize_email
 
 _scheduler_started = False
@@ -64,6 +64,28 @@ def _extract_bodies(payload: dict) -> tuple[str, str]:
 
 def _headers_map(payload: dict) -> dict[str, str]:
     return {h.get("name", "").lower(): h.get("value", "") for h in (payload.get("headers") or [])}
+
+
+def _extract_attachments(payload: dict) -> list[dict]:
+    """Walk the MIME tree for real attachments (filename + attachmentId)."""
+    out: list[dict] = []
+
+    def walk(part: dict) -> None:
+        filename = part.get("filename") or ""
+        body = part.get("body", {}) or {}
+        att_id = body.get("attachmentId")
+        if filename and att_id:
+            out.append({
+                "filename": filename,
+                "mime_type": part.get("mimeType", "application/octet-stream"),
+                "size": int(body.get("size") or 0),
+                "attachment_id": att_id,
+            })
+        for sub in part.get("parts", []) or []:
+            walk(sub)
+
+    walk(payload or {})
+    return out
 
 
 # ── Contact resolution for inbound senders ──────────────────────────────────
@@ -162,6 +184,15 @@ def poll_inbound(session: Session, *, max_messages: int = 50) -> dict:
         )
         if created:
             threaded += 1
+            # Store attachment metadata (bytes fetched on-demand later).
+            atts = _extract_attachments(payload)
+            for a in atts:
+                session.add(MessageAttachment(
+                    message_id=created.id, filename=a["filename"], mime_type=a["mime_type"],
+                    size_bytes=a["size"], gmail_message_id=mid, gmail_attachment_id=a["attachment_id"],
+                ))
+            if atts:
+                session.commit()
             # If Gmail flagged it SPAM, route the conversation to the Spam view.
             if "SPAM" in (msg.get("labelIds") or []):
                 conv.status = "spam"

@@ -13,12 +13,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import contacts as contacts_module
+import re as _re
+
 from app.models import (
     Agent,
     CannedReply,
     Contact,
     Conversation,
     Message,
+    Notification,
 )
 from app.utils import normalize_email
 
@@ -230,6 +233,69 @@ def add_outbound_message(
         )
     session.commit()
     return msg
+
+
+_MENTION_RE = _re.compile(r"@([A-Za-z0-9._\-]+)")
+
+
+def create_mentions(session: Session, conv: Conversation, message: Message, body: str, by_agent: Agent | None) -> int:
+    """Parse @mentions in a note and create notifications for matched agents.
+
+    Matches @firstname, @full.name, or @email-local-part (case-insensitive)
+    against active agents. Returns the number of notifications created.
+    """
+    tokens = {t.lower() for t in _MENTION_RE.findall(body or "")}
+    if not tokens:
+        return 0
+    created = 0
+    for agent in session.scalars(select(Agent).where(Agent.is_active.is_(True))).all():
+        first = (agent.name or "").split()[0].lower() if agent.name else ""
+        full = (agent.name or "").replace(" ", "").lower()
+        local = (agent.email or "").split("@")[0].lower()
+        handles = {h for h in (first, full, local) if h}
+        if tokens & handles and (by_agent is None or agent.id != by_agent.id):
+            session.add(Notification(
+                agent_id=agent.id, kind="mention", conversation_id=conv.id, message_id=message.id,
+                title=f"{(by_agent.name if by_agent else 'Someone')} mentioned you",
+                body=(body or "")[:300],
+            ))
+            created += 1
+    if created:
+        session.commit()
+    return created
+
+
+def mention_conversation_ids(session: Session, agent_id: int) -> list[int]:
+    return [i for (i,) in session.execute(
+        select(Notification.conversation_id).where(
+            Notification.agent_id == agent_id, Notification.kind == "mention",
+            Notification.conversation_id.is_not(None),
+        ).order_by(Notification.created_at.desc())
+    ).all()]
+
+
+def unread_mention_count(session: Session, agent_id: int | None) -> int:
+    if not agent_id:
+        return 0
+    return session.scalar(
+        select(func.count(Notification.id)).where(
+            Notification.agent_id == agent_id, Notification.kind == "mention",
+            Notification.is_read.is_(False),
+        )
+    ) or 0
+
+
+def mark_mentions_read(session: Session, agent_id: int) -> None:
+    rows = session.scalars(
+        select(Notification).where(
+            Notification.agent_id == agent_id, Notification.kind == "mention",
+            Notification.is_read.is_(False),
+        )
+    ).all()
+    for n in rows:
+        n.is_read = True
+    if rows:
+        session.commit()
 
 
 def add_internal_note(session: Session, conv: Conversation, *, agent: Agent | None, body: str) -> Message:

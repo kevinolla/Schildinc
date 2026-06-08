@@ -29,6 +29,7 @@
 
     <div style="text-transform:uppercase;font-size:11px;color:#9aa0a6;margin:12px 0 4px;">Personal</div>
     {{ railitem("Assigned to me", "🧑", "/inbox?view=mine", view=='mine', counts.mine) }}
+    {{ railitem("Mention", "@", "/inbox?view=mentions", view=='mentions', mention_count) }}
     {{ railitem("Favorites", "★", "/inbox?view=favorites", view=='favorites', counts.favorites) }}
 
     <div style="text-transform:uppercase;font-size:11px;color:#9aa0a6;margin:12px 0 4px;">Channels</div>
@@ -97,6 +98,14 @@
         <div style="max-width:80%;{% if m.direction=='out' %}align-self:flex-end;background:#eaf2ff;{% else %}align-self:flex-start;background:#f4f2ec;{% endif %}border-radius:10px;padding:10px 14px;">
           <div style="font-size:11px;color:#6b7280;margin-bottom:4px;">{% if m.direction=='out' %}{{ m.agent_name or 'Schild Inc' }} → {{ m.to_addr }}{% else %}{{ m.from_addr }}{% endif %} · {{ m.occurred_at.strftime('%Y-%m-%d %H:%M') if m.occurred_at }}{% if m.status=='failed' %}<span style="color:#ef4444;"> · failed</span>{% endif %}</div>
           <div style="font-size:14px;white-space:pre-wrap;">{{ m.body_text or (m.body_html | striptags) }}</div>
+          {% set atts = attachments_by_msg.get(m.id) %}
+          {% if atts %}
+          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+            {% for a in atts %}
+            <a href="/inbox/attachment/{{ a.id }}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:12px;background:#fff;border:1px solid #d8dee5;border-radius:6px;padding:4px 8px;text-decoration:none;color:#1f2933;">📎 {{ a.filename or 'attachment' }}{% if a.size_bytes %} <span style="color:#9aa0a6;">({{ (a.size_bytes/1024)|round(0,'floor')|int }} KB)</span>{% endif %}</a>
+            {% endfor %}
+          </div>
+          {% endif %}
         </div>
         {% endif %}
       {% endfor %}

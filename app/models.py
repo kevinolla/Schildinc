@@ -845,6 +845,40 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
+class MessageAttachment(Base):
+    """Metadata for an inbound email attachment. Bytes are fetched on-demand
+    from Gmail (using gmail_message_id + gmail_attachment_id) — not stored, so
+    Railway's ephemeral disk and the DB stay lean.
+    """
+
+    __tablename__ = "message_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), index=True)
+    filename: Mapped[str] = mapped_column(Text, default="")
+    mime_type: Mapped[str] = mapped_column(Text, default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    gmail_message_id: Mapped[str] = mapped_column(Text, default="")
+    gmail_attachment_id: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Notification(Base):
+    """In-app notification for an agent (e.g. an @mention in an internal note)."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
+    kind: Mapped[str] = mapped_column(Text, default="mention", index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), nullable=True, index=True)
+    message_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), nullable=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+
+
 class CannedReply(Base):
     """Saved quick response for the inbox."""
 
