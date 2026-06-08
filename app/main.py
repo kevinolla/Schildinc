@@ -4063,6 +4063,66 @@ def _live_counts_safe() -> dict:
         session.close()
 
 
+@app.get("/setup", response_class=HTMLResponse)
+def setup_center(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    """One-stop setup dashboard — live status + copy-paste values + buttons."""
+    gmail = gmail_sender.connection_status(db)
+    wa = whatsapp_module.status()
+    ig = instagram_module.status()
+    contact_count = db.scalar(select(func.count(Contact.id))) or 0
+    cold_count = db.scalar(
+        select(func.count(Contact.id)).where(
+            (Contact.source_summary.like("%kvk%") | Contact.source_summary.like("%prospect%")),
+            Contact.is_customer.is_(False),
+            ~Contact.source_summary.like("%lead%"),
+            ~Contact.source_summary.like("%customer%"),
+        )
+    ) or 0
+    agent_count = db.scalar(select(func.count(Agent.id))) or 0
+    address_set = bool(settings.company_address) and "<" not in settings.company_address
+
+    # Email (Gmail) checklist
+    email_steps = [
+        {"label": "OAuth client set in Railway (GMAIL_CLIENT_ID + SECRET)", "done": gmail["configured"]},
+        {"label": "Gmail account connected", "done": gmail["connected"]},
+        {"label": f"Send-as alias verified ({gmail.get('default_send_as','')})",
+         "done": gmail["connected"] and (gmail.get("default_send_as", "") in gmail.get("send_as_aliases", []))},
+        {"label": "Company address set (legal footer)", "done": address_set},
+    ]
+    # Instagram checklist
+    ig_steps = [
+        {"label": "INSTAGRAM_ACCOUNT_ID + ACCESS_TOKEN set", "done": ig["configured"]},
+        {"label": "Verify token set", "done": ig["verify_token_set"]},
+        {"label": "App secret set (signature check)", "done": ig["has_app_secret"]},
+        {"label": "Webhook registered in Meta (subscribe to 'messages')", "done": False, "manual": True},
+    ]
+    # Contacts checklist
+    contacts_steps = [
+        {"label": f"Contacts built ({contact_count:,} total, {cold_count:,} cold-eligible)", "done": contact_count > 0},
+    ]
+
+    def pct(steps):
+        auto = [s for s in steps if not s.get("manual")]
+        return int(100 * sum(1 for s in auto if s["done"]) / max(1, len(auto)))
+
+    return templates.TemplateResponse(
+        request,
+        "setup.html",
+        {
+            "request": request, "app_name": settings.app_name,
+            "gmail": gmail, "wa": wa, "ig": ig,
+            "email_steps": email_steps, "ig_steps": ig_steps, "contacts_steps": contacts_steps,
+            "email_pct": pct(email_steps), "ig_pct": pct(ig_steps), "contacts_pct": pct(contacts_steps),
+            "contact_count": contact_count, "cold_count": cold_count, "agent_count": agent_count,
+            "redirect_uri": gmail.get("redirect_uri", ""),
+        },
+    )
+
+
 @app.get("/reports", response_class=HTMLResponse)
 def reports_page(
     request: Request,

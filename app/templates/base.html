@@ -18,6 +18,7 @@
       {% set path = request.url.path if request else '/' %}
       <nav class="topnav">
         <a href="/"            {% if path == '/' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
+        <a href="/setup"       {% if path.startswith('/setup') %}class="active" aria-current="page"{% endif %}>⚙️ Setup</a>
         <a href="/inbox"       {% if path.startswith('/inbox') %}class="active" aria-current="page"{% endif %}>Inbox <span id="inbox-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:2px;"></span></a>
         <a href="/contacts"    {% if path.startswith('/contacts') %}class="active" aria-current="page"{% endif %}>Contacts</a>
         <a href="/customers"   {% if path.startswith('/customers') %}class="active" aria-current="page"{% endif %}>Customers</a>
