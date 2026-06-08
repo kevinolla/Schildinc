@@ -3464,22 +3464,20 @@ def inbox_page(
     request: Request,
     db: Session = Depends(get_db),
     _: str = Depends(require_admin),
-    status: str = "open",
+    view: str = "new",        # new|assigned|closed|spam|mine|favorites|all
     channel: str = "",
-    assignee: int = 0,
-    scope: str = "",        # ""|mine|unassigned|all
+    label: str = "",
+    team: str = "",
     search: str = "",
     conv: int = 0,
     flash: str = "",
 ) -> HTMLResponse:
-    status_filter = "" if (status == "all" or scope == "all") else status
+    me = auth_module.current_agent(request, db)
+    mine_id = me.id if me else None
+    team_ids = inbox_module.team_agent_ids(db, team) if team else None
     conversations = inbox_module.list_conversations(
-        db,
-        status=status_filter,
-        channel=channel,
-        assignee_id=(assignee or None) if scope != "unassigned" else None,
-        unassigned=(scope == "unassigned"),
-        search=search,
+        db, view=view, channel=channel, label=label,
+        team_agent_ids=team_ids, mine_id=mine_id, search=search,
     )
     selected = db.get(Conversation, conv) if conv else (conversations[0] if conversations else None)
     messages = []
@@ -3505,13 +3503,33 @@ def inbox_page(
             "request": request, "app_name": settings.app_name,
             "conversations": conversations, "selected": selected, "messages": messages,
             "contact": contact, "agents": agents, "canned": canned,
-            "counts": inbox_module.status_counts(db), "gmail": gmail,
+            "counts": inbox_module.rail_counts(db, mine_id), "gmail": gmail,
+            "labels": inbox_module.list_labels(db), "teams": inbox_module.list_teams(db),
             "wa_status": whatsapp_module.status(), "wa_templates": wa_templates,
             "wa_window_open": wa_window_open,
-            "status": status, "channel": channel, "scope": scope, "search": search,
+            "view": view, "channel": channel, "label": label, "team": team, "search": search,
             "flash": flash,
         },
     )
+
+
+@app.post("/inbox/{conv_id}/spam")
+def inbox_mark_spam(
+    conv_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    if conv:
+        inbox_module.set_status(db, conv, "spam")
+    return RedirectResponse(f"/inbox?flash={quote_plus('Marked as spam')}", status_code=303)
+
+
+@app.post("/inbox/{conv_id}/favorite")
+def inbox_toggle_favorite(
+    conv_id: int, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> RedirectResponse:
+    conv = db.get(Conversation, conv_id)
+    fav = inbox_module.toggle_favorite(db, conv) if conv else False
+    return RedirectResponse(f"/inbox?conv={conv_id}&flash={quote_plus('Added to favorites' if fav else 'Removed from favorites')}", status_code=303)
 
 
 @app.post("/inbox/poll")
@@ -3710,6 +3728,7 @@ def inbox_add_agent(
     name: str = Form(...),
     email: str = Form(...),
     role: str = Form("agent"),
+    team: str = Form(""),
     password: str = Form(""),
 ) -> RedirectResponse:
     norm = normalize_email(email)
@@ -3717,13 +3736,14 @@ def inbox_add_agent(
     if existing:
         existing.name = name.strip()
         existing.role = role if role in ("admin", "agent") else "agent"
+        existing.team = team.strip()
         existing.is_active = True
         if password.strip():
             existing.password_hash = auth_module.hash_password(password.strip())
     else:
         db.add(Agent(
             name=name.strip(), email=norm,
-            role=role if role in ("admin", "agent") else "agent", is_active=True,
+            role=role if role in ("admin", "agent") else "agent", team=team.strip(), is_active=True,
             password_hash=auth_module.hash_password(password.strip()) if password.strip() else "",
         ))
     log_audit(db, actor=auth_module.actor_label(request, db), action="agent.save",

@@ -43,10 +43,11 @@
         {% endfor %}
       </tbody>
     </table>
-    <h4>Add / update teammate</h4>
+    <h4>Add / update teammate (support user)</h4>
     <form method="post" action="/inbox/settings/agents">
       <input name="name" placeholder="Full name" required style="width:100%;margin-bottom:6px;">
       <input name="email" type="email" placeholder="email@schildinc.com" required style="width:100%;margin-bottom:6px;">
+      <input name="team" placeholder="Team (e.g. Support, Sales) — optional" style="width:100%;margin-bottom:6px;">
       <input name="password" type="password" placeholder="Initial password (optional)" style="width:100%;margin-bottom:6px;">
       <select name="role" style="width:100%;margin-bottom:8px;">
         <option value="agent">Agent</option>

@@ -149,6 +149,14 @@ body {
   padding: 12px 10px;
   flex: 1;
 }
+.nav-section {
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 12px 12px 4px;
+}
 .topnav a {
   color: var(--text-2);
   font-weight: 500;

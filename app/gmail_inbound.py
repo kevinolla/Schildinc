@@ -162,6 +162,11 @@ def poll_inbound(session: Session, *, max_messages: int = 50) -> dict:
         )
         if created:
             threaded += 1
+            # If Gmail flagged it SPAM, route the conversation to the Spam view.
+            if "SPAM" in (msg.get("labelIds") or []):
+                conv.status = "spam"
+                conv.unread = False
+                session.commit()
         else:
             skipped += 1
 

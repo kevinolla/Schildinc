@@ -19,17 +19,28 @@
       <nav class="topnav">
         <a href="/"            {% if path == '/' %}class="active" aria-current="page"{% endif %}>Dashboard</a>
         <a href="/setup"       {% if path.startswith('/setup') %}class="active" aria-current="page"{% endif %}>⚙️ Setup</a>
-        <a href="/inbox"       {% if path.startswith('/inbox') %}class="active" aria-current="page"{% endif %}>Inbox <span id="inbox-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:2px;"></span></a>
-        <a href="/contacts"    {% if path.startswith('/contacts') %}class="active" aria-current="page"{% endif %}>Contacts</a>
+
+        <div class="nav-section">Cold Emailing</div>
+        <a href="/kvk"         {% if path.startswith('/kvk') %}class="active" aria-current="page"{% endif %}>KVK Prospects</a>
+        <a href="/prospects"   {% if path.startswith('/prospects') %}class="active" aria-current="page"{% endif %}>Maps Prospects</a>
+        <a href="/contacts?cold=1" {% if path.startswith('/contacts') and request.url.query and 'cold=1' in request.url.query %}class="active" aria-current="page"{% endif %}>❄️ Cold Pool</a>
+
+        <div class="nav-section">Contacts</div>
+        <a href="/contacts"    {% if path.startswith('/contacts') and not (request.url.query and 'cold=1' in request.url.query) %}class="active" aria-current="page"{% endif %}>All Contacts</a>
         <a href="/customers"   {% if path.startswith('/customers') %}class="active" aria-current="page"{% endif %}>Customers</a>
         <a href="/leads"       {% if path.startswith('/leads') %}class="active" aria-current="page"{% endif %}>Leads</a>
-        <a href="/kvk"         {% if path.startswith('/kvk') %}class="active" aria-current="page"{% endif %}>KVK Companies</a>
-        <a href="/prospects"   {% if path.startswith('/prospects') %}class="active" aria-current="page"{% endif %}>Prospects</a>
+
+        <div class="nav-section">Campaigns</div>
         <a href="/emails"      {% if path.startswith('/emails') %}class="active" aria-current="page"{% endif %}>Email Campaigns</a>
-        <a href="/queue"       {% if path.startswith('/queue') %}class="active" aria-current="page"{% endif %}>Queue</a>
+
+        <div class="nav-section">Helpdesk</div>
+        <a href="/inbox"       {% if path.startswith('/inbox') %}class="active" aria-current="page"{% endif %}>Inbox <span id="inbox-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:2px;"></span></a>
+
+        <div class="nav-section">Insights &amp; Admin</div>
         <a href="/reports"     {% if path.startswith('/reports') %}class="active" aria-current="page"{% endif %}>Reports</a>
         <a href="/audit" id="nav-audit" style="display:none;" {% if path.startswith('/audit') %}class="active" aria-current="page"{% endif %}>Audit</a>
         <a href="/suppression" {% if path.startswith('/suppression') %}class="active" aria-current="page"{% endif %}>Suppression</a>
+        <a href="/queue"       {% if path.startswith('/queue') %}class="active" aria-current="page"{% endif %}>Queue (legacy)</a>
         <a href="/logs"        {% if path.startswith('/logs') %}class="active" aria-current="page"{% endif %}>Logs</a>
       </nav>
       <div class="topnav" style="margin-top:8px;font-size:12px;color:#6b7280;">

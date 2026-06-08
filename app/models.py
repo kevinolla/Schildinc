@@ -775,6 +775,7 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(Text, default="", index=True)
     email: Mapped[str] = mapped_column(Text, default="", unique=True, index=True)
     role: Mapped[str] = mapped_column(Text, default="agent", index=True)  # admin|agent
+    team: Mapped[str] = mapped_column(Text, default="", index=True)  # support team name
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     # Per-agent login (Phase 6). Empty hash = cannot log in yet (admin sets it).
     password_hash: Mapped[str] = mapped_column(Text, default="")
@@ -792,10 +793,12 @@ class Conversation(Base):
     channel: Mapped[str] = mapped_column(Text, default="email", index=True)  # email|whatsapp|call|note
     subject: Mapped[str] = mapped_column(Text, default="")
     # open|pending|snoozed|closed
+    # open|pending|snoozed|closed|spam
     status: Mapped[str] = mapped_column(Text, default="open", index=True)
     assignee_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), nullable=True, index=True)
     labels: Mapped[str] = mapped_column(Text, default="")  # comma-separated
     unread: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_message_preview: Mapped[str] = mapped_column(Text, default="")
     last_direction: Mapped[str] = mapped_column(Text, default="")  # in|out

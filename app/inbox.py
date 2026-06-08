@@ -256,12 +256,19 @@ def assign(session: Session, conv: Conversation, agent_id: int | None) -> None:
 
 
 def set_status(session: Session, conv: Conversation, status: str) -> None:
-    if status in ("open", "pending", "snoozed", "closed"):
+    if status in ("open", "pending", "snoozed", "closed", "spam"):
         conv.status = status
         if status != "open":
             conv.unread = False
         conv.updated_at = datetime.utcnow()
         session.commit()
+
+
+def toggle_favorite(session: Session, conv: Conversation) -> bool:
+    conv.is_favorite = not conv.is_favorite
+    conv.updated_at = datetime.utcnow()
+    session.commit()
+    return conv.is_favorite
 
 
 def set_labels(session: Session, conv: Conversation, labels_csv: str) -> None:
@@ -280,19 +287,46 @@ def mark_read(session: Session, conv: Conversation) -> None:
 # ── Queries ──────────────────────────────────────────────────────────────────
 
 
+def _apply_view(q, view: str, mine_id: int | None):
+    """Map a Trengo-style rail view to query filters.
+
+    new       -> open + unassigned (needs triage)
+    assigned  -> has an assignee, not closed/spam
+    closed    -> closed
+    spam      -> spam
+    mine      -> assigned to the current agent (not closed/spam)
+    favorites -> starred
+    (default/all/"") -> everything except spam
+    """
+    if view == "new":
+        return q.where(Conversation.status == "open", Conversation.assignee_agent_id.is_(None))
+    if view == "assigned":
+        return q.where(Conversation.assignee_agent_id.is_not(None), Conversation.status.notin_(["closed", "spam"]))
+    if view == "closed":
+        return q.where(Conversation.status == "closed")
+    if view == "spam":
+        return q.where(Conversation.status == "spam")
+    if view == "mine":
+        return q.where(Conversation.assignee_agent_id == mine_id, Conversation.status.notin_(["closed", "spam"]))
+    if view == "favorites":
+        return q.where(Conversation.is_favorite.is_(True))
+    if view in ("", "all"):
+        return q.where(Conversation.status != "spam")
+    return q
+
+
 def list_conversations(
-    session: Session, *, status: str = "", channel: str = "", assignee_id: int | None = None,
-    unassigned: bool = False, search: str = "", limit: int = 100, offset: int = 0,
+    session: Session, *, view: str = "", channel: str = "", label: str = "",
+    team_agent_ids: list[int] | None = None, mine_id: int | None = None,
+    search: str = "", limit: int = 100, offset: int = 0,
 ) -> list[Conversation]:
-    q = select(Conversation)
-    if status:
-        q = q.where(Conversation.status == status)
+    q = _apply_view(select(Conversation), view, mine_id)
     if channel:
         q = q.where(Conversation.channel == channel)
-    if unassigned:
-        q = q.where(Conversation.assignee_agent_id.is_(None))
-    elif assignee_id is not None:
-        q = q.where(Conversation.assignee_agent_id == assignee_id)
+    if label:
+        q = q.where(Conversation.labels.like(f"%{label}%"))
+    if team_agent_ids is not None:
+        q = q.where(Conversation.assignee_agent_id.in_(team_agent_ids or [-1]))
     if search:
         like = f"%{search.lower()}%"
         q = q.where(
@@ -304,13 +338,48 @@ def list_conversations(
     return session.scalars(q.offset(offset).limit(limit)).all()
 
 
-def status_counts(session: Session) -> dict:
-    rows = session.execute(
-        select(Conversation.status, func.count(Conversation.id)).group_by(Conversation.status)
-    ).all()
-    counts = {s: c for s, c in rows}
-    counts["unread"] = session.scalar(
-        select(func.count(Conversation.id)).where(Conversation.unread.is_(True))
-    ) or 0
-    counts["all"] = session.scalar(select(func.count(Conversation.id))) or 0
-    return counts
+def _count(session: Session, view: str, mine_id: int | None = None) -> int:
+    q = _apply_view(select(func.count(Conversation.id)), view, mine_id)
+    return session.scalar(q) or 0
+
+
+def rail_counts(session: Session, mine_id: int | None = None) -> dict:
+    """Counts powering the helpdesk left rail."""
+    channels = {ch: c for ch, c in session.execute(
+        select(Conversation.channel, func.count(Conversation.id))
+        .where(Conversation.status != "spam").group_by(Conversation.channel)
+    ).all()}
+    return {
+        "new": _count(session, "new"),
+        "assigned": _count(session, "assigned"),
+        "closed": _count(session, "closed"),
+        "spam": _count(session, "spam"),
+        "mine": _count(session, "mine", mine_id) if mine_id else 0,
+        "favorites": _count(session, "favorites"),
+        "channels": channels,
+    }
+
+
+def list_labels(session: Session) -> list[dict]:
+    """Distinct labels (from the comma-separated field) with conversation counts."""
+    counts: dict[str, int] = {}
+    for (labels,) in session.execute(
+        select(Conversation.labels).where(Conversation.labels != "", Conversation.status != "spam")
+    ).all():
+        for lab in (labels or "").split(","):
+            lab = lab.strip()
+            if lab:
+                counts[lab] = counts.get(lab, 0) + 1
+    return [{"name": k, "count": v} for k, v in sorted(counts.items())]
+
+
+def list_teams(session: Session) -> list[str]:
+    return [t for (t,) in session.execute(
+        select(Agent.team).where(Agent.team != "", Agent.is_active.is_(True)).group_by(Agent.team)
+    ).all()]
+
+
+def team_agent_ids(session: Session, team: str) -> list[int]:
+    return [i for (i,) in session.execute(
+        select(Agent.id).where(Agent.team == team, Agent.is_active.is_(True))
+    ).all()]
