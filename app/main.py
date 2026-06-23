@@ -33,6 +33,7 @@ from app.kvk_enrichment import (
 )
 from app.emailing import export_queue_csv, preview_queue_for_day, send_queue_item
 from app import gmail_sender
+from app import email_providers
 from app.email_engine import (
     build_recipients,
     process_due_campaigns,
@@ -3087,9 +3088,14 @@ def campaign_send(
     campaign = db.get(EmailCampaign, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
-    if gmail_sender.get_active_account(db) is None:
+    # Only the Gmail-API transport needs a connected Gmail account. When a
+    # provider (Resend/Brevo/SMTP) is configured, sending goes through the
+    # provider abstraction and no Gmail connection is required.
+    _provider = (getattr(settings, "mail_provider", "console") or "console").lower()
+    _use_provider = _provider in {"resend", "brevo", "smtp", "gmail_smtp"}
+    if not _use_provider and gmail_sender.get_active_account(db) is None:
         return RedirectResponse(
-            f"/emails/campaigns/{campaign_id}?flash={quote_plus('Connect Gmail before sending')}",
+            f"/emails/campaigns/{campaign_id}?flash={quote_plus('Connect Gmail (or set MAIL_PROVIDER) before sending')}",
             status_code=303,
         )
     if campaign.total_recipients == 0:
@@ -3158,16 +3164,29 @@ def campaign_test_send(
         tracking_token=f"test-{secrets.token_urlsafe(10)}",
     )
     subject, html_body, text_body = render_for_recipient(campaign, sample)
-    result = gmail_sender.send_message(
-        db,
-        to_email=sample.to_email,
-        subject=f"[TEST] {subject}",
-        body_html=html_body,
-        body_text=text_body,
-        from_alias=campaign.sender_alias,
-        from_name=campaign.sender_name,
-        reply_to=campaign.reply_to,
-    )
+    _provider = (getattr(settings, "mail_provider", "console") or "console").lower()
+    if _provider in {"resend", "brevo", "smtp", "gmail_smtp"}:
+        result = email_providers.send(
+            to_email=sample.to_email,
+            subject=f"[TEST] {subject}",
+            html=html_body,
+            text=text_body,
+            from_name=campaign.sender_name,
+            from_alias=campaign.sender_alias,
+            reply_to=campaign.reply_to,
+            session=db,
+        )
+    else:
+        result = gmail_sender.send_message(
+            db,
+            to_email=sample.to_email,
+            subject=f"[TEST] {subject}",
+            body_html=html_body,
+            body_text=text_body,
+            from_alias=campaign.sender_alias,
+            from_name=campaign.sender_name,
+            reply_to=campaign.reply_to,
+        )
     msg = f"Test sent to {sample.to_email}" if result.ok else f"Test failed: {result.error[:160]}"
     return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
 
