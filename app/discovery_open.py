@@ -622,12 +622,15 @@ def discover_for_company(
             error="no website candidates from search backend",
         )
 
-    # Score every candidate against the company name and sort best-first. We
-    # combine the backend's own score with our name-match score (max of the
-    # two) so a strong signal from either source wins.
+    # Score every candidate with OUR precision-first scorer and sort best-first.
+    # We deliberately do NOT max() with the search backend's own score: the
+    # backend ranks by relevance and will happily score a directory/listing
+    # page (telefoonboek.nl, cylex.nl, zundapp.one) at 100 because the company
+    # name appears in its title/URL. _fuzzy_score is the authoritative gate —
+    # it floors directories and only trusts a distinctive name token IN THE
+    # DOMAIN — so it must be the score the autopick decision uses.
     for cand in candidates:
-        name_match = _fuzzy_score(name, cand)
-        cand.score = max(int(cand.score or 0), name_match)
+        cand.score = _fuzzy_score(name, cand)
     candidates.sort(key=lambda c: c.score, reverse=True)
 
     best = candidates[0]
