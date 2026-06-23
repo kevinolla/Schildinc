@@ -176,6 +176,14 @@ class Prospect(Base):
     last_contacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_matched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Open (non-Google) discovery provenance + review fields. Migration 0021.
+    website_confidence: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    discovery_query_used: Mapped[str] = mapped_column(Text, default="")
+    discovery_input_type: Mapped[str] = mapped_column(Text, default="")
+    discovery_backend: Mapped[str] = mapped_column(Text, default="")
+    last_discovery_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    match_confidence: Mapped[str] = mapped_column(Text, default="")
+    best_match_reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -326,6 +334,12 @@ class KvkCompany(Base):
     owner_source: Mapped[str] = mapped_column(Text, default="")  # url the name came from
     owner_status: Mapped[str] = mapped_column(Text, default="pending", index=True)  # pending|found|none
     owner_search_attempts: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
+    # Open (non-Google) discovery provenance + confidence. Migration 0021.
+    website_confidence: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    discovery_query_used: Mapped[str] = mapped_column(Text, default="")
+    discovery_input_type: Mapped[str] = mapped_column(Text, default="")   # existing_website | search
+    discovery_backend: Mapped[str] = mapped_column(Text, default="")      # open | google
 
     enrichment_status: Mapped[str] = mapped_column(Text, default="pending", index=True)
     google_maps_query: Mapped[str] = mapped_column(Text, default="")
@@ -602,6 +616,10 @@ class EmailCampaignRecipient(Base):
     # Opaque token used in the tracking pixel + click links + unsubscribe.
     tracking_token: Mapped[str] = mapped_column(Text, default="", unique=True, index=True)
     gmail_message_id: Mapped[str] = mapped_column(Text, default="")
+    # Provider abstraction audit (Gmail path keeps gmail_message_id; other
+    # providers record provider + provider_message_id). Migration 0021.
+    provider: Mapped[str] = mapped_column(Text, default="")
+    provider_message_id: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
 
     open_count: Mapped[int] = mapped_column(Integer, default=0)

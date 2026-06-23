@@ -122,6 +122,42 @@ class Settings:
     # On first poll, how many days back to look for replies.
     gmail_inbound_lookback_days: int = int(os.getenv("GMAIL_INBOUND_LOOKBACK_DAYS", "3"))
 
+    # ── Non-Google discovery stack (additive; unset => disabled/no-op) ──────
+    # SearXNG self-hosted meta-search for business-name -> website.
+    searxng_url: str = os.getenv("SEARXNG_URL", "")
+    searxng_engines: str = os.getenv("SEARXNG_ENGINES", "google,bing,duckduckgo,brave")
+    searxng_timeout: float = float(os.getenv("SEARXNG_TIMEOUT_S", os.getenv("SEARXNG_TIMEOUT", "8")))
+    searxng_timeout_s: float = float(os.getenv("SEARXNG_TIMEOUT_S", os.getenv("SEARXNG_TIMEOUT", "8")))
+    # Open geocoding (Photon/Pelias). Never public Nominatim for bulk.
+    geocoder_provider: str = os.getenv("GEOCODER_PROVIDER", os.getenv("GEOCODER_KIND", "photon"))
+    geocoder_url: str = os.getenv("GEOCODER_URL", "")
+    geocoder_timeout_s: float = float(os.getenv("GEOCODER_TIMEOUT_S", "8"))
+    pelias_api_key: str = os.getenv("PELIAS_API_KEY", "")
+    # Discovery orchestrator. "open" = SearXNG+crawl (default); "google" = legacy fallback path.
+    discovery_engine: str = os.getenv("DISCOVERY_ENGINE", os.getenv("DISCOVERY_BACKEND", "open"))
+    discovery_review_threshold: int = int(os.getenv("DISCOVERY_REVIEW_THRESHOLD", "60"))
+    discovery_autopick_score: int = int(os.getenv("DISCOVERY_AUTOPICK_SCORE", "80"))
+    # Use a real browser (Playwright) for JS-heavy pages during extraction.
+    web_extract_use_playwright: bool = _as_bool(os.getenv("WEB_EXTRACT_USE_PLAYWRIGHT"), False)
+    # Fuzzy customer-suppression thresholds (RapidFuzz).
+    suppression_fuzzy_threshold: int = int(os.getenv("SUPPRESSION_FUZZY_THRESHOLD", "88"))
+    suppression_fuzzy_medium_threshold: int = int(os.getenv("SUPPRESSION_FUZZY_MEDIUM_THRESHOLD", "80"))
+
+    # ── Email provider abstraction (mail_provider/resend/smtp/reply_to already exist) ──
+    # Brevo SMTP relay (bigger free daily cap).
+    brevo_smtp_user: str = os.getenv("BREVO_SMTP_USER", "")
+    brevo_smtp_key: str = os.getenv("BREVO_SMTP_KEY", "")
+    brevo_smtp_host: str = os.getenv("BREVO_SMTP_HOST", "smtp-relay.brevo.com")
+    brevo_smtp_port: int = int(os.getenv("BREVO_SMTP_PORT", "587"))
+    # Gmail/Workspace SMTP — LOW-VOLUME manual tests only (use an App Password).
+    gmail_smtp_user: str = os.getenv("GMAIL_SMTP_USER", "")
+    gmail_smtp_app_password: str = os.getenv("GMAIL_SMTP_APP_PASSWORD", "")
+    gmail_smtp_host: str = os.getenv("GMAIL_SMTP_HOST", "smtp.gmail.com")
+    gmail_smtp_port: int = int(os.getenv("GMAIL_SMTP_PORT", "587"))
+    # Optional Redis/RQ worker (off by default; threaded fallback otherwise).
+    discovery_use_rq: bool = _as_bool(os.getenv("DISCOVERY_USE_RQ"), False)
+    redis_url: str = os.getenv("REDIS_URL", "")
+
     # ── WhatsApp Business Cloud API (direct Meta) ──────────────────────────
     # Set these from Meta → WhatsApp → API setup. The webhook callback URL to
     # register in Meta is {APP_BASE_URL}/webhooks/whatsapp with the verify token.

@@ -121,8 +121,11 @@ def render_for_recipient(
     # reads "Hi ," — uses owner first name → company name → "there".
     contact_name = (values.get("contact_name") or "").strip()
     first_name = contact_name.split()[0] if contact_name else ""
+    company = (values.get("company_name") or "").strip()
     values["first_name"] = first_name
-    values["greeting_name"] = first_name or (values.get("company_name") or "").strip() or "there"
+    # Owner's first name if we know it ("Hi Jan,"); otherwise address the shop
+    # as a team ("Hi Het Fietshuys Amstelveen team,"). Never the email local-part.
+    values["greeting_name"] = first_name or (f"{company} team" if company else "there")
 
     # Signature + legal footer (brand-safe, compliant cold outreach).
     values.setdefault("sender_title", settings.sender_title)
@@ -279,12 +282,28 @@ def sent_today(session: Session) -> int:
     ) or 0
 
 
+# Providers handled by the pluggable abstraction (app/email_providers.py).
+# Any other value (incl. the legacy "gmail"/"console" defaults) keeps the
+# existing Gmail-API path untouched, so production behaviour is unchanged.
+_ABSTRACTION_PROVIDERS = {"resend", "brevo", "smtp", "gmail_smtp"}
+
+
+def _use_provider_abstraction() -> bool:
+    return getattr(settings, "mail_provider", "console") in _ABSTRACTION_PROVIDERS
+
+
 def send_campaign_batch(session: Session, campaign: EmailCampaign, *, limit: int | None = None) -> dict:
     """Send up to `limit` pending recipients for one campaign.
 
     Honors the global daily cap and per-send spacing. Returns a result dict.
+
+    Transport: by default the connected Gmail API (unchanged). If
+    MAIL_PROVIDER is one of resend/brevo/smtp/gmail_smtp, sends route through
+    app/email_providers.py instead (reply-to still forced to sales@schildinc.com).
     """
-    if get_active_account(session) is None:
+    use_provider = _use_provider_abstraction()
+    # The Gmail-API path requires a connected account; provider paths don't.
+    if not use_provider and get_active_account(session) is None:
         return {"ok": False, "error": "gmail_not_connected", "sent": 0}
 
     remaining_today = max(0, settings.gmail_daily_limit - sent_today(session))
@@ -324,23 +343,36 @@ def send_campaign_batch(session: Session, campaign: EmailCampaign, *, limit: int
 
         subject, html_body, text_body = render_for_recipient(campaign, recipient)
         try:
-            result = send_message(
-                session,
-                to_email=recipient.to_email,
-                subject=subject,
-                body_html=html_body,
-                body_text=text_body,
-                from_alias=sender_alias,
-                from_name=sender_name,
-                reply_to=reply_to,
-                list_unsubscribe=unsubscribe_url_for(recipient.tracking_token),
-            )
+            if use_provider:
+                # Pluggable provider (Resend/Brevo/SMTP/Gmail-SMTP). Reply-To is
+                # force-set to sales@schildinc.com inside email_providers.
+                from app import email_providers
+                result = email_providers.send(
+                    recipient.to_email, subject, html_body, text_body,
+                    from_name=sender_name, from_alias=sender_alias,
+                    list_unsubscribe=unsubscribe_url_for(recipient.tracking_token),
+                    session=session,
+                )
+            else:
+                result = send_message(
+                    session,
+                    to_email=recipient.to_email,
+                    subject=subject,
+                    body_html=html_body,
+                    body_text=text_body,
+                    from_alias=sender_alias,
+                    from_name=sender_name,
+                    reply_to=reply_to,
+                    list_unsubscribe=unsubscribe_url_for(recipient.tracking_token),
+                )
         except GmailNotConnected:
             return {"ok": False, "error": "gmail_not_connected", "sent": sent}
 
         if result.ok:
             recipient.status = "sent"
             recipient.gmail_message_id = result.message_id
+            recipient.provider = getattr(result, "provider", "gmail")
+            recipient.provider_message_id = result.message_id
             recipient.sent_at = datetime.utcnow()
             recipient.error = ""
             campaign.sent_count += 1
