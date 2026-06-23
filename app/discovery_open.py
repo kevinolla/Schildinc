@@ -196,11 +196,22 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 # canonical website. Used as a guard if the search client's own scoring failed
 # to demote them.
 _DIRECTORY_HINTS = (
+    # Social / search / encyclopaedic
     "facebook.", "instagram.", "linkedin.", "twitter.", "x.com",
-    "youtube.", "tiktok.", "pinterest.",
-    "marktplaats.", "yelp.", "yellowpages.", "goudengids.",
-    "kvk.nl", "tripadvisor.", "trustpilot.", "google.", "maps.google",
-    "wikipedia.", "amazon.", "ebay.", "etsy.",
+    "youtube.", "tiktok.", "pinterest.", "google.", "maps.google",
+    "wikipedia.", "reddit.", "medium.com",
+    # Marketplaces / big chain retailers (a small shop is never these)
+    "marktplaats.", "amazon.", "ebay.", "etsy.", "bol.com", "2dehands.",
+    "fietsenwinkel.nl", "mantel.com", "decathlon.", "bikester.", "fietsenkoning.",
+    # Review / rating
+    "yelp.", "tripadvisor.", "trustpilot.", "kieskeurig.", "tweakers.",
+    # NL/BE/DE business directories & listing/aggregator sites (the actual
+    # false-positives seen in production: telefoonboek, zundapp.one, fiets-zaken)
+    "telefoonboek.", "detelefoongids.", "telefoongids.", "goudengids.",
+    "yellowpages.", "oozo.", "cylex.", "openingstijden.", "drimble.",
+    "company.info", "bedrijvenpagina.", "indebuurt.", "dichtbij.", "opendi.",
+    "infobel.", "stadsgids.", "ondernemersplein.", "kvk.nl", "kvknummer.",
+    "zundapp.one", "fiets-zaken.", "bedrijvengids.", "lokaalgids.", "wijkgids.",
 )
 
 
