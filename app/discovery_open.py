@@ -226,48 +226,65 @@ def _tokens(value: str) -> set[str]:
     return {t for t in raw if t not in noise and len(t) > 1}
 
 
+# Generic industry/legal words that are NOT distinctive enough to identify a
+# specific shop's domain. A match on these alone (e.g. company "X Bikes" -> a
+# random domain containing "bikes") must NOT be trusted — only a match on the
+# DISTINCTIVE part of the name (the proper noun) is reliable.
+_GENERIC_INDUSTRY = {
+    "fiets", "fietsen", "fietsenwinkel", "fietsenwinkels", "fietsenzaak", "fietsspeciaalzaak",
+    "rijwiel", "rijwielen", "rijwielhandel", "rijwielspeciaalzaak", "tweewieler", "tweewielers",
+    "tweewielercentrum", "bike", "bikes", "biking", "cycle", "cycles", "cycling", "cyclewerks",
+    "scooter", "scooters", "brommer", "bromfiets", "bromfietsen", "sport", "sports", "shop",
+    "store", "winkel", "handel", "centrum", "company", "holding", "beheer", "service", "repair",
+    "the", "and", "voor", "alles", "city", "stad", "fa", "firma",
+}
+
+
+def _wratio(a: str, b: str) -> int:
+    """RapidFuzz WRatio (lazy import) with a Jaccard fallback. 0-100."""
+    if not a or not b:
+        return 0
+    try:
+        from rapidfuzz import fuzz  # type: ignore
+        return int(fuzz.WRatio(a, b))
+    except Exception:  # noqa: BLE001
+        ta, tb = _tokens(a), _tokens(b)
+        if not ta or not tb:
+            return 0
+        return int(100 * len(ta & tb) / len(ta | tb))
+
+
 def _fuzzy_score(company_name: str, candidate: WebsiteChoice) -> int:
     """Score 0-100 how likely ``candidate`` is the company's OWN website.
 
-    Strategy:
-      * Heavily penalize known directory/social domains.
-      * Prefer RapidFuzz ``WRatio`` over the candidate domain + title vs the
-        company name (lazy import — house rule). If RapidFuzz is unavailable,
-        fall back to a cheap Jaccard token overlap so ranking still works.
-
-    The result is clamped to 0-100.
+    Precision-first strategy (cold outreach data must be trustworthy):
+      1. Known directory/social/marketplace domains -> floored to 5 (review).
+      2. The trustworthy signal is the DOMAIN itself, matched against the
+         DISTINCTIVE (non-generic) part of the company name. If a distinctive
+         name token (>=4 chars) appears in the domain label, it's almost
+         certainly the shop's own site -> high score.
+      3. Otherwise we DO NOT trust page titles/URLs (a directory, a newspaper,
+         or an unrelated site can echo the company name in its title). Such
+         candidates are capped below the auto-pick bar so they go to the human
+         review queue instead of being auto-accepted. This is what stops false
+         positives like marriott.com / telegraaf.nl / shopee.com.
     """
     domain = (candidate.domain or "").lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
     if any(hint in domain for hint in _DIRECTORY_HINTS):
-        # A directory page is essentially never the answer; floor it low so it
-        # cannot clear the autopick bar but is still surfaced for review.
         return 5
 
-    haystacks = [candidate.domain or "", candidate.title or "", candidate.url or ""]
+    domain_root = domain.split(".")[0]                       # the brand label
+    distinctive = {t for t in _tokens(company_name) if len(t) >= 4 and t not in _GENERIC_INDUSTRY}
 
-    best = 0
-    # --- Preferred: RapidFuzz (lazy import, optional dependency) ----------
-    try:
-        from rapidfuzz import fuzz  # type: ignore
+    # Strong, trustworthy: a distinctive name token is literally in the domain.
+    if any(tok in domain_root for tok in distinctive):
+        return max(85, _wratio(company_name, domain_root))
 
-        for hay in haystacks:
-            if not hay:
-                continue
-            best = max(best, int(fuzz.WRatio(company_name, hay)))
-    except Exception:  # noqa: BLE001 - rapidfuzz missing or any failure
-        # --- Fallback: token Jaccard overlap -----------------------------
-        name_tokens = _tokens(company_name)
-        if name_tokens:
-            for hay in haystacks:
-                hay_tokens = _tokens(hay)
-                if not hay_tokens:
-                    continue
-                overlap = name_tokens & hay_tokens
-                union = name_tokens | hay_tokens
-                if union:
-                    best = max(best, int(100 * len(overlap) / len(union)))
-
-    return max(0, min(100, best))
+    # No distinctive domain match -> never auto-pick. Cap below the autopick bar
+    # (we still return a small score so the candidate is surfaced for review).
+    return min(45, _wratio(company_name, domain_root))
 
 
 def _build_query(name: str, city: str, country: str, postal: str) -> str:
