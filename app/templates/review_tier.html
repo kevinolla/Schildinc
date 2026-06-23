@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+{% if flash %}<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>{% endif %}
+
+<section class="card">
+  <h2 style="margin:0;">Tier review <span style="font-size:14px;color:#6b7280;">({{ "{:,}".format(total) }})</span></h2>
+  <p style="margin:4px 0 0 0;color:#6b7280;">Classify unclassified companies. Use “Auto” to apply the heuristic tiering, or pick a tier manually.</p>
+</section>
+
+<section class="card table-card">
+  <table>
+    <thead><tr><th>Company</th><th>City</th><th>Activity</th><th>Set tier</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="/kvk/{{ r.id }}" style="font-weight:600;color:#1f2933;">{{ r.company_name }}</a></td>
+        <td>{{ r.primary_city or '—' }}</td>
+        <td style="color:#6b7280;font-size:12px;">{{ (r.main_activity_description or '')[:34] }}</td>
+        <td>
+          <form method="post" action="/review/tier/{{ r.id }}/set" style="display:flex;gap:6px;">
+            <select name="tier" style="font-size:13px;">
+              {% for t in tiers %}<option value="{{ t }}" {% if r.bike_shop_tier==t %}selected{% endif %}>{{ t }}</option>{% endfor %}
+            </select>
+            <button style="font-size:12px;padding:3px 10px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;">Save</button>
+          </form>
+        </td>
+        <td><form method="post" action="/review/tier/{{ r.id }}/auto" style="display:inline;"><button style="font-size:12px;padding:3px 10px;border:none;color:#7c3aed;background:none;cursor:pointer;">Auto</button></form></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" style="color:#9aa0a6;">No unclassified companies — all tiered.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -38,6 +38,15 @@
           <a href="/leads"     {% if path.startswith('/leads') %}class="active" aria-current="page"{% endif %}>Leads</a>
         </details>
 
+        <details class="nav-group" data-key="review" {% if path.startswith('/review') %}open{% endif %}>
+          <summary class="nav-section">Review Workflow</summary>
+          <a href="/review"            {% if path == '/review' %}class="active" aria-current="page"{% endif %}>Overview</a>
+          <a href="/review/discovery"  {% if path.startswith('/review/discovery') %}class="active" aria-current="page"{% endif %}>Discovery queue</a>
+          <a href="/review/match"      {% if path.startswith('/review/match') %}class="active" aria-current="page"{% endif %}>Match review</a>
+          <a href="/review/tier"       {% if path.startswith('/review/tier') %}class="active" aria-current="page"{% endif %}>Tier review</a>
+          <a href="/review/ready"      {% if path.startswith('/review/ready') %}class="active" aria-current="page"{% endif %}>Outreach-ready</a>
+        </details>
+
         <details class="nav-group" data-key="campaigns" {% if path.startswith('/emails') %}open{% endif %}>
           <summary class="nav-section">Campaigns</summary>
           <a href="/emails"    {% if path.startswith('/emails') %}class="active" aria-current="page"{% endif %}>Email Campaigns</a>

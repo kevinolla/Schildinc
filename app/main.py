@@ -51,6 +51,8 @@ from app.inbox import seed_inbox_defaults
 from app.gmail_inbound import poll_inbound, start_gmail_inbound_scheduler
 from app import whatsapp as whatsapp_module
 from app import instagram as instagram_module
+from app import enrichment_open as enrichment_open_module
+from app.tiering import score_kvk_company_tier, apply_bike_tier
 from app import auth as auth_module
 from app.auth import require_admin_role
 from app.audit import log_audit
@@ -4237,3 +4239,246 @@ def audit_page(
         request, "audit.html",
         {"request": request, "app_name": settings.app_name, "entries": entries},
     )
+
+
+# ===========================================================================
+# Review workflow (non-Google discovery) — Discovery / Match / Tier / Ready
+# ===========================================================================
+
+LOW_FIT_TIERS = {"Low Fit", "Brand Store"}
+
+
+def _discovery_queue_q():
+    return (
+        select(KvkCompany)
+        .where(KvkCompany.already_client_flag.is_(False))
+        .where(KvkCompany.email_public == "")
+        .where(KvkCompany.enrichment_status.in_(["pending", "needs_review", "no_website", "partial"]))
+        .order_by(KvkCompany.website_confidence.asc(), KvkCompany.search_attempts.asc(), KvkCompany.id.asc())
+    )
+
+
+def _match_queue_q():
+    return (
+        select(KvkCompany)
+        .where(KvkCompany.already_client_flag.is_(False))
+        .where(KvkCompany.match_confidence.in_(["high", "medium"]))
+        .order_by(KvkCompany.match_confidence.asc(), KvkCompany.id.asc())
+    )
+
+
+def _tier_queue_q():
+    return (
+        select(KvkCompany)
+        .where(KvkCompany.already_client_flag.is_(False))
+        .where(or_(KvkCompany.bike_shop_tier == "", KvkCompany.bike_shop_tier == "Unclassified"))
+        .order_by(KvkCompany.id.asc())
+    )
+
+
+def _ready_queue_q():
+    return (
+        select(KvkCompany)
+        .where(KvkCompany.already_client_flag.is_(False))
+        .where(KvkCompany.email_public != "")
+        .where(KvkCompany.approved_for_outreach.is_(False))
+        .where(KvkCompany.bike_shop_tier.notin_(list(LOW_FIT_TIERS)))
+        .order_by(KvkCompany.website_confidence.desc(), KvkCompany.id.asc())
+    )
+
+
+def _count(db, q):
+    return db.scalar(select(func.count()).select_from(q.subquery())) or 0
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review_hub(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "review_hub.html",
+        {
+            "request": request, "app_name": settings.app_name,
+            "engine": getattr(settings, "discovery_engine", "open"),
+            "searxng_set": bool(getattr(settings, "searxng_url", "")),
+            "discovery_count": _count(db, _discovery_queue_q()),
+            "match_count": _count(db, _match_queue_q()),
+            "tier_count": _count(db, _tier_queue_q()),
+            "ready_count": _count(db, _ready_queue_q()),
+        },
+    )
+
+
+# ── Discovery queue ──────────────────────────────────────────────────────────
+
+
+@app.get("/review/discovery", response_class=HTMLResponse)
+def review_discovery(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin),
+                     flash: str = "", page: int = 1) -> HTMLResponse:
+    per = 50
+    rows = db.scalars(_discovery_queue_q().offset((max(1, page) - 1) * per).limit(per)).all()
+    return templates.TemplateResponse(
+        request, "review_discovery.html",
+        {"request": request, "app_name": settings.app_name, "rows": rows, "page": max(1, page),
+         "total": _count(db, _discovery_queue_q()), "flash": flash,
+         "engine": getattr(settings, "discovery_engine", "open"),
+         "searxng_set": bool(getattr(settings, "searxng_url", ""))},
+    )
+
+
+@app.post("/review/discovery/run-batch")
+def review_discovery_run_batch(db: Session = Depends(get_db), _: str = Depends(require_admin), limit: int = Form(25)) -> RedirectResponse:
+    if not enrichment_open_module.open_engine_active():
+        return RedirectResponse(f"/review/discovery?flash={quote_plus('DISCOVERY_ENGINE is not open — set it to open to use this.')}", status_code=303)
+
+    def _run():
+        s = SessionLocal()
+        try:
+            print("[review] open discovery batch:", enrichment_open_module.run_open_discovery_batch(s, limit=max(1, min(200, limit))))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[review] discovery batch error: {exc}")
+        finally:
+            s.close()
+    Thread(target=_run, daemon=True, name="review-discovery-batch").start()
+    return RedirectResponse(f"/review/discovery?flash={quote_plus('Discovery started in the background. Refresh in a minute.')}", status_code=303)
+
+
+@app.post("/review/discovery/{cid}/run")
+def review_discovery_run_one(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company:
+        try:
+            enrichment_open_module.run_open_discovery_for_company(db, company)
+            msg = f"Discovery ran: {company.enrichment_status}"
+        except Exception as exc:  # noqa: BLE001
+            msg = f"Discovery error: {str(exc)[:120]}"
+    else:
+        msg = "Not found"
+    return RedirectResponse(f"/review/discovery?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/review/discovery/{cid}/confirm")
+def review_discovery_confirm(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company:
+        company.enrichment_status = "discovered"
+        db.commit()
+    return RedirectResponse(f"/review/discovery?flash={quote_plus('Marked as discovered')}", status_code=303)
+
+
+@app.post("/review/discovery/{cid}/clear-website")
+def review_discovery_clear(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company:
+        company.website = ""
+        company.website_domain = ""
+        company.website_confidence = 0
+        company.enrichment_status = "pending"
+        db.commit()
+    return RedirectResponse(f"/review/discovery?flash={quote_plus('Website cleared — will be re-discovered')}", status_code=303)
+
+
+# ── Match review (possible existing customers) ──────────────────────────────
+
+
+@app.get("/review/match", response_class=HTMLResponse)
+def review_match(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin), flash: str = "") -> HTMLResponse:
+    rows = db.scalars(_match_queue_q().limit(200)).all()
+    # Resolve matched customer names for display.
+    cust_ids = [r.matched_customer_id for r in rows if r.matched_customer_id]
+    customers = {c.id: c for c in db.scalars(select(Customer).where(Customer.id.in_(cust_ids))).all()} if cust_ids else {}
+    return templates.TemplateResponse(
+        request, "review_match.html",
+        {"request": request, "app_name": settings.app_name, "rows": rows, "customers": customers,
+         "total": _count(db, _match_queue_q()), "flash": flash},
+    )
+
+
+@app.post("/review/match/scan")
+def review_match_scan(db: Session = Depends(get_db), _: str = Depends(require_admin), limit: int = Form(300)) -> RedirectResponse:
+    def _run():
+        s = SessionLocal()
+        try:
+            print("[review] suppression scan:", enrichment_open_module.scan_possible_customers(s, limit=max(1, min(2000, limit))))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[review] suppression scan error: {exc}")
+        finally:
+            s.close()
+    Thread(target=_run, daemon=True, name="review-match-scan").start()
+    return RedirectResponse(f"/review/match?flash={quote_plus('Scanning for possible customers in the background. Refresh shortly.')}", status_code=303)
+
+
+@app.post("/review/match/{cid}/confirm")
+def review_match_confirm(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company:
+        company.already_client_flag = True
+        company.client_match_status = "matched"
+        db.commit()
+    return RedirectResponse(f"/review/match?flash={quote_plus('Confirmed as existing customer — suppressed from outreach')}", status_code=303)
+
+
+@app.post("/review/match/{cid}/dismiss")
+def review_match_dismiss(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company:
+        company.match_confidence = "dismissed"
+        db.commit()
+    return RedirectResponse(f"/review/match?flash={quote_plus('Dismissed — not a customer')}", status_code=303)
+
+
+# ── Tier review ──────────────────────────────────────────────────────────────
+
+
+@app.get("/review/tier", response_class=HTMLResponse)
+def review_tier(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin), flash: str = "") -> HTMLResponse:
+    rows = db.scalars(_tier_queue_q().limit(100)).all()
+    return templates.TemplateResponse(
+        request, "review_tier.html",
+        {"request": request, "app_name": settings.app_name, "rows": rows, "tiers": KVK_TIER_FILTERS,
+         "total": _count(db, _tier_queue_q()), "flash": flash},
+    )
+
+
+@app.post("/review/tier/{cid}/set")
+def review_tier_set(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin), tier: str = Form(...)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company and tier in KVK_TIER_FILTERS:
+        company.bike_shop_tier = tier
+        db.commit()
+    return RedirectResponse(f"/review/tier?flash={quote_plus('Tier set: ' + tier)}", status_code=303)
+
+
+@app.post("/review/tier/{cid}/auto")
+def review_tier_auto(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company:
+        decision = score_kvk_company_tier(company)
+        company.bike_shop_tier = decision.bike_shop_tier
+        company.outreach_priority = decision.outreach_priority
+        company.tier_reason = decision.tier_reason
+        db.commit()
+        msg = f"Auto-classified: {decision.bike_shop_tier}"
+    else:
+        msg = "Not found"
+    return RedirectResponse(f"/review/tier?flash={quote_plus(msg)}", status_code=303)
+
+
+# ── Outreach-ready queue ────────────────────────────────────────────────────
+
+
+@app.get("/review/ready", response_class=HTMLResponse)
+def review_ready(request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin), flash: str = "") -> HTMLResponse:
+    rows = db.scalars(_ready_queue_q().limit(100)).all()
+    return templates.TemplateResponse(
+        request, "review_ready.html",
+        {"request": request, "app_name": settings.app_name, "rows": rows,
+         "total": _count(db, _ready_queue_q()), "flash": flash},
+    )
+
+
+@app.post("/review/ready/{cid}/approve")
+def review_ready_approve(cid: int, db: Session = Depends(get_db), _: str = Depends(require_admin)) -> RedirectResponse:
+    company = db.get(KvkCompany, cid)
+    if company:
+        company.approved_for_outreach = True
+        db.commit()
+    return RedirectResponse(f"/review/ready?flash={quote_plus('Approved for outreach')}", status_code=303)

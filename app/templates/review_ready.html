@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+{% if flash %}<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <h2 style="margin:0;">Outreach-ready <span style="font-size:14px;color:#6b7280;">({{ "{:,}".format(total) }})</span></h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">Reviewed, emailable, non-customer leads. Approve them, then build a campaign. Suppression is re-checked again at send time.</p>
+    </div>
+    <a href="/emails/campaigns/new?audience=kvk" style="padding:9px 16px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">Create campaign →</a>
+  </div>
+</section>
+
+<section class="card table-card">
+  <table>
+    <thead><tr><th>Company</th><th>Email</th><th>City</th><th>Tier</th><th>Conf</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="/kvk/{{ r.id }}" style="font-weight:600;color:#1f2933;">{{ r.company_name }}</a></td>
+        <td>{{ r.email_public }}</td>
+        <td>{{ r.primary_city or '—' }}</td>
+        <td>{{ r.bike_shop_tier or '—' }}</td>
+        <td>{{ r.website_confidence or 0 }}</td>
+        <td><form method="post" action="/review/ready/{{ r.id }}/approve" style="display:inline;"><button style="font-size:12px;padding:3px 12px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;">Approve</button></form></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" style="color:#9aa0a6;">Nothing pending approval. Run discovery + review first.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

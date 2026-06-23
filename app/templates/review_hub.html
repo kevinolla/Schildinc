@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2 style="margin:0;">Review Workflow</h2>
+  <p style="margin:4px 0 0 0;color:#6b7280;">The 8-step path from imported companies to safe cold outreach. Work the queues left to right.</p>
+</section>
+
+<section class="card">
+  <p style="margin:0;font-size:13px;color:#6b7280;">
+    Discovery engine: <strong>{{ engine }}</strong>
+    {% if engine == 'open' and not searxng_set %}<span style="color:#b45309;"> · SEARXNG_URL not set — name→website discovery will route everything to review until you point it at a SearXNG instance (see DEPLOY_SEARXNG_PHOTON.md).</span>{% endif %}
+  </p>
+</section>
+
+<section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
+  {% macro qcard(num, title, desc, count, href, color) %}
+  <a href="{{ href }}" class="card" style="margin:0;text-decoration:none;color:#1f2933;display:block;">
+    <div style="font-size:11px;color:#9aa0a6;">STEP {{ num }}</div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <h3 style="margin:6px 0;">{{ title }}</h3>
+      <span style="font-size:24px;font-weight:700;color:{{ color }};">{{ count }}</span>
+    </div>
+    <p style="margin:0;color:#6b7280;font-size:13px;">{{ desc }}</p>
+  </a>
+  {% endmacro %}
+  {{ qcard(2, "Discovery queue", "Find/confirm website, email & phone for companies that still need it.", discovery_count, "/review/discovery", "#1a73e8") }}
+  {{ qcard(3, "Match review", "Possible existing customers to confirm or dismiss before outreach.", match_count, "/review/match", "#b45309") }}
+  {{ qcard(4, "Tier review", "Classify bike-shop tier for unclassified companies.", tier_count, "/review/tier", "#7c3aed") }}
+  {{ qcard(6, "Outreach-ready", "Approve reviewed, emailable, non-customer leads for campaigns.", ready_count, "/review/ready", "#16a34a") }}
+</section>
+
+<section class="card" style="background:#f8f6f0;">
+  <strong>Flow:</strong> Import (Cold Emailing → KVK) → <a href="/review/discovery">Discovery</a> →
+  <a href="/review/match">Match</a> → <a href="/review/tier">Tier</a> →
+  <a href="/review/ready">Approve</a> → <a href="/emails/campaigns/new">Campaign</a> → send.
+</section>
+{% endblock %}

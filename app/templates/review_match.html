@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+{% if flash %}<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <h2 style="margin:0;">Match review <span style="font-size:14px;color:#6b7280;">({{ "{:,}".format(total) }})</span></h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">Possible existing customers (fuzzy / high confidence). Confirm to suppress, or dismiss. Exact identity matches are auto-suppressed and never appear here.</p>
+    </div>
+    <form method="post" action="/review/match/scan">
+      <input type="hidden" name="limit" value="500">
+      <button type="submit" style="padding:9px 16px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Scan for possible customers</button>
+    </form>
+  </div>
+</section>
+
+<section class="card table-card">
+  <table>
+    <thead><tr><th>Company (KVK)</th><th>City</th><th>Likely customer match</th><th>Confidence</th><th>Reason</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      {% set cust = customers.get(r.matched_customer_id) %}
+      <tr>
+        <td><a href="/kvk/{{ r.id }}" style="font-weight:600;color:#1f2933;">{{ r.company_name }}</a><br><span style="font-size:11px;color:#9aa0a6;">{{ r.email_public or r.website_domain or '' }}</span></td>
+        <td>{{ r.primary_city or '—' }}</td>
+        <td>{% if cust %}<a href="/customers">{{ cust.canonical_company_name }}</a><br><span style="font-size:11px;color:#9aa0a6;">{{ cust.customer_email_primary }}</span>{% else %}<span style="color:#9aa0a6;">(id {{ r.matched_customer_id or '—' }})</span>{% endif %}</td>
+        <td><span style="font-size:12px;padding:2px 8px;border-radius:10px;background:{% if r.match_confidence=='high' %}#fee2e2{% else %}#fef3c7{% endif %};">{{ r.match_confidence }}</span></td>
+        <td style="color:#6b7280;font-size:12px;">{{ r.best_match_reason }}</td>
+        <td style="white-space:nowrap;">
+          <form method="post" action="/review/match/{{ r.id }}/confirm" style="display:inline;" onsubmit="return confirm('Confirm {{ r.company_name }} is an existing customer? It will be suppressed from outreach.');"><button style="font-size:12px;padding:3px 8px;border:1px solid #ef4444;color:#ef4444;border-radius:6px;background:#fff;cursor:pointer;">Is a customer → suppress</button></form>
+          <form method="post" action="/review/match/{{ r.id }}/dismiss" style="display:inline;"><button style="font-size:12px;padding:3px 8px;border:none;color:#16a34a;background:none;cursor:pointer;">Not a customer</button></form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" style="color:#9aa0a6;">No candidates. Click “Scan for possible customers” to populate this queue.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+{% if flash %}<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <h2 style="margin:0;">Discovery queue <span style="font-size:14px;color:#6b7280;">({{ "{:,}".format(total) }})</span></h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">Companies needing a website / email / phone. Run open discovery, then confirm or clear results.</p>
+    </div>
+    <form method="post" action="/review/discovery/run-batch">
+      <input type="hidden" name="limit" value="25">
+      <button type="submit" style="padding:9px 16px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;cursor:pointer;">⟳ Run discovery on next 25</button>
+    </form>
+  </div>
+  {% if engine == 'open' and not searxng_set %}
+  <p style="margin:10px 0 0 0;color:#b45309;font-size:13px;">⚠️ SEARXNG_URL not set — name→website search returns nothing yet, so rows with no website will land in needs_review. Set up SearXNG (see DEPLOY_SEARXNG_PHOTON.md) to enable automatic website finding.</p>
+  {% endif %}
+</section>
+
+<section class="card table-card">
+  <table>
+    <thead><tr><th>Company</th><th>City</th><th>Website</th><th>Conf</th><th>Email</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="/kvk/{{ r.id }}" style="font-weight:600;color:#1f2933;">{{ r.company_name }}</a>{% if r.discovery_query_used %}<br><span style="font-size:11px;color:#9aa0a6;">q: {{ r.discovery_query_used[:46] }}</span>{% endif %}</td>
+        <td>{{ r.primary_city or '—' }}</td>
+        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;">{% if r.website %}<a href="{{ r.website }}" target="_blank" rel="noopener">{{ r.website_domain or r.website }}</a>{% else %}<span style="color:#9aa0a6;">none</span>{% endif %}</td>
+        <td>{{ r.website_confidence or 0 }}</td>
+        <td>{{ r.email_public or '—' }}</td>
+        <td><span style="font-size:12px;padding:2px 8px;border-radius:10px;background:{% if r.enrichment_status=='needs_review' %}#fef3c7{% elif r.enrichment_status=='no_website' %}#fee2e2{% else %}#f0ece2{% endif %};">{{ r.enrichment_status }}</span></td>
+        <td style="white-space:nowrap;">
+          <form method="post" action="/review/discovery/{{ r.id }}/run" style="display:inline;"><button style="font-size:12px;padding:3px 8px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;">Run</button></form>
+          {% if r.website %}<form method="post" action="/review/discovery/{{ r.id }}/confirm" style="display:inline;"><button style="font-size:12px;padding:3px 8px;border:1px solid #16a34a;color:#16a34a;border-radius:6px;background:#fff;cursor:pointer;">Confirm</button></form>
+          <form method="post" action="/review/discovery/{{ r.id }}/clear-website" style="display:inline;"><button style="font-size:12px;padding:3px 8px;border:none;color:#ef4444;background:none;cursor:pointer;">Clear</button></form>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" style="color:#9aa0a6;">Queue empty — nothing to discover right now.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
