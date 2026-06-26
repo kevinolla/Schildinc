@@ -1005,3 +1005,44 @@ class EnrichmentFact(Base):
             name="uq_enrichment_fact_subject_field_source",
         ),
     )
+
+
+class LeadScore(Base):
+    """Explainable, reviewable lead score for a company (DESIGN_V2 Phase 2).
+
+    Deterministic, rules-based output (see app/lead_scoring.py) — one row per
+    (subject_type, subject_id). It NEVER approves outreach (there is no
+    approved_for_outreach field); it only prioritizes. ``bike_tier`` is a
+    read-only mirror of the existing KvkCompany.bike_shop_tier — the legacy tier
+    logic is preserved, not replaced. ``reasons`` is a JSON list of human-readable
+    explanations. ``manual_override`` freezes the row from recomputation. Nothing
+    writes here unless settings.lead_scoring_enabled is on.
+    """
+
+    __tablename__ = "lead_scores"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_type: Mapped[str] = mapped_column(Text, default="kvk", index=True)  # kvk|prospect
+    subject_id: Mapped[int] = mapped_column(Integer, index=True)
+
+    store_quality_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    commercial_potential: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # high|medium|low|manual_review|exclude
+    outreach_priority: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="", index=True)
+    sample_pack_eligibility: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")  # yes|no|review
+    call_followup_eligibility: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")  # yes|no
+    bike_tier: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")  # mirrored, read-only
+
+    reasons: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")  # JSON list[str]
+    engine_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    input_fingerprint: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    manual_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    reviewed_by: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("subject_type", "subject_id", name="uq_lead_score_subject"),
+    )

@@ -119,6 +119,39 @@ def _autopick_score() -> int:
     return max(_confidence_threshold(), 80)
 
 
+# --- DESIGN_V2 Phase 2: recall tunables (read defensively, OFF by default) ---
+
+def _recall_variants_enabled() -> bool:
+    return bool(getattr(settings, "discovery_recall_variants_enabled", False))
+
+
+def _max_candidates() -> int:
+    try:
+        return max(1, int(getattr(settings, "discovery_max_candidates", 8)))
+    except (TypeError, ValueError):
+        return 8
+
+
+def _max_variants() -> int:
+    try:
+        return max(1, int(getattr(settings, "discovery_max_query_variants", 6)))
+    except (TypeError, ValueError):
+        return 6
+
+
+def _variant_search_limit() -> int:
+    try:
+        return max(1, int(getattr(settings, "discovery_variant_search_limit", 5)))
+    except (TypeError, ValueError):
+        return 5
+
+
+# Sector clue terms appended to recall variants. Bike-first (the main segment);
+# adding these is precision-safe — a wrong domain a clue surfaces is still floored
+# by _fuzzy_score's distinctive-token gate, so clues only help find real sites.
+_DEFAULT_SECTOR_TERMS = ("fietsenwinkel", "tweewielers", "fietsen", "bike shop", "bicycle")
+
+
 # ---------------------------------------------------------------------------
 # Value objects
 # ---------------------------------------------------------------------------
@@ -541,6 +574,7 @@ def discover_for_company(
     country: str = "NL",
     postal: str = "",
     website: str = "",
+    sector_terms: tuple[str, ...] | None = None,
 ) -> DiscoveryOutcome:
     """Orchestrate non-Google discovery for one company.
 
@@ -607,7 +641,15 @@ def discover_for_company(
     query = _build_query(name, city, country, postal)
 
     # -- Step 3: open search via SearXNG (sibling module) --------------------
-    candidates = _search_candidates(name, city, country, query)
+    # DESIGN_V2 Phase 2 recall: when enabled, widen the candidate net with
+    # several query variants (precision gate below is unchanged). Falls back to
+    # the single-query path if the variant path surfaces nothing.
+    if _recall_variants_enabled():
+        candidates = _collect_candidates_multi(name, city, country, postal, sector_terms)
+        if not candidates:
+            candidates = _search_candidates(name, city, country, query)
+    else:
+        candidates = _search_candidates(name, city, country, query)
 
     if not candidates:
         # Either the backend is unconfigured, or it genuinely returned nothing.
@@ -631,7 +673,9 @@ def discover_for_company(
     # DOMAIN — so it must be the score the autopick decision uses.
     for cand in candidates:
         cand.score = _fuzzy_score(name, cand)
-    candidates.sort(key=lambda c: c.score, reverse=True)
+    # Primary sort key is the precision score (decides acceptance); _rank_bonus
+    # is only a tiebreaker among equal scores for nicer review-queue ordering.
+    candidates.sort(key=lambda c: (c.score, _rank_bonus(name, city, c)), reverse=True)
 
     best = candidates[0]
     autopick = _autopick_score()
@@ -661,6 +705,118 @@ def discover_for_company(
         needs_review=True,
         error=f"top candidate score {best.score} below autopick {autopick}",
     )
+
+
+def _query_variants(
+    name: str, city: str, country: str, postal: str, sector_terms: tuple[str, ...] | None = None
+) -> list[str]:
+    """Build several human-like search queries for one company (recall).
+
+    Order matters: strongest/most-specific first. Variants are de-duplicated
+    (case-insensitive) and capped at ``_max_variants()``. The acceptance gate is
+    unchanged — these only widen the candidate net.
+    """
+    name = str(name or "").strip()
+    if not name:
+        return []
+    city = str(city or "").strip()
+    terms = sector_terms if sector_terms is not None else _DEFAULT_SECTOR_TERMS
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(q: str) -> None:
+        q = " ".join(str(q or "").split()).strip()
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            out.append(q)
+
+    _add(_build_query(name, city, country, postal))   # current behaviour, strongest
+    _add(f"{name} {city}" if city else name)
+    _add(name)
+    for term in terms:
+        _add(f"{name} {term} {city}" if city else f"{name} {term}")
+    return out[: _max_variants()]
+
+
+def _search_one_query(query: str, limit: int) -> list[WebsiteChoice]:
+    """Run ONE specific query against search_client.search. Import-safe; [] on any miss."""
+    try:
+        from app import search_client  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        logger.info("discovery_open: search_client unavailable (%s)", exc)
+        return []
+    is_configured = getattr(search_client, "is_configured", None)
+    if callable(is_configured):
+        try:
+            if not is_configured():
+                return []
+        except Exception:  # noqa: BLE001
+            return []
+    fn = getattr(search_client, "search", None)
+    if not callable(fn):
+        return []
+    raw = None
+    for attempt in (lambda: fn(query, limit), lambda: fn(query)):
+        try:
+            raw = attempt()
+            break
+        except TypeError:
+            continue
+        except Exception as exc:  # noqa: BLE001 - search must never crash us
+            logger.info("discovery_open: search() failed (%s)", exc)
+            return []
+    out: list[WebsiteChoice] = []
+    for r in raw or []:
+        try:
+            out.append(_coerce_candidate(r))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def _collect_candidates_multi(
+    name: str, city: str, country: str, postal: str, sector_terms: tuple[str, ...] | None
+) -> list[WebsiteChoice]:
+    """Run several query variants and merge their candidates (dedup by domain).
+
+    Returns up to ``_max_candidates()`` distinct candidate domains. The caller
+    then scores + gates them with the UNCHANGED precision logic.
+    """
+    variants = _query_variants(name, city, country, postal, sector_terms)
+    if not variants:
+        return []
+    per = _variant_search_limit()
+    cap = _max_candidates()
+    seen: dict[str, WebsiteChoice] = {}
+    order: list[str] = []
+    for q in variants:
+        for cand in _search_one_query(q, per):
+            dom = (cand.domain or "").lower()
+            if dom.startswith("www."):
+                dom = dom[4:]
+            if not dom or dom in seen:
+                continue
+            seen[dom] = cand
+            order.append(dom)
+            if len(seen) >= cap:
+                break
+        if len(seen) >= cap:
+            break
+    return [seen[d] for d in order]
+
+
+def _rank_bonus(name: str, city: str, candidate: WebsiteChoice) -> int:
+    """A small 0-100 TIEBREAKER (title/city/snippet match) used only to order
+    candidates of equal _fuzzy_score. It NEVER affects acceptance — acceptance
+    is decided solely by _fuzzy_score vs the autopick threshold."""
+    title = candidate.title or ""
+    snippet = candidate.snippet or ""
+    bonus = _wratio(name, title)
+    city = str(city or "").strip().lower()
+    if city and (city in title.lower() or city in snippet.lower()):
+        bonus += 20
+    return min(100, bonus)
 
 
 def _search_candidates(

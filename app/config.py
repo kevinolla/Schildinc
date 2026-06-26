@@ -179,6 +179,26 @@ class Settings:
     #   and is never treated as truth / never auto-used in outreach.
     fact_autotrust_min: int = int(os.getenv("FACT_AUTOTRUST_MIN", "80"))
 
+    # ── DESIGN_V2 Phase 2 (additive, gated, precision-preserving) ──────────
+    # A. Discovery recall. When ON, discovery issues several query variants per
+    #   company (name; name+city; name+sector clues) and merges candidate
+    #   domains before scoring. The ACCEPTANCE gate (_fuzzy_score distinctive-
+    #   token + autopick threshold) is UNCHANGED — more candidates only give the
+    #   real domain more chances to surface; they can never lower the bar. OFF by
+    #   default because it multiplies SearXNG query volume (operational change).
+    discovery_recall_variants_enabled: bool = _as_bool(os.getenv("DISCOVERY_RECALL_VARIANTS_ENABLED"), False)
+    discovery_max_query_variants: int = int(os.getenv("DISCOVERY_MAX_QUERY_VARIANTS", "6"))
+    discovery_variant_search_limit: int = int(os.getenv("DISCOVERY_VARIANT_SEARCH_LIMIT", "5"))
+    discovery_max_candidates: int = int(os.getenv("DISCOVERY_MAX_CANDIDATES", "8"))
+    # B. enrichment_facts extraction caps (only run when DISCOVERY_FACTS_ENABLED).
+    fact_extract_max_pages: int = int(os.getenv("FACT_EXTRACT_MAX_PAGES", "2"))
+    # C. Lead scoring. When ON, discovery computes an explainable score per
+    #   company (store_quality / commercial_potential / outreach_priority /
+    #   sample_pack / call_followup) into the lead_scores table. Never approves
+    #   outreach — it only prioritizes. OFF by default.
+    lead_scoring_enabled: bool = _as_bool(os.getenv("LEAD_SCORING_ENABLED"), False)
+    lead_scoring_engine_version: int = int(os.getenv("LEAD_SCORING_ENGINE_VERSION", "1"))
+
     # ── WhatsApp Business Cloud API (direct Meta) ──────────────────────────
     # Set these from Meta → WhatsApp → API setup. The webhook callback URL to
     # register in Meta is {APP_BASE_URL}/webhooks/whatsapp with the verify token.

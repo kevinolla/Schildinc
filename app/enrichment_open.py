@@ -26,9 +26,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import KvkCompany
+from app.models import EnrichmentFact, KvkCompany
 from app.discovery_open import discover_for_company
 from app.suppression import match_existing_customer
+from app import enrichment_facts as facts_module
+from app import fact_extract
+from app import lead_scoring
 
 
 def open_engine_active() -> bool:
@@ -106,6 +109,58 @@ def _persist_suppression_review(session: Session, company: KvkCompany) -> None:
         company.client_match_status = "matched"
 
 
+def _maybe_extract_facts(session: Session, company: KvkCompany, outcome) -> None:
+    """Extract + persist public facts from an accepted website. Gated + best-effort.
+
+    Only runs when settings.discovery_facts_enabled is on AND we actually
+    accepted a website. Never raises into the caller. persist_facts marks any
+    sub-threshold fact review_required, so nothing low-confidence is trusted.
+    """
+    if not facts_module.facts_enabled():
+        return
+    website = (outcome.website or company.website or "").strip()
+    if not website or outcome.status not in {"found", "partial", "no_contacts"}:
+        return
+    try:
+        facts = fact_extract.extract_facts(website, company.company_name or "", company.country_code or "NL")
+        if facts:
+            facts_module.persist_facts(session, "kvk", company.id, facts)
+    except Exception:  # noqa: BLE001 - fact extraction must never break discovery
+        pass
+
+
+def _maybe_score(session: Session, company: KvkCompany) -> None:
+    """Compute + persist an explainable lead score. Gated + never raises.
+
+    Only TRUSTED facts (review_required False) influence the score; review-
+    required facts are passed separately and intentionally not weighted.
+    """
+    if not lead_scoring.scoring_enabled():
+        return
+    try:
+        rows = session.scalars(
+            select(EnrichmentFact).where(
+                EnrichmentFact.subject_type == "kvk",
+                EnrichmentFact.subject_id == company.id,
+            )
+        ).all()
+        trusted = {r.field_name for r in rows if not r.review_required}
+        review = {r.field_name for r in rows if r.review_required}
+        result = lead_scoring.compute_lead_score(
+            already_client=bool(company.already_client_flag),
+            bike_tier=company.bike_shop_tier or "",
+            sector_relevant=True,  # KVK pool is bike-first
+            has_website=bool((company.website or "").strip()),
+            website_confidence=int(company.website_confidence or 0),
+            has_phone=bool((company.phone_public or "").strip()),
+            trusted_facts=trusted,
+            review_facts=review,
+        )
+        lead_scoring.persist_lead_score(session, "kvk", company.id, result)
+    except Exception:  # noqa: BLE001 - scoring must never break discovery
+        pass
+
+
 def run_open_discovery_for_company(session: Session, company: KvkCompany, *, commit: bool = True) -> str:
     """Discover one company via the open stack + record suppression review.
 
@@ -128,6 +183,9 @@ def run_open_discovery_for_company(session: Session, company: KvkCompany, *, com
 
     _persist_outcome(company, outcome)
     _persist_suppression_review(session, company)
+    # DESIGN_V2 Phase 2 (both gated; no-ops unless their flags are on):
+    _maybe_extract_facts(session, company, outcome)   # DISCOVERY_FACTS_ENABLED
+    _maybe_score(session, company)                    # LEAD_SCORING_ENABLED
     if commit:
         session.commit()
     return company.enrichment_status
