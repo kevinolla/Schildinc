@@ -3,7 +3,19 @@ from __future__ import annotations
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    Numeric,
+    Text,
+    UniqueConstraint,
+    false,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -569,6 +581,13 @@ class EmailCampaign(Base):
     lead_temperature: Mapped[str] = mapped_column(Text, default="cold", index=True)
     # 'draft' | 'scheduled' | 'sending' | 'paused' | 'sent' | 'cancelled'
     status: Mapped[str] = mapped_column(Text, default="draft", index=True)
+    # DESIGN_V2 dry-run keystone (migration 0022). When TRUE the campaign is
+    # rendered into previews but NEVER sends real mail — the live send loop
+    # short-circuits before any provider/Gmail call. Python default is TRUE
+    # (new ORM-created campaigns are safe), but the migration backfills all
+    # EXISTING rows to FALSE via server_default, so nothing already created or
+    # in-flight changes behaviour.
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=false())
     sender_alias: Mapped[str] = mapped_column(Text, default="")
     sender_name: Mapped[str] = mapped_column(Text, default="")
     reply_to: Mapped[str] = mapped_column(Text, default="")
@@ -621,6 +640,10 @@ class EmailCampaignRecipient(Base):
     provider: Mapped[str] = mapped_column(Text, default="")
     provider_message_id: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    # DESIGN_V2 dry-run keystone (migration 0022). Populated only when the
+    # parent campaign is dry_run: the fully-rendered HTML the recipient WOULD
+    # have received. No mail is sent; the recipient stays 'pending'.
+    dry_run_preview_html: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
 
     open_count: Mapped[int] = mapped_column(Integer, default=0)
     click_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -944,3 +967,41 @@ class AuditLog(Base):
     target_id: Mapped[str] = mapped_column(Text, default="")
     detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+
+
+class EnrichmentFact(Base):
+    """A single discovered public fact about a company, with provenance.
+
+    DESIGN_V2 foundation (migration 0022). Polymorphic by (subject_type,
+    subject_id) — no cross-table FK, mirroring Activity — so it can attach to a
+    KvkCompany, Prospect, or Contact. EVERY fact carries source_url + confidence
+    + extraction_method, and `review_required` gates whether it may be trusted:
+    a fact below the autotrust confidence threshold stays review_required=TRUE
+    and must never be treated as truth or used in outreach until a human clears
+    it. Nothing writes here until settings.discovery_facts_enabled is on.
+    """
+
+    __tablename__ = "enrichment_facts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_type: Mapped[str] = mapped_column(Text, default="kvk", index=True)  # kvk|prospect|contact
+    subject_id: Mapped[int] = mapped_column(Integer, index=True)
+    field_name: Mapped[str] = mapped_column(Text, default="", index=True)  # e.g. premium_brands, multi_location
+    extracted_value: Mapped[str] = mapped_column(Text, default="")
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    extraction_method: Mapped[str] = mapped_column(Text, default="")  # web_extract|searxng|llm|manual
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+    reviewed_by: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_type", "subject_id", "field_name", "source_url",
+            name="uq_enrichment_fact_subject_field_source",
+        ),
+    )

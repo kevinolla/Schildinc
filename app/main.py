@@ -3023,6 +3023,10 @@ def campaign_create(
         audience_type=audience_type,
         lead_temperature=lead_temperature,
         status="draft",
+        # DESIGN_V2 safety default: a new campaign starts in dry-run (render-only,
+        # cannot send real mail) until the operator turns it off. Override with
+        # CAMPAIGN_DRY_RUN_DEFAULT=false to restore the old behaviour.
+        dry_run=settings.campaign_dry_run_default,
         sender_alias=sender_alias.strip() or settings.gmail_send_as,
         sender_name=sender_name.strip() or settings.gmail_sender_name,
         reply_to=reply_to.strip() or settings.reply_to_email,
@@ -3088,6 +3092,21 @@ def campaign_send(
     campaign = db.get(EmailCampaign, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.total_recipients == 0:
+        return RedirectResponse(
+            f"/emails/campaigns/{campaign_id}?flash={quote_plus('No recipients to send to')}",
+            status_code=303,
+        )
+    # DESIGN_V2 dry-run keystone: a dry-run campaign renders previews but never
+    # sends. Handled BEFORE the sender check so previews work with no provider
+    # connected at all. send_campaign_batch short-circuits to preview-only.
+    if getattr(campaign, "dry_run", False):
+        result = send_campaign_batch(db, campaign)
+        msg = (
+            f"Dry-run: previewed {result.get('previewed', 0)} email(s) — NOTHING was sent. "
+            "Turn off Dry-run to send for real."
+        )
+        return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
     # Only the Gmail-API transport needs a connected Gmail account. When a
     # provider (Resend/Brevo/SMTP) is configured, sending goes through the
     # provider abstraction and no Gmail connection is required.
@@ -3098,16 +3117,45 @@ def campaign_send(
             f"/emails/campaigns/{campaign_id}?flash={quote_plus('Connect Gmail (or set MAIL_PROVIDER) before sending')}",
             status_code=303,
         )
-    if campaign.total_recipients == 0:
-        return RedirectResponse(
-            f"/emails/campaigns/{campaign_id}?flash={quote_plus('No recipients to send to')}",
-            status_code=303,
-        )
     campaign.status = "sending"
     campaign.started_at = campaign.started_at or datetime.utcnow()
     db.commit()
     _kick_campaign_send(campaign.id)
     msg = "Sending started — emails go out in the background (throttled). Refresh for live stats."
+    return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/emails/campaigns/{campaign_id}/dry-run")
+def campaign_toggle_dry_run(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    user: str = Depends(require_admin),
+    enabled: str = Form(""),
+) -> RedirectResponse:
+    """Turn a campaign's dry-run flag on/off (DESIGN_V2 keystone control).
+
+    Cannot be toggled while a campaign is actively sending — pause it first.
+    """
+    campaign = db.get(EmailCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.status == "sending":
+        return RedirectResponse(
+            f"/emails/campaigns/{campaign_id}?flash={quote_plus('Pause the campaign before changing dry-run')}",
+            status_code=303,
+        )
+    new_value = enabled.strip().lower() in {"1", "true", "yes", "on"}
+    campaign.dry_run = new_value
+    db.commit()
+    try:
+        log_audit(
+            db, actor=user, action="campaign.dry_run",
+            target_type="email_campaign", target_id=str(campaign.id),
+            detail=f"dry_run set to {new_value}",
+        )
+    except Exception:  # noqa: BLE001 - audit must never block the action
+        pass
+    msg = "Dry-run ON — sends are previews only." if new_value else "Dry-run OFF — this campaign can now send real mail."
     return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
 
 

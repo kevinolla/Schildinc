@@ -13,6 +13,9 @@
         {{ campaign.audience_type }} · {{ campaign.lead_temperature }} ·
         status <strong>{{ campaign.status }}</strong> ·
         from <code>{{ campaign.sender_alias }}</code>
+        {% if campaign.dry_run %}
+        · <span style="padding:2px 10px;border-radius:10px;font-size:12px;font-weight:700;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;">🧪 DRY-RUN — will not send</span>
+        {% endif %}
       </p>
     </div>
     <a href="/emails" style="text-decoration:none;color:#6b7280;">← All campaigns</a>
@@ -37,11 +40,33 @@
   {% if not gmail.connected %}
   <p style="color:#b45309;">Connect Gmail on the <a href="/emails">Campaigns page</a> before sending.</p>
   {% endif %}
+  {% if campaign.dry_run %}
+  <p style="margin:0 0 10px 0;padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;color:#92400e;font-size:13px;">
+    🧪 <strong>Dry-run is ON.</strong> "Send" only renders previews — no real email goes out. Turn dry-run off below when you're ready to send for real.
+  </p>
+  {% endif %}
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
     {% if campaign.status in ['draft','paused','scheduled'] %}
-    <form method="post" action="/emails/campaigns/{{ campaign.id }}/send" onsubmit="return confirm('Start sending {{ campaign.total_recipients }} emails (throttled in the background)?');">
+    {% if campaign.dry_run %}
+    <form method="post" action="/emails/campaigns/{{ campaign.id }}/send">
+      <button type="submit" style="padding:10px 18px;background:#d97706;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">🧪 Generate dry-run preview</button>
+    </form>
+    {% else %}
+    <form method="post" action="/emails/campaigns/{{ campaign.id }}/send" onsubmit="return confirm('Send {{ campaign.total_recipients }} REAL emails (throttled in the background)?');">
       <button type="submit" style="padding:10px 18px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">▶ Send now</button>
     </form>
+    {% endif %}
+    {% if campaign.status != 'sending' %}
+    <form method="post" action="/emails/campaigns/{{ campaign.id }}/dry-run">
+      {% if campaign.dry_run %}
+      <input type="hidden" name="enabled" value="0">
+      <button type="submit" onclick="return confirm('Turn dry-run OFF? This campaign will then be able to send real email.');" style="padding:10px 16px;background:#fff;color:#16a34a;border:1px solid #16a34a;border-radius:8px;font-weight:600;cursor:pointer;">Turn dry-run OFF</button>
+      {% else %}
+      <input type="hidden" name="enabled" value="1">
+      <button type="submit" style="padding:10px 16px;background:#fff;color:#92400e;border:1px solid #d97706;border-radius:8px;font-weight:600;cursor:pointer;">Turn dry-run ON</button>
+      {% endif %}
+    </form>
+    {% endif %}
     {% endif %}
     {% if campaign.status == 'sending' %}
     <form method="post" action="/emails/campaigns/{{ campaign.id }}/pause">

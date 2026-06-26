@@ -158,6 +158,27 @@ class Settings:
     discovery_use_rq: bool = _as_bool(os.getenv("DISCOVERY_USE_RQ"), False)
     redis_url: str = os.getenv("REDIS_URL", "")
 
+    # ── DESIGN_V2 foundation phase (additive, gated, safe-by-default) ───────
+    # Migration 0022. With these at their defaults, production sending behaves
+    # exactly as before EXCEPT that NEWLY created campaigns start in dry-run
+    # (render-only, never send) until the operator explicitly turns it off.
+    # Existing campaigns are backfilled to dry_run=FALSE by the migration, so
+    # nothing already created/in-flight is affected.
+    #
+    # campaign_dry_run_default: the dry_run value stamped on campaigns created
+    #   via the UI. TRUE = safe default (a new campaign cannot send real mail
+    #   until a human turns dry-run off). Set CAMPAIGN_DRY_RUN_DEFAULT=false to
+    #   restore the old "new campaign is immediately sendable" behaviour.
+    campaign_dry_run_default: bool = _as_bool(os.getenv("CAMPAIGN_DRY_RUN_DEFAULT"), True)
+    # discovery_facts_enabled: gate for the (future) enrichment-fact extraction
+    #   callers. OFF by default — the enrichment_facts table + persist helper
+    #   exist, but nothing writes to them until this is turned on.
+    discovery_facts_enabled: bool = _as_bool(os.getenv("DISCOVERY_FACTS_ENABLED"), False)
+    # fact_autotrust_min: a discovered fact with confidence >= this is usable
+    #   automatically; below it, review_required=TRUE so it sits in the queue
+    #   and is never treated as truth / never auto-used in outreach.
+    fact_autotrust_min: int = int(os.getenv("FACT_AUTOTRUST_MIN", "80"))
+
     # ── WhatsApp Business Cloud API (direct Meta) ──────────────────────────
     # Set these from Meta → WhatsApp → API setup. The webhook callback URL to
     # register in Meta is {APP_BASE_URL}/webhooks/whatsapp with the verify token.

@@ -292,6 +292,41 @@ def _use_provider_abstraction() -> bool:
     return getattr(settings, "mail_provider", "console") in _ABSTRACTION_PROVIDERS
 
 
+def _render_dry_run_previews(
+    session: Session, campaign: EmailCampaign, *, limit: int | None = None
+) -> dict:
+    """Render a dry_run campaign's pending recipients WITHOUT sending anything.
+
+    Populates ``EmailCampaignRecipient.dry_run_preview_html`` with the exact HTML
+    the recipient WOULD have received, leaves their status as 'pending' (no real
+    send happened), and moves the campaign out of 'sending' so the background
+    sender daemon will not keep re-picking it. Touches no provider, increments no
+    counters. The operator reviews the previews, turns dry-run off, then sends.
+    """
+    pending = session.scalars(
+        select(EmailCampaignRecipient)
+        .where(
+            EmailCampaignRecipient.campaign_id == campaign.id,
+            EmailCampaignRecipient.status == "pending",
+        )
+        .order_by(EmailCampaignRecipient.id.asc())
+        .limit(limit if limit is not None else 10000)
+    ).all()
+
+    previewed = 0
+    for recipient in pending:
+        _subject, html_body, _text_body = render_for_recipient(campaign, recipient)
+        recipient.dry_run_preview_html = html_body
+        previewed += 1
+
+    # A previewed dry-run campaign returns to 'draft' so the operator can review,
+    # turn dry-run OFF, and send for real. Never leaves it stuck in 'sending'.
+    if campaign.status == "sending":
+        campaign.status = "draft"
+    session.commit()
+    return {"ok": True, "dry_run": True, "previewed": previewed, "sent": 0}
+
+
 def send_campaign_batch(session: Session, campaign: EmailCampaign, *, limit: int | None = None) -> dict:
     """Send up to `limit` pending recipients for one campaign.
 
@@ -301,6 +336,14 @@ def send_campaign_batch(session: Session, campaign: EmailCampaign, *, limit: int
     MAIL_PROVIDER is one of resend/brevo/smtp/gmail_smtp, sends route through
     app/email_providers.py instead (reply-to still forced to sales@schildinc.com).
     """
+    # DESIGN_V2 dry-run keystone. A dry_run campaign is rendered into previews
+    # but NEVER sends real mail — we short-circuit before any suppression check,
+    # provider call, counter increment, or status change. When dry_run is FALSE
+    # (every existing/live campaign — the migration backfills FALSE) this is a
+    # pure no-op and the live path below is byte-identical to before.
+    if getattr(campaign, "dry_run", False):
+        return _render_dry_run_previews(session, campaign, limit=limit)
+
     use_provider = _use_provider_abstraction()
     # The Gmail-API path requires a connected account; provider paths don't.
     if not use_provider and get_active_account(session) is None:
@@ -495,10 +538,14 @@ _scheduler_lock = Lock()
 def process_due_campaigns(session: Session) -> int:
     """Promote due scheduled campaigns to 'sending', then drain 'sending'."""
     now = datetime.utcnow()
+    # DESIGN_V2: never auto-promote a dry-run campaign. It stays 'scheduled'
+    # until the operator turns dry-run off, instead of silently rendering a
+    # preview and reverting to draft at its scheduled time.
     due = session.scalars(
         select(EmailCampaign).where(
             EmailCampaign.status == "scheduled",
             EmailCampaign.scheduled_at <= now,
+            EmailCampaign.dry_run.is_(False),
         )
     ).all()
     for campaign in due:
