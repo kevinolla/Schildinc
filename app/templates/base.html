@@ -47,9 +47,10 @@
           <a href="/review/ready"      {% if path.startswith('/review/ready') %}class="active" aria-current="page"{% endif %}>Outreach-ready</a>
         </details>
 
-        <details class="nav-group" data-key="campaigns" {% if path.startswith('/emails') %}open{% endif %}>
+        <details class="nav-group" data-key="campaigns" {% if path.startswith('/emails') or path.startswith('/sequences') %}open{% endif %}>
           <summary class="nav-section">Campaigns</summary>
           <a href="/emails"    {% if path.startswith('/emails') %}class="active" aria-current="page"{% endif %}>Email Campaigns</a>
+          <a href="/sequences" {% if path.startswith('/sequences') %}class="active" aria-current="page"{% endif %}>Sequences</a>
         </details>
 
         <details class="nav-group" data-key="helpdesk" {% if path.startswith('/inbox') %}open{% endif %}>

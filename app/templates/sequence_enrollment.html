@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <div>
+      <h2 style="margin:0;">{{ enrollment.company_name or enrollment.to_email }}</h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">
+        {{ enrollment.to_email }} · step {{ enrollment.current_step }}/3 ·
+        status <strong>{{ enrollment.sequence_status }}</strong>
+        {% if enrollment.next_followup_at %} · next {{ enrollment.next_followup_at.strftime('%Y-%m-%d %H:%M UTC') }}{% endif %}
+      </p>
+      {% if enrollment.stop_reason %}<p style="color:#ef4444;font-size:13px;">Stopped: {{ enrollment.stop_reason }}</p>{% endif %}
+    </div>
+    <a href="/sequences" style="text-decoration:none;color:#6b7280;">← All sequences</a>
+  </div>
+</section>
+
+<section class="card">
+  <h3 style="margin-top:0;">Sent / scheduled emails</h3>
+  {% for em in emails %}
+  <details style="border:1px solid #eee;border-radius:8px;margin-bottom:10px;padding:8px 12px;">
+    <summary style="cursor:pointer;font-weight:600;">
+      Step {{ em.step_number }} — {{ em.rendered_subject }}
+      <span style="font-weight:400;color:#6b7280;font-size:12px;">({{ em.status }}{% if em.scheduled_send_at %} · {{ em.scheduled_send_at.strftime('%Y-%m-%d') }}{% endif %})</span>
+    </summary>
+    <div style="margin-top:8px;font-size:12px;color:#6b7280;">
+      Personalization: {{ em.personalization_fields_used }} · {{ em.confidence_summary }}
+    </div>
+    <div style="margin-top:10px;border:1px solid #f0f0f0;border-radius:6px;padding:10px;max-height:420px;overflow:auto;">
+      {{ em.rendered_body_html | safe }}
+    </div>
+  </details>
+  {% else %}
+  <p style="color:#6b7280;">No emails generated yet for this enrollment.</p>
+  {% endfor %}
+</section>
+{% endblock %}

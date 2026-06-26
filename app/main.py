@@ -102,7 +102,12 @@ from app.models import (
     SuppressionEntry,
     WebhookLog,
     WhatsappTemplate,
+    EmailSequence,
+    SequenceStep,
+    SequenceEnrollment,
+    SequenceEmail,
 )
+from app import sequences as sequences_module
 from app.outreach_templates import build_outreach_bundle
 from app.tiering import apply_bike_tier, score_kvk_company_tier
 from app.stripe_sync import sync_stripe_event
@@ -125,10 +130,24 @@ async def lifespan(app: FastAPI):
         try:
             seed_starter_templates(seed_session)
             seed_inbox_defaults(seed_session, admin_email=settings.reply_to_email)
+            # Seed the 3 baseline sequence templates + default sequence (harmless
+            # data; the sequence engine stays OFF until its flag is set).
+            try:
+                from app.sequence_library import seed_sequence_templates
+                seed_sequence_templates(seed_session)
+                seed_session.commit()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[lifespan] sequence seed skipped: {exc}")
         finally:
             seed_session.close()
         start_email_sender_scheduler()
         start_gmail_inbound_scheduler()
+        # Sequence scheduler — no-op unless SEQUENCE_ENGINE_ENABLED.
+        try:
+            from app.sequences import start_sequence_scheduler
+            start_sequence_scheduler()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[lifespan] sequence scheduler not started: {exc}")
     except Exception as exc:
         print(f"[lifespan] Email engine / inbox not started: {exc}")
     yield
@@ -3157,6 +3176,111 @@ def campaign_toggle_dry_run(
         pass
     msg = "Dry-run ON — sends are previews only." if new_value else "Dry-run OFF — this campaign can now send real mail."
     return RedirectResponse(f"/emails/campaigns/{campaign_id}?flash={quote_plus(msg)}", status_code=303)
+
+
+# ===========================================================================
+# DESIGN_V2 Phase 3B — Cold email SEQUENCE engine UI (gated; off by default)
+# ===========================================================================
+
+@app.get("/sequences", response_class=HTMLResponse)
+def sequences_page(
+    request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin), flash: str = ""
+) -> HTMLResponse:
+    seq = sequences_module.get_default_sequence(db)
+    steps = []
+    if seq is not None:
+        steps = db.scalars(
+            select(SequenceStep).where(SequenceStep.sequence_id == seq.id).order_by(SequenceStep.step_number)
+        ).all()
+    status_counts = dict(db.execute(
+        select(SequenceEnrollment.sequence_status, func.count(SequenceEnrollment.id))
+        .group_by(SequenceEnrollment.sequence_status)
+    ).all())
+    enrollments = db.scalars(
+        select(SequenceEnrollment).order_by(SequenceEnrollment.updated_at.desc()).limit(100)
+    ).all()
+    return templates.TemplateResponse("sequences.html", {
+        "request": request, "sequence": seq, "steps": steps,
+        "status_counts": status_counts, "enrollments": enrollments,
+        "engine_enabled": sequences_module.engine_enabled(),
+        "dry_run_default": bool(getattr(settings, "campaign_dry_run_default", True)),
+        "flash": flash,
+    })
+
+
+@app.post("/sequences/enroll-batch")
+def sequences_enroll_batch(
+    db: Session = Depends(get_db), user: str = Depends(require_admin), limit: int = Form(25)
+) -> RedirectResponse:
+    """Enroll up to `limit` eligible KVK leads (not client, has email, not
+    suppressed, not already enrolled) into the default sequence. Enrollment is
+    just data — nothing sends until the engine + dry-run are configured."""
+    seq = sequences_module.get_default_sequence(db)
+    if seq is None:
+        return RedirectResponse(f"/sequences?flash={quote_plus('No default sequence seeded yet')}", status_code=303)
+    limit = max(1, min(500, limit))
+    already = set(db.scalars(
+        select(SequenceEnrollment.subject_id).where(
+            SequenceEnrollment.sequence_id == seq.id, SequenceEnrollment.subject_type == "kvk"
+        )
+    ).all())
+    rows = db.scalars(
+        select(KvkCompany)
+        .where(KvkCompany.already_client_flag.is_(False))
+        .where(KvkCompany.email_public != "")
+        .order_by(KvkCompany.id.asc())
+        .limit(limit * 3)
+    ).all()
+    enrolled = 0
+    for co in rows:
+        if enrolled >= limit:
+            break
+        if co.id in already:
+            continue
+        merge = {"company_name": co.company_name or "", "city": co.primary_city or "",
+                 "country": co.country_code or "NL", "website": co.website or ""}
+        e = sequences_module.enroll(
+            db, sequence=seq, subject_type="kvk", subject_id=co.id,
+            to_email=co.email_public or "", company_name=co.company_name or "",
+            merge_context=merge, created_by=user,
+        )
+        if e is not None and e.current_step == 0 and e.id:
+            enrolled += 1
+    db.commit()
+    msg = f"Enrolled {enrolled} lead(s). They will send on the weekly cadence once the engine is enabled."
+    return RedirectResponse(f"/sequences?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/sequences/enrollments/{enrollment_id}/{action}")
+def sequences_enrollment_action(
+    enrollment_id: int, action: str, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> RedirectResponse:
+    e = db.get(SequenceEnrollment, enrollment_id)
+    if e is None:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+    if action == "pause" and e.sequence_status == "active":
+        e.sequence_status = "paused"
+    elif action == "resume" and e.sequence_status == "paused":
+        e.sequence_status = "active"
+    elif action == "stop":
+        sequences_module.stop_enrollment(db, e, "manual_stop")
+    db.commit()
+    return RedirectResponse(f"/sequences?flash={quote_plus('Updated enrollment ' + str(enrollment_id))}", status_code=303)
+
+
+@app.get("/sequences/enrollments/{enrollment_id}", response_class=HTMLResponse)
+def sequence_enrollment_detail(
+    enrollment_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> HTMLResponse:
+    e = db.get(SequenceEnrollment, enrollment_id)
+    if e is None:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+    emails = db.scalars(
+        select(SequenceEmail).where(SequenceEmail.enrollment_id == enrollment_id).order_by(SequenceEmail.step_number)
+    ).all()
+    return templates.TemplateResponse("sequence_enrollment.html", {
+        "request": request, "enrollment": e, "emails": emails,
+    })
 
 
 @app.post("/emails/campaigns/{campaign_id}/pause")

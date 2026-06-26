@@ -1090,3 +1090,107 @@ class Personalization(Base):
     __table_args__ = (
         UniqueConstraint("subject_type", "subject_id", "sequence_step", name="uq_personalization_subject_step"),
     )
+
+
+class EmailSequence(Base):
+    """A reusable multi-step cold-email sequence definition (DESIGN_V2 Phase 3B).
+
+    The default is a 3-step weekly cadence (Wednesday 07:00 lead-local). Sends go
+    out THROUGH the existing campaign sender (producer pattern) — this engine
+    never sends mail itself. Nothing runs unless settings.sequence_engine_enabled.
+    """
+
+    __tablename__ = "email_sequences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text, default="", index=True)
+    sector: Mapped[str] = mapped_column(Text, default="bike")  # bike|... (angle selection)
+    lead_type: Mapped[str] = mapped_column(Text, default="")   # optional: big|medium|small|...
+    timezone_strategy: Mapped[str] = mapped_column(Text, default="lead_local")  # lead_local|fixed
+    cadence_rule: Mapped[str] = mapped_column(Text, default="weekly_wed_0700")  # human label
+    step_count: Mapped[int] = mapped_column(Integer, default=3)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true(), index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    seed_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    steps: Mapped[list["SequenceStep"]] = relationship(
+        back_populates="sequence", cascade="all, delete-orphan", order_by="SequenceStep.step_number"
+    )
+
+
+class SequenceStep(Base):
+    """One step (email) in a sequence: which baseline template + cadence + how
+    much personalization to layer on."""
+
+    __tablename__ = "sequence_steps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sequence_id: Mapped[int] = mapped_column(ForeignKey("email_sequences.id"), index=True)
+    step_number: Mapped[int] = mapped_column(Integer, default=1)  # 1|2|3
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("email_templates.id"), nullable=True)
+    subject_override: Mapped[str] = mapped_column(Text, default="")
+    send_weekday: Mapped[int] = mapped_column(Integer, default=2)       # Wed
+    send_hour_local: Mapped[int] = mapped_column(Integer, default=7)    # 07:00
+    gap_days: Mapped[int] = mapped_column(Integer, default=7)           # min days since prior step / enrollment
+    personalization_level: Mapped[str] = mapped_column(Text, default="light")  # light|medium|strong
+
+    sequence: Mapped[EmailSequence] = relationship(back_populates="steps")
+
+    __table_args__ = (
+        UniqueConstraint("sequence_id", "step_number", name="uq_sequence_step_number"),
+    )
+
+
+class SequenceEnrollment(Base):
+    """One lead enrolled in one sequence, with its scheduling/stop state."""
+
+    __tablename__ = "sequence_enrollments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sequence_id: Mapped[int] = mapped_column(ForeignKey("email_sequences.id"), index=True)
+    subject_type: Mapped[str] = mapped_column(Text, default="kvk", index=True)  # kvk|prospect|lead
+    subject_id: Mapped[int] = mapped_column(Integer, index=True)
+    to_email: Mapped[str] = mapped_column(Text, default="", index=True)
+    company_name: Mapped[str] = mapped_column(Text, default="")
+    merge_context: Mapped[str] = mapped_column(Text, default="{}")  # JSON base merge fields
+
+    current_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # active | paused | completed | stopped
+    sequence_status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default="active", index=True)
+    stop_reason: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    next_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timezone: Mapped[str] = mapped_column(Text, default="Europe/Amsterdam")
+    created_by: Mapped[str] = mapped_column(Text, default="")
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("sequence_id", "subject_type", "subject_id", name="uq_enrollment_subject"),
+    )
+
+
+class SequenceEmail(Base):
+    """The render + send record for one step of one enrollment (provenance)."""
+
+    __tablename__ = "sequence_emails"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    enrollment_id: Mapped[int] = mapped_column(ForeignKey("sequence_enrollments.id"), index=True)
+    step_number: Mapped[int] = mapped_column(Integer, default=1)
+    campaign_id: Mapped[int | None] = mapped_column(ForeignKey("email_campaigns.id"), nullable=True, index=True)
+    recipient_id: Mapped[int | None] = mapped_column(ForeignKey("email_campaign_recipients.id"), nullable=True)
+    scheduled_send_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # scheduled | queued | sent | skipped | failed
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="scheduled", server_default="scheduled", index=True)
+    baseline_template_version: Mapped[str] = mapped_column(Text, default="")
+    personalization_version: Mapped[str] = mapped_column(Text, default="")
+    rendered_subject: Mapped[str] = mapped_column(Text, default="")
+    rendered_body_html: Mapped[str] = mapped_column(Text, default="")
+    rendered_body_text: Mapped[str] = mapped_column(Text, default="")
+    personalization_fields_used: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    confidence_summary: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

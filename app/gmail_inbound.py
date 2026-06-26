@@ -184,6 +184,15 @@ def poll_inbound(session: Session, *, max_messages: int = 50) -> dict:
         )
         if created:
             threaded += 1
+            # DESIGN_V2 Phase 3B: a reply stops the lead's cold sequence so we
+            # never keep dripping someone who answered. Gated + exception-safe.
+            try:
+                from app import sequences as _sequences
+                if _sequences.engine_enabled():
+                    _sequences.stop_active_enrollments_for_email(session, from_email_norm, "reply")
+                    session.commit()
+            except Exception:  # noqa: BLE001 - reply-stop must never break inbound
+                pass
             # Store attachment metadata (bytes fetched on-demand later).
             atts = _extract_attachments(payload)
             for a in atts:

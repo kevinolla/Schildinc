@@ -216,6 +216,23 @@ class Settings:
     # UTC-day call cap (cost breaker, mirrors the Brave breaker pattern).
     personalization_daily_limit: int = int(os.getenv("PERSONALIZATION_DAILY_LIMIT", "200"))
 
+    # ── DESIGN_V2 Phase 3B: 3-step cold email SEQUENCE engine (gated, OFF) ──
+    # A weekly cadence (default: Wednesday 07:00 lead-local) of 3 baseline
+    # emails with optional layered personalization. Built on TOP of the existing
+    # campaign sender (producer pattern): the scheduler materializes campaigns
+    # and the unchanged sender drains them, so suppression/tracking/throttle/
+    # dry-run all still apply. OFF by default — no enrollments, no scheduler work.
+    sequence_engine_enabled: bool = _as_bool(os.getenv("SEQUENCE_ENGINE_ENABLED"), False)
+    # Default cadence (Mon=0 … Sun=6). Wednesday=2, 07:00 local, +7 days/step.
+    sequence_send_weekday: int = int(os.getenv("SEQUENCE_SEND_WEEKDAY", "2"))
+    sequence_send_hour_local: int = int(os.getenv("SEQUENCE_SEND_HOUR_LOCAL", "7"))
+    sequence_step_gap_days: int = int(os.getenv("SEQUENCE_STEP_GAP_DAYS", "7"))
+    sequence_default_timezone: str = os.getenv("SEQUENCE_DEFAULT_TIMEZONE", "Europe/Amsterdam")
+    # Background scheduler tick (seconds) — only runs when the engine is enabled.
+    sequence_scheduler_interval: int = int(os.getenv("SEQUENCE_SCHEDULER_INTERVAL", "300"))
+    # Re-seed marker for the 3 baseline templates (bump to force re-seed).
+    sequence_seed_version: int = int(os.getenv("SEQUENCE_SEED_VERSION", "1"))
+
     # ── WhatsApp Business Cloud API (direct Meta) ──────────────────────────
     # Set these from Meta → WhatsApp → API setup. The webhook callback URL to
     # register in Meta is {APP_BASE_URL}/webhooks/whatsapp with the verify token.

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+{% if flash %}
+<section class="card" style="background:#f8f4e6;border:1px solid #e6d7a8;">{{ flash }}</section>
+{% endif %}
+
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+    <div>
+      <h2 style="margin:0;">Cold Email Sequences</h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;">3-step weekly cadence (Wednesday 07:00 lead-local) on top of the existing sender.</p>
+    </div>
+    <div style="text-align:right;">
+      {% if engine_enabled %}
+      <span style="padding:3px 10px;border-radius:10px;font-size:12px;font-weight:700;background:#dcfce7;color:#166534;border:1px solid #86efac;">● Engine ON</span>
+      {% else %}
+      <span style="padding:3px 10px;border-radius:10px;font-size:12px;font-weight:700;background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;">○ Engine OFF (SEQUENCE_ENGINE_ENABLED)</span>
+      {% endif %}
+      {% if dry_run_default %}
+      <div style="margin-top:6px;"><span style="padding:2px 8px;border-radius:10px;font-size:11px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;">🧪 Sends are dry-run (CAMPAIGN_DRY_RUN_DEFAULT)</span></div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+{% if sequence %}
+<section class="card">
+  <h3 style="margin-top:0;">{{ sequence.name }}</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:14px;">
+    <thead><tr style="text-align:left;color:#6b7280;border-bottom:1px solid #eee;">
+      <th style="padding:6px;">Step</th><th>Cadence</th><th>Personalization</th><th>Subject</th>
+    </tr></thead>
+    <tbody>
+      {% for s in steps %}
+      <tr style="border-bottom:1px solid #f3f3f3;">
+        <td style="padding:6px;font-weight:600;">{{ s.step_number }}</td>
+        <td>{% if s.step_number == 1 %}First Wed 07:00{% else %}+{{ s.gap_days }}d (next Wed 07:00){% endif %}</td>
+        <td>{{ s.personalization_level }}</td>
+        <td>{{ s.subject_override }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="card"><p>No default sequence seeded yet.</p></section>
+{% endif %}
+
+<section class="card">
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;text-align:center;">
+    <div><div style="font-size:24px;font-weight:700;">{{ status_counts.get('active', 0) }}</div><div style="color:#6b7280;font-size:12px;">Active</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ status_counts.get('paused', 0) }}</div><div style="color:#6b7280;font-size:12px;">Paused</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ status_counts.get('completed', 0) }}</div><div style="color:#6b7280;font-size:12px;">Completed</div></div>
+    <div><div style="font-size:24px;font-weight:700;">{{ status_counts.get('stopped', 0) }}</div><div style="color:#6b7280;font-size:12px;">Stopped</div></div>
+  </div>
+  <form method="post" action="/sequences/enroll-batch" style="margin-top:16px;display:flex;gap:8px;align-items:center;">
+    <label style="font-size:13px;color:#6b7280;">Enroll eligible KVK leads (not clients, has email, not suppressed):</label>
+    <input type="number" name="limit" value="25" min="1" max="500" style="width:80px;padding:6px;border:1px solid #d1d5db;border-radius:6px;">
+    <button type="submit" style="padding:8px 14px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;">Enroll batch</button>
+  </form>
+  <p style="font-size:12px;color:#6b7280;margin-top:6px;">Enrollment is just data — nothing sends until the engine is enabled and sends are switched out of dry-run. Suppression is re-checked before every send.</p>
+</section>
+
+<section class="card">
+  <h3 style="margin-top:0;">Recent enrollments</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead><tr style="text-align:left;color:#6b7280;border-bottom:1px solid #eee;">
+      <th style="padding:6px;">Company</th><th>Email</th><th>Step</th><th>Status</th><th>Next send</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+      {% for e in enrollments %}
+      <tr style="border-bottom:1px solid #f3f3f3;">
+        <td style="padding:6px;"><a href="/sequences/enrollments/{{ e.id }}">{{ e.company_name or '—' }}</a></td>
+        <td>{{ e.to_email }}</td>
+        <td>{{ e.current_step }}/3</td>
+        <td><span style="padding:2px 8px;border-radius:10px;font-size:11px;background:{% if e.sequence_status=='active' %}#dcfce7{% elif e.sequence_status=='completed' %}#dbeafe{% elif e.sequence_status=='stopped' %}#fee2e2{% else %}#f1f5f9{% endif %};">{{ e.sequence_status }}</span>{% if e.stop_reason %}<br><span style="font-size:10px;color:#ef4444;">{{ e.stop_reason[:40] }}</span>{% endif %}</td>
+        <td style="font-size:12px;color:#6b7280;">{{ e.next_followup_at.strftime('%Y-%m-%d %H:%M') if e.next_followup_at else '—' }}</td>
+        <td>
+          {% if e.sequence_status == 'active' %}
+          <form method="post" action="/sequences/enrollments/{{ e.id }}/pause" style="display:inline;"><button style="font-size:11px;padding:3px 8px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer;">Pause</button></form>
+          {% elif e.sequence_status == 'paused' %}
+          <form method="post" action="/sequences/enrollments/{{ e.id }}/resume" style="display:inline;"><button style="font-size:11px;padding:3px 8px;border:1px solid #16a34a;color:#16a34a;background:#fff;border-radius:6px;cursor:pointer;">Resume</button></form>
+          {% endif %}
+          {% if e.sequence_status in ['active','paused'] %}
+          <form method="post" action="/sequences/enrollments/{{ e.id }}/stop" style="display:inline;" onsubmit="return confirm('Stop this lead\'s sequence?');"><button style="font-size:11px;padding:3px 8px;border:1px solid #ef4444;color:#ef4444;background:#fff;border-radius:6px;cursor:pointer;">Stop</button></form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" style="padding:12px;color:#6b7280;">No enrollments yet. Use "Enroll batch" above.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
