@@ -289,6 +289,21 @@ def test_fuzzy_score_demotes_directories():
     assert _fuzzy_score("Acme", fb) <= 5
 
 
+def test_fuzzy_score_rejects_substring_in_bigger_brand():
+    """Regression: "Dolf Wallet & Zn." must NOT match nerdwallet.com — 'wallet'
+    is a substring but 'nerd' is unexplained brand content -> below autopick."""
+    nerd = WebsiteChoice(url="https://nerdwallet.com", domain="nerdwallet.com", title="NerdWallet")
+    assert _fuzzy_score("Dolf Wallet & Zn.", nerd) < 80
+    # Legit cases still auto-accept (distinctive token + only generic leftover):
+    own_a = WebsiteChoice(url="https://elgersmarijwielen.nl", domain="elgersmarijwielen.nl", title="Elgersma")
+    assert _fuzzy_score("Elgersma Rijwielen", own_a) >= 85
+    own_b = WebsiteChoice(url="https://rijwielhandelbakker.nl", domain="rijwielhandelbakker.nl", title="Bakker")
+    assert _fuzzy_score("Rijwielhandel Bakker", own_b) >= 85
+    # The lead's own exact-brand domain still works even if a word is a dict word:
+    own_c = WebsiteChoice(url="https://dolfwallet.nl", domain="dolfwallet.nl", title="Dolf Wallet")
+    assert _fuzzy_score("Dolf Wallet & Zn.", own_c) >= 85
+
+
 def test_build_query_includes_city_and_postal():
     q = _build_query("Acme Bikes", "Amsterdam", "NL", "1011AB")
     assert "Acme Bikes" in q

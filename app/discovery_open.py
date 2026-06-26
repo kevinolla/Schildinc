@@ -311,9 +311,25 @@ def _fuzzy_score(company_name: str, candidate: WebsiteChoice) -> int:
     domain_root = domain.split(".")[0]                       # the brand label
     distinctive = {t for t in _tokens(company_name) if len(t) >= 4 and t not in _GENERIC_INDUSTRY}
 
-    # Strong, trustworthy: a distinctive name token is literally in the domain.
-    if any(tok in domain_root for tok in distinctive):
-        return max(85, _wratio(company_name, domain_root))
+    # A distinctive name token literally appears in the domain label.
+    matched = [t for t in distinctive if t in domain_root]
+    if matched:
+        # Substring-in-a-bigger-brand guard. e.g. company "Dolf Wallet & Zn." vs
+        # "nerdwallet.com": "wallet" is a substring, but "nerd" is UNEXPLAINED
+        # brand content -> it's a different company. After removing the matched
+        # name tokens AND generic industry words from the domain label, any
+        # significant (>=4 char) leftover means a different brand -> review, not
+        # auto-accept. Legit cases (elgersma+rijwielen, rijwielhandel+bakker,
+        # mrae+bikecenter) leave nothing significant and still auto-accept.
+        leftover = domain_root
+        for t in matched:
+            leftover = leftover.replace(t, "")
+        for g in _GENERIC_INDUSTRY:
+            leftover = leftover.replace(g, "")
+        leftover = re.sub(r"[^a-z0-9]", "", leftover)
+        if len(leftover) < 4:
+            return max(85, _wratio(company_name, domain_root))
+        return min(45, _wratio(company_name, domain_root))
 
     # No distinctive domain match -> never auto-pick. Cap below the autopick bar
     # (we still return a small score so the candidate is surfaced for review).
