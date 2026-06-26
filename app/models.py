@@ -1046,3 +1046,47 @@ class LeadScore(Base):
     __table_args__ = (
         UniqueConstraint("subject_type", "subject_id", name="uq_lead_score_subject"),
     )
+
+
+class Personalization(Base):
+    """AI-assisted personalization for one lead (DESIGN_V2 Phase 3A).
+
+    Built ONLY from trusted enrichment facts + accepted website + bike tier +
+    lead score + company data. NEVER auto-approves outreach — ``status`` is
+    draft / needs_review / approved / generic_fallback and a human approves.
+    ``facts_used`` records exactly which trusted facts grounded the copy (the
+    hallucination guard rejects anything not in that set). ``sequence_step`` is
+    0 for the general per-lead personalization and 1/2/3 for the future
+    sequence steps, so the sequence engine reuses this same table. Nothing
+    writes here unless settings.personalization_enabled is on.
+    """
+
+    __tablename__ = "personalizations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_type: Mapped[str] = mapped_column(Text, default="kvk", index=True)  # kvk|prospect
+    subject_id: Mapped[int] = mapped_column(Integer, index=True)
+    sequence_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    first_line_text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    primary_angle: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    supporting_fact: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    cta_variant: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    internal_sales_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+
+    personalization_confidence: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    source_summary: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    facts_used: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")  # JSON list
+    model_used: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # draft | needs_review | approved | generic_fallback
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft", index=True)
+    input_fingerprint: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    reviewed_by: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    __table_args__ = (
+        UniqueConstraint("subject_type", "subject_id", "sequence_step", name="uq_personalization_subject_step"),
+    )

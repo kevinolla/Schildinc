@@ -15,6 +15,10 @@ google-auth-oauthlib==1.2.1
 google-api-python-client==2.149.0
 httpx==0.27.2
 trafilatura==1.12.2
+# AI personalization (DESIGN_V2 Phase 3A). Only used when PERSONALIZATION_ENABLED
+# + ANTHROPIC_API_KEY; imported lazily so the app runs without it, pinned so
+# enabling the flag just works.
+anthropic==0.39.0
 # Optional worker queue (only needed if DISCOVERY_USE_RQ=true + REDIS_URL set):
 # redis==5.2.1
 # rq==2.1.0

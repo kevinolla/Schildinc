@@ -199,6 +199,23 @@ class Settings:
     lead_scoring_enabled: bool = _as_bool(os.getenv("LEAD_SCORING_ENABLED"), False)
     lead_scoring_engine_version: int = int(os.getenv("LEAD_SCORING_ENGINE_VERSION", "1"))
 
+    # ── DESIGN_V2 Phase 3A: AI-assisted personalization (gated, OFF) ───────
+    # Generates first-line / angle / CTA / internal sales note from ONLY trusted
+    # facts + accepted website + bike tier + lead score + company data. Never
+    # fabricates facts (hallucination guard), never auto-approves outreach, and
+    # falls back to safe generic copy when signals are weak or anything fails.
+    # OFF by default and a no-op without ANTHROPIC_API_KEY.
+    personalization_enabled: bool = _as_bool(os.getenv("PERSONALIZATION_ENABLED"), False)
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    # Two-tier model routing: cheap for bulk, stronger for high-value leads.
+    personalization_model_bulk: str = os.getenv("PERSONALIZATION_MODEL_BULK", "claude-haiku-4-5-20251001")
+    personalization_model_highvalue: str = os.getenv("PERSONALIZATION_MODEL_HIGHVALUE", "claude-opus-4-8")
+    # Below this 0-100 confidence we DISCARD the AI output and ship generic copy.
+    personalization_min_confidence: int = int(os.getenv("PERSONALIZATION_MIN_CONFIDENCE", "60"))
+    personalization_max_facts: int = int(os.getenv("PERSONALIZATION_MAX_FACTS", "3"))
+    # UTC-day call cap (cost breaker, mirrors the Brave breaker pattern).
+    personalization_daily_limit: int = int(os.getenv("PERSONALIZATION_DAILY_LIMIT", "200"))
+
     # ── WhatsApp Business Cloud API (direct Meta) ──────────────────────────
     # Set these from Meta → WhatsApp → API setup. The webhook callback URL to
     # register in Meta is {APP_BASE_URL}/webhooks/whatsapp with the verify token.
