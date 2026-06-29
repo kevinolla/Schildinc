@@ -42,20 +42,20 @@ def _wrap(inner: str) -> str:
 
 
 # ── Step 1 — Intro / awareness ───────────────────────────────────────────────
-_STEP1_SUBJECT = "Metalen spatbord labels met uw logo — gratis ontwerp"
+_STEP1_SUBJECT = "Metalen spatbord labels met jouw logo — gratis ontwerp"
 _STEP1_HTML = _wrap(
     "<p>Beste {{company_name}},</p>"
     "<p>{{first_line}}</p>"
-    "<p>Ik ben Ruben, eigenaar van Schild Inc Bike. Misschien kent u ons al: inmiddels werken meer dan "
+    "<p>Ik ben Ruben, eigenaar van Schild Inc Bike. Misschien ken je ons al: inmiddels werken meer dan "
     "600 fietsenwinkels met onze labels en custom accessoires.</p>"
     "<p>Wij staan bekend om onze ‘‘Schildjes’’: metalen spatbord labels met het logo van de "
     "fietsenwinkel. Geen gewone stickers, maar professionele labels die de fiets een luxere uitstraling geven "
-    "én uw winkelnaam zichtbaar houden op straat.</p>"
+    "én jouw winkelnaam zichtbaar houden op straat.</p>"
     f'<p style="text-align:center;"><img src="{_IMG_LABELS}" width="560" alt="Spatbord label voorbeelden" '
     'style="max-width:100%;height:auto;border-radius:8px;"></p>'
-    "<p>Als kennismaking ontvangt u <strong>50 gratis labels</strong> bij een eerste bestelling vanaf 250 stuks. "
-    "Uiteraard maken we het ontwerp met uw logo volledig gratis.</p>"
-    "<p>Zal ik vrijblijvend een gratis ontwerp en prijsvoorbeeld voor uw winkel maken?</p>"
+    "<p>Als kennismaking ontvang je <strong>50 gratis labels</strong> bij een eerste bestelling vanaf 250 stuks. "
+    "Uiteraard maken we het ontwerp met jouw logo volledig gratis.</p>"
+    "<p>Zal ik vrijblijvend een gratis ontwerp en prijsvoorbeeld voor jouw winkel maken?</p>"
     "<p>{{cta_block}}</p>"
     f'<p>PS. Bekijk <a href="{_EXAMPLES_URL}">hier</a> een aantal spatbord label voorbeelden.</p>'
     "<p>Groet,<br>Ruben<br>Schild Inc Bike</p>"
@@ -64,14 +64,14 @@ _STEP1_TEXT = (
     "Beste {{company_name}},\n\n{{first_line}}\n\n"
     "Ik ben Ruben, eigenaar van Schild Inc Bike. Inmiddels werken meer dan 600 fietsenwinkels met onze "
     "metalen spatbord labels (‘Schildjes’) en custom accessoires.\n\n"
-    "Als kennismaking: 50 gratis labels bij een eerste bestelling vanaf 250 stuks, en het ontwerp met uw "
+    "Als kennismaking: 50 gratis labels bij een eerste bestelling vanaf 250 stuks, en het ontwerp met jouw "
     "logo maken we gratis. Zal ik vrijblijvend een gratis ontwerp en prijsvoorbeeld maken?\n\n"
     f"Voorbeelden: {_EXAMPLES_URL}\n\nGroet,\nRuben\nSchild Inc Bike\n\n"
     "{{company_legal_name}} · {{company_address}}\nUitschrijven: {{unsubscribe_url}}"
 )
 
 # ── Step 2 — Proof / relevance follow-up ─────────────────────────────────────
-_STEP2_SUBJECT = "Even een prijsvoorbeeld voor uw winkel?"
+_STEP2_SUBJECT = "Even een prijsvoorbeeld voor jouw winkel?"
 _STEP2_HTML = _wrap(
     "<p>Beste {{company_name}},</p>"
     "<p>{{first_line}}</p>"

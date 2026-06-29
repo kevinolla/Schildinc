@@ -231,7 +231,7 @@ class Settings:
     # Background scheduler tick (seconds) — only runs when the engine is enabled.
     sequence_scheduler_interval: int = int(os.getenv("SEQUENCE_SCHEDULER_INTERVAL", "300"))
     # Re-seed marker for the 3 baseline templates (bump to force re-seed).
-    sequence_seed_version: int = int(os.getenv("SEQUENCE_SEED_VERSION", "1"))
+    sequence_seed_version: int = int(os.getenv("SEQUENCE_SEED_VERSION", "2"))
 
     # ── WhatsApp Business Cloud API (direct Meta) ──────────────────────────
     # Set these from Meta → WhatsApp → API setup. The webhook callback URL to
