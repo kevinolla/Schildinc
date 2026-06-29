@@ -49,7 +49,8 @@
 
         <details class="nav-group" data-key="campaigns" {% if path.startswith('/emails') or path.startswith('/sequences') %}open{% endif %}>
           <summary class="nav-section">Campaigns</summary>
-          <a href="/emails"    {% if path.startswith('/emails') %}class="active" aria-current="page"{% endif %}>Email Campaigns</a>
+          <a href="/emails"    {% if path == '/emails' or path.startswith('/emails/campaigns') %}class="active" aria-current="page"{% endif %}>Email Campaigns</a>
+          <a href="/emails/templates" {% if path.startswith('/emails/templates') %}class="active" aria-current="page"{% endif %}>Templates</a>
           <a href="/sequences" {% if path.startswith('/sequences') %}class="active" aria-current="page"{% endif %}>Sequences</a>
         </details>
 

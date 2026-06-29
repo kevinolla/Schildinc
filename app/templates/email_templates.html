@@ -10,7 +10,18 @@
     <h2 style="margin:0;">Email Templates</h2>
     <a href="/emails" style="text-decoration:none;color:#6b7280;">← Back to Campaigns</a>
   </div>
+  <p style="color:#6b7280;font-size:13px;margin-bottom:0;">
+    Edit any template below, then <strong>Preview</strong> to see the finished email (with sample data) — handy for showing stakeholders.
+    The 3-step cold sequence uses the <em>“Sequence Step 1/2/3 — … (NL bike)”</em> templates here; editing them changes what the sequence sends.
+  </p>
 </section>
+
+{% if editing %}
+<section class="card" style="background:#f0f9ff;border:1px solid #bae6fd;display:flex;justify-content:space-between;align-items:center;">
+  <span style="font-size:13px;color:#075985;">Editing <strong>{{ editing.name }}</strong></span>
+  <a href="/emails/templates/{{ editing.id }}/preview" target="_blank" style="padding:7px 14px;background:#0284c7;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:13px;">Preview this template →</a>
+</section>
+{% endif %}
 
 <!-- Editor -->
 <section class="card">
@@ -59,7 +70,8 @@
         <td style="color:#6b7280;">{{ t.subject }}</td>
         <td>{{ '✓' if t.is_active else '—' }}</td>
         <td style="white-space:nowrap;">
-          <a href="/emails/templates?edit={{ t.id }}">Edit</a>
+          <a href="/emails/templates/{{ t.id }}/preview" target="_blank">Preview</a>
+          <a href="/emails/templates?edit={{ t.id }}" style="margin-left:8px;">Edit</a>
           <a href="/emails/campaigns/new?template_id={{ t.id }}" style="margin-left:8px;">Use →</a>
           <form method="post" action="/emails/templates/{{ t.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete / hide this template?');">
             <button type="submit" style="margin-left:8px;background:none;border:none;color:#ef4444;cursor:pointer;">Delete</button>

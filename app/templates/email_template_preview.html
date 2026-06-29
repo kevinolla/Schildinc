@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <div>
+      <h2 style="margin:0;">Preview — {{ tpl.name }}</h2>
+      <p style="margin:4px 0 0 0;color:#6b7280;font-size:13px;">Category: {{ tpl.category }} · rendered with sample data so you see the finished email.</p>
+    </div>
+    <div style="white-space:nowrap;">
+      <a href="/emails/templates?edit={{ tpl.id }}" style="padding:8px 14px;background:#101010;color:#e4c977;border-radius:8px;text-decoration:none;font-weight:600;">Edit</a>
+      <a href="/emails/templates" style="margin-left:8px;color:#6b7280;text-decoration:none;">← All templates</a>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div style="font-size:13px;color:#374151;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:0;">
+    <div><strong>Subject:</strong> {{ subject }}</div>
+    <div style="color:#6b7280;margin-top:4px;"><strong>From:</strong> Schild Inc &lt;sales@schildinc.com&gt; · <strong>Reply-to:</strong> sales@schildinc.com</div>
+    <div style="color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:6px 10px;margin-top:8px;">
+      🧪 Sample preview — merge fields filled with example data
+      (<code>{{ sample.company_name }}</code>, personalization slots shown). Real sends use each lead's own data, or the plain baseline when no personalization is available.
+    </div>
+  </div>
+  <!-- Isolated iframe so the email's own CSS can't clash with the app -->
+  <iframe title="email preview" style="width:100%;height:760px;border:1px solid #e5e7eb;border-radius:8px;margin-top:12px;background:#fff;"
+          srcdoc="{{ html_body }}"></iframe>
+</section>
+
+<section class="card">
+  <details>
+    <summary style="cursor:pointer;font-weight:600;">Plain-text version (fallback)</summary>
+    <pre style="white-space:pre-wrap;font-size:13px;color:#374151;margin-top:10px;">{{ text_body }}</pre>
+  </details>
+</section>
+{% endblock %}

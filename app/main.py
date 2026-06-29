@@ -2968,6 +2968,39 @@ def email_template_delete(
     return RedirectResponse(f"/emails/templates?flash={quote_plus(msg)}", status_code=303)
 
 
+@app.get("/emails/templates/{tpl_id}/preview", response_class=HTMLResponse)
+def email_template_preview(
+    tpl_id: int, request: Request, db: Session = Depends(get_db), _: str = Depends(require_admin)
+) -> HTMLResponse:
+    """Render a template with realistic sample data so it can be reviewed /
+    shown to stakeholders as a finished email (no raw {{merge}} tokens)."""
+    tpl = db.get(EmailTemplate, tpl_id)
+    if tpl is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    sample = {
+        "company_name": "Voorbeeld Fietsen Amsterdam",
+        "city": "Amsterdam", "country": "NL", "website": "voorbeeldfietsen.nl",
+        # Personalization slots — filled so stakeholders see the layered version.
+        "first_line": "Mooie winkel — en jullie Gazelle-collectie ziet er sterk uit.",
+        "angle_block": "Veel van onze klanten zetten de labels juist op hun A-merk fietsen.",
+        "cta_block": "Zal ik vrijblijvend een gratis ontwerp met jullie logo maken?",
+    }
+    import json as _json
+    preview_campaign = EmailCampaign(
+        subject=tpl.subject, body_html=tpl.body_html, body_text=tpl.body_text,
+        sender_name=settings.gmail_sender_name, reply_to=settings.reply_to_email,
+    )
+    preview_recipient = EmailCampaignRecipient(
+        company_name=sample["company_name"], contact_name="",
+        merge_data=_json.dumps(sample), tracking_token="preview",
+    )
+    subject, html_body, text_body = render_for_recipient(preview_campaign, preview_recipient)
+    return templates.TemplateResponse("email_template_preview.html", {
+        "request": request, "tpl": tpl, "subject": subject,
+        "html_body": html_body, "text_body": text_body, "sample": sample,
+    })
+
+
 # ── Campaign builder ────────────────────────────────────────────────────────
 
 
