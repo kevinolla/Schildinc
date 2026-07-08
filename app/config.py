@@ -111,8 +111,10 @@ class Settings:
     )
     # Max elements returned per Overpass query (a country-wide sector sweep
     # can be thousands; the job's max_results still caps what gets stored).
-    crawler_osm_limit: int = int(os.getenv("CRAWLER_OSM_LIMIT", "2000"))
-    crawler_osm_timeout: int = int(os.getenv("CRAWLER_OSM_TIMEOUT", "90"))
+    # 10k covers full "all bike shops in Germany"-scale sweeps while keeping
+    # the JSON payload parseable in container memory.
+    crawler_osm_limit: int = int(os.getenv("CRAWLER_OSM_LIMIT", "10000"))
+    crawler_osm_timeout: int = int(os.getenv("CRAWLER_OSM_TIMEOUT", "180"))
 
     # ── Gmail email engine ─────────────────────────────────────────────────
     # OAuth2 "Web application" client from Google Cloud Console. The

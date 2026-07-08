@@ -1988,7 +1988,7 @@ def crawler_job_create(
         country_code=cc,
         cities=cities_csv,
         status="running",
-        max_results=max(1, min(5000, max_results)),
+        max_results=max(1, min(crawler_module.MAX_RESULTS_CEILING, max_results)),
         extract_emails=extract_emails == "1",
         queries_total=len(crawler_module.build_query_plan(",".join(picked), cc, cities_csv)),
     )
@@ -2017,6 +2017,7 @@ def crawler_seed_presets(
             sectors=preset["sectors"],
             country_code=preset["country_code"],
             status="running",
+            max_results=int(preset.get("max_results", 500)),
             queries_total=len(crawler_module.build_query_plan(preset["sectors"], preset["country_code"])),
         ))
         created += 1
@@ -2054,6 +2055,27 @@ def crawler_job_resume(
         job.status = "running"
         job.error = ""
         job.finished_at = None
+        db.commit()
+    return RedirectResponse("/crawler", status_code=303)
+
+
+@app.post("/crawler/jobs/{job_id}/cap")
+def crawler_job_set_cap(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+    max_results: int = Form(...),
+) -> RedirectResponse:
+    """Adjust a job's stop-after cap. A job that finished BECAUSE of its old
+    cap goes straight back to running when the new cap gives it headroom."""
+    job = db.get(CrawlJob, job_id)
+    if job is not None:
+        job.max_results = max(1, min(crawler_module.MAX_RESULTS_CEILING, max_results))
+        if job.status == "done" and job.new_count < job.max_results and job.queries_done < job.queries_total:
+            job.status = "running"
+            job.finished_at = None
+            job.current_activity = "Cap raised — resuming"
         db.commit()
     return RedirectResponse("/crawler", status_code=303)
 

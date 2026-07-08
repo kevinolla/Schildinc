@@ -57,7 +57,7 @@
       </div>
       <div>
         <p class="label">Stop after (new businesses)</p>
-        <input type="number" name="max_results" value="500" min="1" max="5000" style="width:100%">
+        <input type="number" name="max_results" value="2000" min="1" max="50000" style="width:100%">
       </div>
       <div>
         <p class="label">Extract emails</p>
@@ -118,8 +118,13 @@ renderCityPicker();
           <span data-f="statusdot">{% if j.status == 'running' %}🟢{% elif j.status == 'paused' %}⏸{% elif j.status == 'done' %}✅{% else %}🔴{% endif %}</span>
           {{ j.name }}
         </h3>
-        <p style="margin:.25rem 0 0;font-size:.78rem;color:#6b7280">
-          {{ j.sectors.replace(',', ' + ') }} · {{ j.country }}{% if j.cities %} ({{ j.cities.replace(',', ', ') }}){% endif %} · cap {{ j.max_results }}
+        <p style="margin:.25rem 0 0;font-size:.78rem;color:#6b7280;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
+          {{ j.sectors.replace(',', ' + ') }} · {{ j.country }}{% if j.cities %} ({{ j.cities.replace(',', ', ') }}){% endif %} ·
+          <form method="post" action="/crawler/jobs/{{ j.id }}/cap" style="display:inline-flex;align-items:center;gap:.25rem">
+            cap <input type="number" name="max_results" value="{{ j.max_results }}" min="1" max="50000"
+                       style="width:5.5rem;font-size:.75rem;padding:.1rem .3rem;border:1px solid #d1d5db;border-radius:6px">
+            <button class="btn btn-ghost btn-sm" style="padding:.1rem .4rem" title="Update cap — a job stopped by its old cap resumes automatically">✓</button>
+          </form>
         </p>
         <p style="margin:.25rem 0 0;font-size:.78rem;color:#374151" data-f="activity">{{ j.current_activity or '—' }}</p>
         {% if j.error %}<p style="margin:.25rem 0 0;font-size:.78rem;color:#b91c1c" data-f="error">{{ j.error }}</p>{% endif %}

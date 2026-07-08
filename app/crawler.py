@@ -196,13 +196,18 @@ COUNTRY_LABELS: dict[str, str] = {
     "US": "USA",
 }
 
-# One-click presets for the standing target lists.
-JOB_PRESETS: list[dict[str, str]] = [
-    {"name": "Bike — Germany", "sectors": "Bike", "country_code": "DE"},
-    {"name": "Bike — France", "sectors": "Bike", "country_code": "FR"},
-    {"name": "Woodwork + Furniture — Netherlands", "sectors": "Woodwork,Furniture", "country_code": "NL"},
-    {"name": "Woodwork + Furniture — Germany", "sectors": "Woodwork,Furniture", "country_code": "DE"},
+# One-click presets for the standing target lists. Effectively uncapped —
+# the goal is the COMPLETE sector list per country; sources are free.
+JOB_PRESETS: list[dict] = [
+    {"name": "Bike — Germany", "sectors": "Bike", "country_code": "DE", "max_results": 20000},
+    {"name": "Bike — France", "sectors": "Bike", "country_code": "FR", "max_results": 20000},
+    {"name": "Woodwork + Furniture — Netherlands", "sectors": "Woodwork,Furniture", "country_code": "NL", "max_results": 20000},
+    {"name": "Woodwork + Furniture — Germany", "sectors": "Woodwork,Furniture", "country_code": "DE", "max_results": 20000},
 ]
+
+# Hard ceiling for any job cap (UI + API clamp). Not a cost control — the
+# sources are free — just a sanity bound against typos.
+MAX_RESULTS_CEILING = 50000
 
 
 # Directory/aggregator/junk hosts that SearXNG surfaces for "sector city"
