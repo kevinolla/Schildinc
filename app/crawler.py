@@ -68,9 +68,11 @@ def _clean_email(value: str) -> str:
 # Query vocabulary: localized search terms per sector per country
 # ──────────────────────────────────────────────────────────────────────────
 # Keys are the canonical sector names from lead_classifier.SECTORS. Each maps
-# ISO-2 country -> Places text-search terms in the local language. "default"
-# is the English fallback for countries without a dedicated list. Two terms
-# per sector keeps cost predictable (queries = cities x terms x sectors).
+# ISO-2 country -> localized search terms; "default" is the English fallback.
+#
+# CAUTION: a job's resume position (queries_done) indexes into a plan derived
+# from this vocabulary. Only edit a sector's terms while no RUNNING job
+# includes that sector, or its resume index silently shifts.
 
 SECTOR_SEARCH_TERMS: dict[str, dict[str, list[str]]] = {
     "Bike": {
@@ -103,10 +105,10 @@ SECTOR_SEARCH_TERMS: dict[str, dict[str, list[str]]] = {
         "default": ["furniture store", "furniture maker"],
     },
     "SteelWork": {
-        "NL": ["metaalbewerking", "staalconstructie bedrijf"],
-        "DE": ["metallbau", "schlosserei"],
-        "FR": ["métallerie", "ferronnerie"],
-        "default": ["metal fabrication", "steel fabrication"],
+        "NL": ["metaalbewerking", "staalconstructie bedrijf", "stalen deuren op maat", "smederij"],
+        "DE": ["metallbau", "schlosserei", "stahltüren hersteller", "stahl trennwände"],
+        "FR": ["métallerie", "ferronnerie", "portes en acier sur mesure"],
+        "default": ["metal fabrication", "steel fabrication", "steel doors manufacturer"],
     },
     "Music": {
         "NL": ["muziekwinkel", "muziekinstrumenten winkel"],
@@ -302,7 +304,7 @@ OSM_SECTOR_TAGS: dict[str, list[str]] = {
     "Candles": ['"shop"="candles"', '"craft"="candlemaker"'],
     "Woodwork": ['"craft"="carpenter"', '"craft"="joiner"'],
     "Furniture": ['"shop"="furniture"', '"craft"="cabinet_maker"'],
-    "SteelWork": ['"craft"="metal_construction"', '"craft"="blacksmith"'],
+    "SteelWork": ['"craft"="metal_construction"', '"craft"="blacksmith"', '"shop"="doors"'],
     "Music": ['"shop"="musical_instrument"'],
     "Fashion": ['"shop"="boutique"'],
     "Liquor & Bottles": ['"shop"="alcohol"', '"shop"="wine"'],
