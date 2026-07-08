@@ -12,10 +12,15 @@ Why this works when the cloud crawler can't:
   them for cloud-host IPs. By running on your machine we get the same
   snippets you'd see typing the query manually in Chrome.
 
-Usage:
+Usage (macOS/Linux):
     cd "/Users/kevinolla/AI Project/B2B Prospect tool"
     source .venv/bin/activate                  # one-time
     python scripts/email_agent.py              # run
+
+Usage (Windows PowerShell):
+    cd "C:\Users\Kevin\AI Workspace\AI Project\B2B Prospect tool"
+    .venv\Scripts\Activate.ps1                 # one-time
+    python scripts\email_agent.py              # run
 
 Optional flags:
     --batch 25     # how many records to process per fetch (default 25)
