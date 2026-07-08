@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h2>Directory Crawler</h2>
+    <p class="page-subtitle">
+      Runs up to {{ status.max_concurrent }} jobs at the same time · each job sweeps
+      the major cities of a country for your sectors, stores every new business,
+      and extracts a public email
+    </p>
+  </div>
+  <div class="page-actions">
+    <form method="post" action="/crawler/presets" style="display:inline">
+      <button class="btn btn-secondary btn-sm" title="Bike—DE · Bike—FR · Wood+Furniture—NL · Wood+Furniture—DE">⚡ Start the 4 preset jobs</button>
+    </form>
+    <button class="btn btn-primary btn-sm" onclick="document.getElementById('new-job-panel').classList.toggle('hidden')">+ New crawl job</button>
+  </div>
+</div>
+
+{% if flash %}
+<div class="flash flash-success">{{ flash }}</div>
+{% endif %}
+
+{% if not status.source_available %}
+<div class="flash" style="background:#fee2e2;border:1px solid #ef4444;color:#991b1b">
+  ⚠ No search backend available — enable CRAWLER_OSM_ENABLED or set SEARXNG_URL. Jobs will error until one is configured.
+</div>
+{% else %}
+<div class="flash" style="background:#f0fdf4;border:1px solid #22c55e;color:#166534">
+  ✓ Sources: OpenStreetMap {{ '(on)' if status.osm_enabled else '(off)' }} + SearXNG {{ '(on)' if status.searxng_configured else '(off — set SEARXNG_URL)' }} — 100% free, no Google Cloud needed.
+</div>
+{% endif %}
+
+<!-- Create job -->
+<div id="new-job-panel" class="card hidden" style="margin-bottom:1rem">
+  <h3 style="margin-top:0;font-size:1rem">New crawl job</h3>
+  <form method="post" action="/crawler/jobs">
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:1rem;align-items:end">
+      <div>
+        <p class="label">Sectors (pick one or more)</p>
+        <div style="display:flex;flex-wrap:wrap;gap:.35rem">
+          {% for s in sectors %}
+          <label style="display:inline-flex;align-items:center;gap:.3rem;font-size:.8rem;border:1px solid #d1d5db;border-radius:999px;padding:.25rem .6rem;cursor:pointer">
+            <input type="checkbox" name="sectors" value="{{ s }}"> {{ s }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div>
+        <p class="label">Country</p>
+        <select name="country_code" id="job-country" required style="width:100%" onchange="renderCityPicker()">
+          {% for cc, label in countries %}
+          <option value="{{ cc }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <p class="label">Stop after (new businesses)</p>
+        <input type="number" name="max_results" value="500" min="1" max="5000" style="width:100%">
+      </div>
+      <div>
+        <p class="label">Extract emails</p>
+        <select name="extract_emails" style="width:100%">
+          <option value="1">Yes — crawl each site</option>
+          <option value="0">No — names + websites only</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:.75rem">
+      <p class="label">Cities <span style="font-weight:400;color:#6b7280">(optional — leave empty to sweep the whole country)</span></p>
+      <div id="city-picker" style="display:flex;flex-wrap:wrap;gap:.3rem;max-height:7.5rem;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px;padding:.4rem"></div>
+      <input type="text" name="extra_cities" placeholder="Other cities, comma separated (e.g. Osnabrück, Trier) — works for any town" style="width:100%;margin-top:.4rem">
+    </div>
+    <div style="margin-top:.75rem;display:flex;gap:.5rem;align-items:center">
+      <input type="text" name="name" placeholder="Job name (optional — auto-generated)" style="flex:1">
+      <button class="btn btn-primary btn-sm">▶ Start crawling</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const COUNTRY_CITIES = {{ country_cities_json | safe }};
+function renderCityPicker() {
+  const cc = document.getElementById('job-country').value;
+  const box = document.getElementById('city-picker');
+  box.innerHTML = '';
+  for (const city of (COUNTRY_CITIES[cc] || [])) {
+    const label = document.createElement('label');
+    label.style.cssText = 'display:inline-flex;align-items:center;gap:.25rem;font-size:.75rem;border:1px solid #d1d5db;border-radius:999px;padding:.15rem .5rem;cursor:pointer';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.name = 'cities'; cb.value = city;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(city));
+    box.appendChild(label);
+  }
+}
+renderCityPicker();
+</script>
+
+<!-- Live totals -->
+<div class="progress-card">
+  <div class="progress-header">
+    <span class="progress-title">📡 Crawler</span>
+    <span class="progress-meta" id="crawler-meta">
+      {{ status.totals.running }} running · {{ status.totals.new }} businesses harvested · {{ status.totals.emails }} emails found
+    </span>
+  </div>
+</div>
+
+<!-- Job cards -->
+<div id="job-list">
+  {% for j in status.jobs %}
+  <div class="card" style="margin-bottom:.9rem" data-job="{{ j.id }}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
+      <div style="min-width:260px">
+        <h3 style="margin:0;font-size:1rem">
+          <span data-f="statusdot">{% if j.status == 'running' %}🟢{% elif j.status == 'paused' %}⏸{% elif j.status == 'done' %}✅{% else %}🔴{% endif %}</span>
+          {{ j.name }}
+        </h3>
+        <p style="margin:.25rem 0 0;font-size:.78rem;color:#6b7280">
+          {{ j.sectors.replace(',', ' + ') }} · {{ j.country }}{% if j.cities %} ({{ j.cities.replace(',', ', ') }}){% endif %} · cap {{ j.max_results }}
+        </p>
+        <p style="margin:.25rem 0 0;font-size:.78rem;color:#374151" data-f="activity">{{ j.current_activity or '—' }}</p>
+        {% if j.error %}<p style="margin:.25rem 0 0;font-size:.78rem;color:#b91c1c" data-f="error">{{ j.error }}</p>{% endif %}
+      </div>
+      <div style="display:flex;gap:1.25rem;text-align:center">
+        <div><div style="font-size:1.15rem;font-weight:700" data-f="new">{{ j.new_count }}</div><div style="font-size:.7rem;color:#6b7280">new</div></div>
+        <div><div style="font-size:1.15rem;font-weight:700;color:#047857" data-f="emails">{{ j.email_count }}</div><div style="font-size:.7rem;color:#6b7280">emails</div></div>
+        <div><div style="font-size:1.15rem;font-weight:700;color:#6b7280" data-f="dups">{{ j.dup_count }}</div><div style="font-size:.7rem;color:#6b7280">dupes/skip</div></div>
+        <div><div style="font-size:1.15rem;font-weight:700;color:#b45309" data-f="clients">{{ j.client_count }}</div><div style="font-size:.7rem;color:#6b7280">customers</div></div>
+      </div>
+      <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center">
+        {% if j.status == 'running' %}
+        <form method="post" action="/crawler/jobs/{{ j.id }}/pause"><button class="btn btn-ghost btn-sm">⏸ Pause</button></form>
+        {% else %}
+        <form method="post" action="/crawler/jobs/{{ j.id }}/resume"><button class="btn btn-secondary btn-sm">▶ {% if j.status == 'done' %}Re-run{% else %}Resume{% endif %}</button></form>
+        {% endif %}
+        <a class="btn btn-secondary btn-sm" href="/crawler/jobs/{{ j.id }}/export.csv?has_email=1">⬇ Emails CSV</a>
+        <a class="btn btn-ghost btn-sm" href="/crawler/jobs/{{ j.id }}/export.csv">⬇ All CSV</a>
+        <a class="btn btn-primary btn-sm" href="/emails/campaigns/new?audience=prospect&crawl_job_id={{ j.id }}">✉ Campaign</a>
+        <a class="btn btn-ghost btn-sm" href="/prospects?source_filter=crawl_job:{{ j.id }}">👁 Rows</a>
+        <form method="post" action="/crawler/jobs/{{ j.id }}/delete" onsubmit="return confirm('Delete this job? Harvested businesses are kept.')">
+          <button class="btn btn-ghost btn-sm" style="color:#b91c1c">✕</button>
+        </form>
+      </div>
+    </div>
+    <div class="progress-track" style="margin-top:.7rem">
+      <div class="progress-fill" data-f="bar" style="width:{{ j.pct }}%"></div>
+    </div>
+    <div style="font-size:.72rem;color:#6b7280;margin-top:.25rem">
+      <span data-f="queries">{{ j.queries_done }}/{{ j.queries_total }}</span> search queries done
+      (<span data-f="pct">{{ j.pct }}</span>%)
+    </div>
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;padding:2.5rem 1rem">
+    <p style="font-size:2rem;margin:0">📡</p>
+    <h3 style="margin:.5rem 0">No crawl jobs yet</h3>
+    <p style="color:#6b7280;font-size:.85rem;max-width:460px;margin:.25rem auto 1rem">
+      A job sweeps every major city of a country for your chosen sectors —
+      e.g. <em>all bike shops in Germany</em> — and stockpiles the businesses
+      + emails so you can cold-email them.
+    </p>
+    <form method="post" action="/crawler/presets" style="display:inline-block">
+      <button class="btn btn-primary">⚡ Start the 4 preset jobs</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+async function refreshCrawler() {
+  try {
+    const r = await fetch('/api/crawler/status');
+    if (!r.ok) return;
+    const s = await r.json();
+    document.getElementById('crawler-meta').textContent =
+      `${s.totals.running} running · ${s.totals.new} businesses harvested · ${s.totals.emails} emails found`;
+    let structureChanged = false;
+    for (const j of s.jobs) {
+      const card = document.querySelector(`[data-job="${j.id}"]`);
+      if (!card) { structureChanged = true; continue; }
+      const set = (f, v) => { const el = card.querySelector(`[data-f="${f}"]`); if (el) el.textContent = v; };
+      set('new', j.new_count); set('emails', j.email_count);
+      set('dups', j.dup_count); set('clients', j.client_count);
+      set('activity', j.current_activity || '—');
+      set('queries', `${j.queries_done}/${j.queries_total}`); set('pct', j.pct);
+      set('statusdot', j.status === 'running' ? '🟢' : j.status === 'paused' ? '⏸' : j.status === 'done' ? '✅' : '🔴');
+      const bar = card.querySelector('[data-f="bar"]');
+      if (bar) bar.style.width = j.pct + '%';
+    }
+    // A job finished/appeared/disappeared -> reload once so buttons match state.
+    const shown = document.querySelectorAll('[data-job]').length;
+    if (structureChanged || shown !== s.jobs.length) location.reload();
+  } catch (e) { /* transient network error — keep polling */ }
+}
+setInterval(refreshCrawler, 3000);
+</script>
+
+{% endblock %}

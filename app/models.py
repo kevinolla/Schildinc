@@ -196,6 +196,10 @@ class Prospect(Base):
     last_discovery_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     match_confidence: Mapped[str] = mapped_column(Text, default="")
     best_match_reason: Mapped[str] = mapped_column(Text, default="")
+    # Directory crawler provenance (migration 0026). Which crawl job produced
+    # this row + the canonical sector the matching search term belonged to.
+    crawl_job_id: Mapped[int | None] = mapped_column(ForeignKey("crawl_jobs.id"), nullable=True, index=True)
+    main_sector: Mapped[str] = mapped_column(Text, default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -623,6 +627,8 @@ class EmailCampaignRecipient(Base):
     kvk_company_id: Mapped[int | None] = mapped_column(ForeignKey("kvk_companies.id"), nullable=True, index=True)
     facebook_lead_id: Mapped[int | None] = mapped_column(ForeignKey("facebook_leads.id"), nullable=True, index=True)
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True, index=True)
+    # Directory-crawler prospects as a campaign audience (migration 0026).
+    prospect_id: Mapped[int | None] = mapped_column(ForeignKey("prospects.id"), nullable=True, index=True)
 
     to_email: Mapped[str] = mapped_column(Text, default="", index=True)
     company_name: Mapped[str] = mapped_column(Text, default="")
@@ -1194,3 +1200,48 @@ class SequenceEmail(Base):
     personalization_fields_used: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
     confidence_summary: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class CrawlJob(Base):
+    """One sector x country directory-crawl task (migration 0026).
+
+    A job walks a deterministic query plan (localized sector search terms x
+    major cities of the country), pulls businesses from Google Places, dedupes
+    them into `prospects` (source='crawler'), and extracts a public email for
+    each new row. Up to CRAWLER_MAX_CONCURRENT_JOBS jobs run at the same time;
+    a job is resumable because the plan is re-derived from (sectors, country)
+    and continued at `queries_done`.
+    """
+
+    __tablename__ = "crawl_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # Comma-separated canonical sector names (must match lead_classifier.SECTORS).
+    sectors: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    country_code: Mapped[str] = mapped_column(Text, nullable=False, default="NL", server_default="NL", index=True)
+    # Optional comma-separated city names. Empty = whole country (full city
+    # grid for web search + one country-wide OSM query per sector tag).
+    cities: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # running | paused | done | error
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="running", server_default="running", index=True)
+    # Stop after this many NEW prospects (cost/safety cap).
+    max_results: Mapped[int] = mapped_column(Integer, nullable=False, default=500, server_default="500")
+    extract_emails: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+
+    queries_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    queries_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    found_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    new_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    dup_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    email_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    client_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    # Live status line for the UI, e.g. "fahrradladen in Berlin (12/80)".
+    current_activity: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)

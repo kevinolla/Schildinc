@@ -24,8 +24,9 @@
           <a href="/setup"     {% if path.startswith('/setup') %}class="active" aria-current="page"{% endif %}>⚙️ Setup</a>
         </details>
 
-        <details class="nav-group" data-key="cold" {% if path.startswith('/kvk') or path.startswith('/prospects') or cold %}open{% endif %}>
+        <details class="nav-group" data-key="cold" {% if path.startswith('/kvk') or path.startswith('/prospects') or path.startswith('/crawler') or cold %}open{% endif %}>
           <summary class="nav-section">Cold Emailing</summary>
+          <a href="/crawler"   {% if path.startswith('/crawler') %}class="active" aria-current="page"{% endif %}>📡 Directory Crawler</a>
           <a href="/kvk"       {% if path.startswith('/kvk') %}class="active" aria-current="page"{% endif %}>KVK Prospects</a>
           <a href="/prospects" {% if path.startswith('/prospects') %}class="active" aria-current="page"{% endif %}>Maps Prospects</a>
           <a href="/contacts?cold=1" {% if cold %}class="active" aria-current="page"{% endif %}>❄️ Cold Pool</a>

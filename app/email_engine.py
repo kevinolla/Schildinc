@@ -41,6 +41,7 @@ from app.models import (
     EmailTemplate,
     FacebookLead,
     KvkCompany,
+    Prospect,
     SuppressionEntry,
 )
 from app.utils import normalize_email
@@ -177,6 +178,16 @@ def _customer_merge(cust: Customer) -> dict[str, str]:
     }
 
 
+def _prospect_merge(p: Prospect) -> dict[str, str]:
+    return {
+        "company_name": p.company_name or "",
+        "contact_name": "",
+        "city": p.city or "",
+        "country": p.country_code or "",
+        "website": p.website or "",
+    }
+
+
 def build_recipients(
     session: Session,
     campaign: EmailCampaign,
@@ -184,6 +195,7 @@ def build_recipients(
     kvk_ids: list[int] | None = None,
     lead_ids: list[int] | None = None,
     customer_ids: list[int] | None = None,
+    prospect_ids: list[int] | None = None,
 ) -> dict[str, int]:
     """Materialize recipients for a campaign. Idempotent per (campaign,email).
 
@@ -204,7 +216,8 @@ def build_recipients(
     )
 
     def _try_add(email: str, company: str, contact: str, merge: dict, *,
-                 source_type: str, kvk_id=None, lead_id=None, customer_id=None) -> None:
+                 source_type: str, kvk_id=None, lead_id=None, customer_id=None,
+                 prospect_id=None) -> None:
         nonlocal added, skipped_no_email, skipped_suppressed, skipped_dupe
         norm = normalize_email(email)
         if not norm or "@" not in norm:
@@ -227,6 +240,7 @@ def build_recipients(
                 kvk_company_id=kvk_id,
                 facebook_lead_id=lead_id,
                 customer_id=customer_id,
+                prospect_id=prospect_id,
                 to_email=norm,
                 company_name=company,
                 contact_name=contact,
@@ -250,6 +264,10 @@ def build_recipients(
             _try_add(cust.customer_email_primary, cust.canonical_company_name or "",
                      cust.contact_person or "", _customer_merge(cust),
                      source_type="customer", customer_id=cust.id)
+    if prospect_ids:
+        for p in session.scalars(select(Prospect).where(Prospect.id.in_(prospect_ids))).all():
+            _try_add(p.email, p.company_name or "", "", _prospect_merge(p),
+                     source_type="prospect", prospect_id=p.id)
 
     # Flush the pending INSERTs so the count query sees them (autoflush is off).
     session.flush()

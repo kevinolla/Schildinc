@@ -86,6 +86,34 @@ class Settings:
     fb_leads_classifier_enabled: bool = _as_bool(os.getenv("FB_LEADS_CLASSIFIER_ENABLED"), True)
     fb_leads_classifier_interval: int = int(os.getenv("FB_LEADS_CLASSIFIER_INTERVAL", "60"))
 
+    # ── Directory crawler (sector x country jobs, migration 0026) ─────────
+    # Always-on daemon that runs CrawlJob rows: localized sector search terms
+    # x major cities -> Google Places -> dedupe into prospects -> extract a
+    # public email per site. Jobs are created/paused from /crawler.
+    crawler_enabled: bool = _as_bool(os.getenv("CRAWLER_ENABLED"), True)
+    # How many jobs may run at the same time (the user-visible "3-4 tasks").
+    crawler_max_concurrent_jobs: int = int(os.getenv("CRAWLER_MAX_CONCURRENT_JOBS", "4"))
+    # Scheduler tick: how often we look for runnable jobs.
+    crawler_interval: int = int(os.getenv("CRAWLER_INTERVAL", "10"))
+    # Seconds between search queries inside one job (rate-limit courtesy for
+    # the free backends: Overpass fair-use + the self-hosted SearXNG).
+    crawler_query_spacing: float = float(os.getenv("CRAWLER_QUERY_SPACING", "2"))
+    # Max results taken per SearXNG query.
+    crawler_places_page_size: int = int(os.getenv("CRAWLER_PLACES_PAGE_SIZE", "20"))
+    # Seconds between per-site email-extraction crawls inside one job.
+    crawler_extract_spacing: float = float(os.getenv("CRAWLER_EXTRACT_SPACING", "0.5"))
+    # OpenStreetMap Overpass API (free, keyless, structured business listings).
+    # Comma-separated endpoints tried in order; fair-use rate limits apply.
+    crawler_osm_enabled: bool = _as_bool(os.getenv("CRAWLER_OSM_ENABLED"), True)
+    crawler_osm_endpoints: str = os.getenv(
+        "CRAWLER_OSM_ENDPOINTS",
+        "https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter",
+    )
+    # Max elements returned per Overpass query (a country-wide sector sweep
+    # can be thousands; the job's max_results still caps what gets stored).
+    crawler_osm_limit: int = int(os.getenv("CRAWLER_OSM_LIMIT", "2000"))
+    crawler_osm_timeout: int = int(os.getenv("CRAWLER_OSM_TIMEOUT", "90"))
+
     # ── Gmail email engine ─────────────────────────────────────────────────
     # OAuth2 "Web application" client from Google Cloud Console. The
     # redirect URI registered there MUST equal {APP_BASE_URL}/emails/gmail/callback.

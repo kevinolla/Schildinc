@@ -53,6 +53,7 @@ from app.gmail_inbound import poll_inbound, start_gmail_inbound_scheduler
 from app import whatsapp as whatsapp_module
 from app import instagram as instagram_module
 from app import enrichment_open as enrichment_open_module
+from app import crawler as crawler_module
 from app.tiering import score_kvk_company_tier, apply_bike_tier
 from app import auth as auth_module
 from app.auth import require_admin_role
@@ -79,6 +80,7 @@ from app.models import (
     Contact,
     ContactChannel,
     Conversation,
+    CrawlJob,
     Customer,
     EmailCampaign,
     EmailCampaignRecipient,
@@ -118,6 +120,10 @@ from app.utils import build_unsubscribe_token, normalize_domain, normalize_email
 async def lifespan(app: FastAPI):
     # Background schedulers — both daemons, idempotent
     start_auto_enrichment_scheduler()
+    try:
+        crawler_module.start_crawler_scheduler()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] directory crawler not started: {exc}")
     try:
         from app.facebook_leads import start_facebook_leads_scheduler, start_lead_classifier_scheduler
         start_facebook_leads_scheduler()
@@ -161,7 +167,7 @@ security = HTTPBasic(auto_error=False)
 TIER_FILTERS = ["Good Tier", "Hard to Reach", "Mid Tier", "Low Tier", "Brand Store", "Low Fit", "Unclassified"]
 DISCOVERY_FILTERS = ["all", "has_email", "no_email", "has_whatsapp", "has_socials", "high_confidence", "low_confidence", "found", "partial", "no_contacts", "no_website", "error", "not_started", "running"]
 KVK_SOURCE = "kvk_bike_list"
-SOURCE_FILTERS = [("all", "All sources"), ("kvk", "KVK list"), ("maps", "Google Maps")]
+SOURCE_FILTERS = [("all", "All sources"), ("kvk", "KVK list"), ("maps", "Google Maps"), ("crawler", "Directory crawler")]
 
 
 def prospect_contact_count(prospect: Prospect) -> int:
@@ -379,6 +385,12 @@ def build_prospect_query(
         query = query.where(Prospect.source == KVK_SOURCE)
     elif source_filter == "maps":
         query = query.where(Prospect.source.in_(["google_places", "google_maps_csv"]))
+    elif source_filter == "crawler":
+        query = query.where(Prospect.source == "crawler")
+    elif source_filter.startswith("crawl_job:"):
+        job_ref = source_filter.split(":", 1)[1]
+        if job_ref.isdigit():
+            query = query.where(Prospect.crawl_job_id == int(job_ref))
     if discovery_filter == "has_email":
         query = query.where(Prospect.email != "")
     elif discovery_filter == "no_email":
@@ -1917,6 +1929,205 @@ def unsubscribe(token: str, email: str, db: Session = Depends(get_db)) -> HTMLRe
 
 
 # ---------------------------------------------------------------------------
+# Directory crawler routes (sector x country jobs -> prospects)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/crawler", response_class=HTMLResponse)
+def crawler_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    flash: str = "",
+) -> HTMLResponse:
+    status = crawler_module.get_crawler_status(db)
+    return templates.TemplateResponse(
+        request,
+        "crawler.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "status": status,
+            "sectors": crawler_module.available_sectors(),
+            "countries": crawler_module.available_countries(),
+            "country_cities_json": json.dumps(crawler_module.COUNTRY_CITIES),
+            "presets": crawler_module.JOB_PRESETS,
+            "flash": flash,
+        },
+    )
+
+
+@app.post("/crawler/jobs")
+def crawler_job_create(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+    name: str = Form(""),
+    sectors: list[str] = Form([]),
+    country_code: str = Form(...),
+    cities: list[str] = Form([]),
+    extra_cities: str = Form(""),
+    max_results: int = Form(500),
+    extract_emails: str = Form("1"),
+) -> RedirectResponse:
+    picked = [s for s in sectors if s in crawler_module.SECTOR_SEARCH_TERMS]
+    cc = country_code.strip().upper()
+    # Country-first: any 2-letter ISO country works via OSM when specific
+    # cities are given; a whole-country sweep needs the built-in city grid.
+    city_list = crawler_module.parse_cities(",".join([*cities, extra_cities]))
+    country_ok = cc in crawler_module.COUNTRY_CITIES or (len(cc) == 2 and cc.isalpha() and city_list)
+    if not picked or not country_ok:
+        return RedirectResponse(f"/crawler?flash={quote_plus('Pick at least one sector and a supported country (or add cities for other countries)')}", status_code=303)
+    label = crawler_module.COUNTRY_LABELS.get(cc, cc)
+    cities_csv = ",".join(city_list)
+    scope = f"{', '.join(city_list[:3])}{'…' if len(city_list) > 3 else ''}" if city_list else label
+    job = CrawlJob(
+        name=name.strip() or f"{' + '.join(picked)} — {scope}",
+        sectors=",".join(picked),
+        country_code=cc,
+        cities=cities_csv,
+        status="running",
+        max_results=max(1, min(5000, max_results)),
+        extract_emails=extract_emails == "1",
+        queries_total=len(crawler_module.build_query_plan(",".join(picked), cc, cities_csv)),
+    )
+    db.add(job)
+    db.commit()
+    log_audit(db, actor=auth_module.actor_label(request, db), action="crawler.job_create",
+              target_type="crawl_job", target_id=str(job.id), detail=job.name)
+    return RedirectResponse(f"/crawler?flash={quote_plus(f'Job started: {job.name}')}", status_code=303)
+
+
+@app.post("/crawler/presets")
+def crawler_seed_presets(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+) -> RedirectResponse:
+    """Create the standing target-list jobs (skips names that already exist)."""
+    created = 0
+    for preset in crawler_module.JOB_PRESETS:
+        exists = db.scalar(select(CrawlJob.id).where(CrawlJob.name == preset["name"]).limit(1))
+        if exists is not None:
+            continue
+        db.add(CrawlJob(
+            name=preset["name"],
+            sectors=preset["sectors"],
+            country_code=preset["country_code"],
+            status="running",
+            queries_total=len(crawler_module.build_query_plan(preset["sectors"], preset["country_code"])),
+        ))
+        created += 1
+    db.commit()
+    log_audit(db, actor=auth_module.actor_label(request, db), action="crawler.seed_presets",
+              target_type="crawl_job", detail=f"{created} created")
+    msg = f"{created} preset job(s) started" if created else "All preset jobs already exist"
+    return RedirectResponse(f"/crawler?flash={quote_plus(msg)}", status_code=303)
+
+
+@app.post("/crawler/jobs/{job_id}/pause")
+def crawler_job_pause(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+) -> RedirectResponse:
+    job = db.get(CrawlJob, job_id)
+    if job is not None and job.status == "running":
+        job.status = "paused"
+        job.current_activity = "Paused by operator"
+        db.commit()
+    return RedirectResponse("/crawler", status_code=303)
+
+
+@app.post("/crawler/jobs/{job_id}/resume")
+def crawler_job_resume(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+) -> RedirectResponse:
+    job = db.get(CrawlJob, job_id)
+    if job is not None and job.status in {"paused", "error", "done"}:
+        job.status = "running"
+        job.error = ""
+        job.finished_at = None
+        db.commit()
+    return RedirectResponse("/crawler", status_code=303)
+
+
+@app.post("/crawler/jobs/{job_id}/delete")
+def crawler_job_delete(
+    job_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    __: bool = Depends(require_admin_role),
+) -> RedirectResponse:
+    job = db.get(CrawlJob, job_id)
+    if job is not None:
+        # Stop the worker first (it re-checks status between queries), keep the
+        # harvested prospects but detach them from the job row.
+        job.status = "paused"
+        db.commit()
+        db.execute(
+            Prospect.__table__.update().where(Prospect.crawl_job_id == job_id).values(crawl_job_id=None)
+        )
+        job_name = job.name
+        db.delete(job)
+        db.commit()
+        log_audit(db, actor=auth_module.actor_label(request, db), action="crawler.job_delete",
+                  target_type="crawl_job", target_id=str(job_id), detail=job_name)
+    return RedirectResponse(f"/crawler?flash={quote_plus('Job deleted (harvested businesses kept)')}", status_code=303)
+
+
+@app.get("/api/crawler/status")
+def crawler_status_api(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+) -> JSONResponse:
+    return JSONResponse(crawler_module.get_crawler_status(db))
+
+
+@app.get("/crawler/jobs/{job_id}/export.csv")
+def crawler_job_export(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    has_email: str = "",
+) -> StreamingResponse:
+    job = db.get(CrawlJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown crawl job")
+    q = select(Prospect).where(Prospect.crawl_job_id == job_id).order_by(Prospect.city, Prospect.company_name)
+    if has_email == "1":
+        q = q.where(Prospect.email != "")
+    rows = db.scalars(q).all()
+
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([
+        "company_name", "sector", "email", "email_confidence", "phone",
+        "website", "city", "country", "address", "google_maps_url", "existing_customer",
+    ])
+    for p in rows:
+        writer.writerow([
+            p.company_name, p.main_sector, p.email, p.email_confidence, p.phone,
+            p.website, p.city, p.country_code, p.address, p.google_maps_url,
+            "yes" if p.match_status == MatchStatus.existing_customer else "no",
+        ])
+    buffer.seek(0)
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in job.name.lower().replace(" ", "-"))
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="crawl-{job_id}-{safe_name}.csv"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # KVK routes
 # ---------------------------------------------------------------------------
 
@@ -2757,12 +2968,13 @@ def _resolve_audience_ids(
     tier: str = "",
     sector: str = "",
     country: str = "",
+    crawl_job_id: int = 0,
     limit: int = 500,
 ) -> dict[str, list[int]]:
-    """Return {kvk_ids|lead_ids|customer_ids: [...]} for a campaign audience.
+    """Return {kvk_ids|lead_ids|customer_ids|prospect_ids: [...]} for a campaign.
 
-    Only includes records with an email. KVK excludes existing clients.
-    Explicit ids_csv (from a quick-send button) takes precedence over filters.
+    Only includes records with an email. KVK and crawled prospects exclude
+    existing clients. Explicit ids_csv takes precedence over filters.
     """
     explicit = [int(i) for i in ids_csv.split(",") if i.strip().isdigit()] if ids_csv else []
     limit = max(1, min(5000, limit))
@@ -2802,6 +3014,24 @@ def _resolve_audience_ids(
             q = q.where(func.upper(Customer.country_code) == country.upper())
         ids = [r for (r,) in db.execute(q.limit(limit)).all()]
         return {"customer_ids": ids}
+
+    if audience_type == "prospect":
+        # Crawled directory prospects. Excludes rows already matched to an
+        # existing customer; suppression is re-checked in build_recipients.
+        q = select(Prospect.id).where(
+            Prospect.email != "",
+            Prospect.match_status != MatchStatus.existing_customer,
+        )
+        if explicit:
+            q = q.where(Prospect.id.in_(explicit))
+        if crawl_job_id:
+            q = q.where(Prospect.crawl_job_id == crawl_job_id)
+        if sector:
+            q = q.where(Prospect.main_sector == sector)
+        if country:
+            q = q.where(func.upper(Prospect.country_code) == country.upper())
+        ids = [r for (r,) in db.execute(q.limit(limit)).all()]
+        return {"prospect_ids": ids}
 
     return {}
 
@@ -3012,6 +3242,7 @@ def campaign_new_form(
     audience: str = "kvk",
     ids: str = "",
     template_id: int = 0,
+    crawl_job_id: int = 0,
 ) -> HTMLResponse:
     template_rows = db.scalars(
         select(EmailTemplate)
@@ -3025,6 +3256,7 @@ def campaign_new_form(
         .group_by(FacebookLead.main_sector)
         .order_by(FacebookLead.main_sector)
     ).all()]
+    crawl_jobs = db.scalars(select(CrawlJob).order_by(CrawlJob.id.desc())).all()
     return templates.TemplateResponse(
         request,
         "email_campaign_new.html",
@@ -3038,6 +3270,8 @@ def campaign_new_form(
             "preset_template_id": template_id,
             "tiers": KVK_TIER_FILTERS,
             "sectors": sectors,
+            "crawl_jobs": crawl_jobs,
+            "preset_crawl_job_id": crawl_job_id,
             "default_sender_alias": settings.gmail_send_as,
             "default_sender_name": settings.gmail_sender_name,
             "default_reply_to": settings.reply_to_email,
@@ -3060,6 +3294,7 @@ def campaign_create(
     tier: str = Form(""),
     sector: str = Form(""),
     country: str = Form(""),
+    crawl_job_id: int = Form(0),
     limit: int = Form(500),
 ) -> RedirectResponse:
     tpl = db.get(EmailTemplate, template_id)
@@ -3088,7 +3323,8 @@ def campaign_create(
     db.commit()
 
     audience = _resolve_audience_ids(
-        db, audience_type, ids_csv=ids_csv, tier=tier, sector=sector, country=country, limit=limit
+        db, audience_type, ids_csv=ids_csv, tier=tier, sector=sector, country=country,
+        crawl_job_id=crawl_job_id, limit=limit,
     )
     stats = build_recipients(db, campaign, **audience)
     msg = (

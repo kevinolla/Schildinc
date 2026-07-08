@@ -48,6 +48,7 @@
         <label style="font-size:13px;color:#6b7280;">Source</label>
         <select name="audience_type" id="audience_type" style="width:100%;" onchange="toggleAud()">
           <option value="kvk" {% if audience=='kvk' %}selected{% endif %}>KVK companies (prospect pool)</option>
+          <option value="prospect" {% if audience=='prospect' %}selected{% endif %}>Crawled businesses (directory crawler)</option>
           <option value="lead" {% if audience=='lead' %}selected{% endif %}>Facebook / web leads</option>
           <option value="customer" {% if audience=='customer' %}selected{% endif %}>Existing customers</option>
         </select>
@@ -91,6 +92,34 @@
       </div>
     </div>
 
+    <div id="aud_prospect" class="aud-block" style="margin-top:10px;display:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        <div>
+          <label style="font-size:13px;color:#6b7280;">Crawl job (optional)</label>
+          <select name="crawl_job_id" style="width:100%;">
+            <option value="0">Any job</option>
+            {% for j in crawl_jobs %}
+            <option value="{{ j.id }}" {% if preset_crawl_job_id == j.id %}selected{% endif %}>{{ j.name }} ({{ j.email_count }} emails)</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:13px;color:#6b7280;">Sector (optional)</label>
+          <select name="sector" style="width:100%;">
+            <option value="">Any sector</option>
+            {% for s in ["Bike","Candles","Woodwork","Furniture","SteelWork","Music","Fashion","Liquor & Bottles","Service","Art"] %}
+            <option value="{{ s }}">{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:13px;color:#6b7280;">Country code (optional)</label>
+          <input name="country" placeholder="NL / DE / FR" style="width:100%;">
+        </div>
+      </div>
+      <p style="color:#6b7280;font-size:12px;margin:6px 0 0 0;">Only crawled businesses with an email and not matched to an existing customer are included.</p>
+    </div>
+
     <h3>3. Sender</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
       <div>
@@ -117,8 +146,19 @@
 <script>
 function toggleAud() {
   var v = document.getElementById('audience_type').value;
-  document.getElementById('aud_kvk').style.display  = (v === 'kvk')  ? 'block' : 'none';
-  document.getElementById('aud_lead').style.display = (v === 'lead' || v === 'customer') ? 'block' : 'none';
+  var vis = {
+    aud_kvk: v === 'kvk',
+    aud_lead: v === 'lead' || v === 'customer',
+    aud_prospect: v === 'prospect',
+  };
+  for (var id in vis) {
+    var block = document.getElementById(id);
+    if (!block) continue;
+    block.style.display = vis[id] ? 'block' : 'none';
+    // Disable hidden inputs so duplicate field names (country/sector) never
+    // submit from an inactive block.
+    block.querySelectorAll('input,select').forEach(function (el) { el.disabled = !vis[id]; });
+  }
 }
 toggleAud();
 </script>
