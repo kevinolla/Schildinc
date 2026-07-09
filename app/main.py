@@ -3377,6 +3377,8 @@ def email_template_save(
     subject: str = Form(""),
     body_html: str = Form(""),
     body_text: str = Form(""),
+    builder_json: str = Form(""),
+    return_to: str = Form(""),
 ) -> RedirectResponse:
     tpl = db.get(EmailTemplate, template_id) if template_id else None
     if tpl is None:
@@ -3388,8 +3390,38 @@ def email_template_save(
     tpl.subject = subject
     tpl.body_html = body_html
     tpl.body_text = body_text
+    # Only overwrite the visual block model when the visual editor submitted one;
+    # the code editor leaves it blank and must not wipe an existing design.
+    if builder_json.strip():
+        tpl.builder_json = builder_json
     db.commit()
-    return RedirectResponse(f"/emails/templates?flash={quote_plus('Template saved')}", status_code=303)
+    dest = "/emails/templates/builder?edit=%d" % tpl.id if return_to == "builder" else "/emails/templates"
+    joiner = "&" if "?" in dest else "?"
+    return RedirectResponse(f"{dest}{joiner}flash={quote_plus('Template saved')}", status_code=303)
+
+
+@app.get("/emails/templates/builder", response_class=HTMLResponse)
+def email_template_builder(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    edit: int = 0,
+    flash: str = "",
+) -> HTMLResponse:
+    """Visual drag-and-drop template editor (new or editing an existing one)."""
+    editing = db.get(EmailTemplate, edit) if edit else None
+    return templates.TemplateResponse(
+        request,
+        "template_builder.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "editing": editing,
+            "categories": EMAIL_CATEGORIES,
+            "flash": flash,
+            "app_base_url": settings.app_base_url,
+        },
+    )
 
 
 @app.post("/emails/templates/{tpl_id}/delete")

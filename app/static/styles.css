@@ -244,6 +244,50 @@ body {
   .flat-nav { flex-direction: row !important; flex-wrap: wrap; }
 }
 
+/* ── Visual template builder ───────────────────────────────────────────────── */
+.tb-topbar { display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px; }
+.tb-shell { display:grid;grid-template-columns:200px 1fr 300px;gap:14px;align-items:start; }
+.tb-pane { background:var(--surface,#fff);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:12px; }
+.tb-pane-title { font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted,#6b7280);font-weight:600;margin-bottom:10px; }
+.tb-palette-pane { position:sticky;top:12px; }
+#tb-palette { display:flex;flex-direction:column;gap:6px; }
+.tb-pal-item { display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid var(--border,#e5e7eb);border-radius:9px;font-size:13px;font-weight:500;cursor:grab;background:var(--surface,#fff);user-select:none; }
+.tb-pal-item:hover { border-color:#101010;background:#faf9f6; }
+.tb-pal-item:active { cursor:grabbing; }
+.tb-pal-icon { width:22px;height:22px;border-radius:6px;background:#101010;color:#e4c977;display:inline-flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0; }
+.tb-note { margin-top:14px;font-size:11.5px;color:var(--text-muted,#6b7280);line-height:1.6; }
+.tb-canvas-pane { padding:0;background:#eceae4;min-height:60vh; }
+.tb-canvas-frame { padding:22px;display:flex;justify-content:center; }
+#tb-canvas { width:600px;max-width:100%;background:#fff;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.08);padding:12px;min-height:400px; }
+.tb-empty { text-align:center;color:#9ca3af;font-size:13px;padding:80px 20px;border:2px dashed #d1d5db;border-radius:10px; }
+.tb-block { position:relative;border:2px solid transparent;border-radius:8px;margin:2px 0;cursor:pointer; }
+.tb-block:hover { border-color:#cbd5e1; }
+.tb-block.sel { border-color:#101010; }
+.tb-block.over { border-top:3px solid #2f6bf5; }
+.tb-block.dragging { opacity:.4; }
+.tb-block-body { padding:4px 8px;pointer-events:none; }
+.tb-block-tools { position:absolute;top:-11px;right:8px;display:none;gap:2px;background:#101010;border-radius:7px;padding:2px; }
+.tb-block:hover .tb-block-tools, .tb-block.sel .tb-block-tools { display:flex; }
+.tb-block-tools .tb-tag { color:#e4c977;font-size:10px;padding:2px 6px;align-self:center; }
+.tb-block-tools button { background:transparent;border:0;color:#fff;font-size:12px;padding:3px 6px;cursor:pointer;border-radius:5px; }
+.tb-block-tools button:hover { background:rgba(255,255,255,.18); }
+.tb-hint, .tb-insp-title { font-size:13px;color:var(--text-muted,#6b7280); }
+.tb-insp-title { font-weight:600;color:var(--text,#111);margin-bottom:10px; }
+.tb-field { display:block;margin-bottom:12px; }
+.tb-field > span { display:block;font-size:12px;color:var(--text-muted,#6b7280);margin-bottom:4px; }
+.tb-field input[type=text], .tb-field input[type=number], .tb-field textarea, .tb-field select {
+  width:100%;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;font-family:inherit; }
+.tb-field input[type=color] { width:48px;height:34px;padding:2px;border:1px solid #d1d5db;border-radius:8px; }
+.tb-field textarea { resize:vertical;line-height:1.5; }
+.tb-merge { margin-top:6px;border-top:1px solid var(--border,#eee);padding-top:10px; }
+.tb-merge > span { font-size:12px;color:var(--text-muted,#6b7280);display:block;margin-bottom:6px; }
+.tb-chip { display:inline-block;margin:0 4px 4px 0;padding:3px 8px;border:1px solid #d1d5db;border-radius:999px;background:#fff;font-size:11px;cursor:pointer;color:#374151; }
+.tb-chip:hover { border-color:#101010;background:#faf9f6; }
+.tb-modal { display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;padding:24px; }
+.tb-modal-box { background:#fff;border-radius:14px;width:660px;max-width:100%;overflow:hidden; }
+.tb-modal-head { display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #eee; }
+@media (max-width:1000px){ .tb-shell{ grid-template-columns:1fr; } .tb-palette-pane{ position:static; } #tb-palette{ flex-direction:row;flex-wrap:wrap; } }
+
 /* ── Flat nav (simplified, 5 primary items + Settings) ─────────────────────── */
 .flat-nav .nav-item {
   color: var(--text-2);

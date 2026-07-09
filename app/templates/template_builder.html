@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+
+<form method="post" action="/emails/templates/save" id="tb-form">
+  <input type="hidden" name="template_id" value="{{ editing.id if editing else 0 }}">
+  <input type="hidden" name="body_html" id="tb-body-html">
+  <input type="hidden" name="body_text" id="tb-body-text">
+  <input type="hidden" name="builder_json" id="tb-builder-json">
+  <input type="hidden" name="return_to" value="builder">
+
+  <!-- Top bar -->
+  <div class="tb-topbar">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <a href="/emails/templates" class="btn btn-ghost btn-sm">← Templates</a>
+      <input name="name" placeholder="Template name" required value="{{ editing.name if editing else '' }}"
+             style="font-size:15px;font-weight:600;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;min-width:220px;">
+      <select name="category" style="padding:8px;border:1px solid #d1d5db;border-radius:8px;">
+        {% for c in categories %}<option value="{{ c }}" {% if editing and editing.category==c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button type="button" id="tb-preview-btn" class="btn btn-secondary btn-sm">👁 Preview</button>
+      <a href="/emails/templates{% if editing %}?edit={{ editing.id }}{% endif %}" class="btn btn-ghost btn-sm" title="Edit raw HTML instead">&lt;/&gt; Code editor</a>
+      <button type="submit" class="btn btn-primary btn-sm">💾 Save template</button>
+    </div>
+  </div>
+
+  <div style="padding:0 4px 10px;">
+    <input name="subject" placeholder="Subject line — e.g. A premium finishing touch for {{ '{{company_name}}' }}"
+           value="{{ editing.subject if editing else '' }}"
+           style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
+  </div>
+
+  {% if flash %}<div class="flash flash-success">{{ flash }}</div>{% endif %}
+
+  <!-- Three-pane editor -->
+  <div class="tb-shell">
+    <aside class="tb-pane tb-palette-pane">
+      <div class="tb-pane-title">Blocks — drag in</div>
+      <div id="tb-palette"></div>
+      <div class="tb-note">Font: <strong>Montserrat 14</strong> · Text <strong>#0A0A0A</strong><br>Web font with Arial fallback for all email clients.</div>
+    </aside>
+
+    <section class="tb-pane tb-canvas-pane">
+      <div class="tb-canvas-frame">
+        <div id="tb-canvas"></div>
+      </div>
+    </section>
+
+    <aside class="tb-pane tb-inspector-pane">
+      <div class="tb-pane-title">Edit</div>
+      <div id="tb-inspector"></div>
+    </aside>
+  </div>
+</form>
+
+<!-- Preview modal -->
+<div id="tb-preview-modal" class="tb-modal">
+  <div class="tb-modal-box">
+    <div class="tb-modal-head">
+      <strong>Preview (sample recipient)</strong>
+      <button type="button" id="tb-preview-close" class="btn btn-ghost btn-sm">✕ Close</button>
+    </div>
+    <iframe id="tb-preview-frame" style="width:100%;height:72vh;border:0;background:#f5f4ef;"></iframe>
+  </div>
+</div>
+
+<script src="/static/template_builder.js"></script>
+<script>
+  SchildBuilder.init({
+    builder: {% if editing and editing.builder_json %}{{ editing.builder_json | safe }}{% else %}[]{% endif %}
+  });
+</script>
+
+{% endblock %}

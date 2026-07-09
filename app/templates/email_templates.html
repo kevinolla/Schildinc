@@ -6,13 +6,16 @@
 {% endif %}
 
 <section class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
     <h2 style="margin:0;">Email Templates</h2>
-    <a href="/emails" style="text-decoration:none;color:#6b7280;">← Back to Campaigns</a>
+    <div style="display:flex;gap:8px;">
+      <a href="/emails/templates/builder" class="btn btn-primary btn-sm">✨ New visual template</a>
+      <a href="/emails" style="text-decoration:none;color:#6b7280;align-self:center;">← Back to Campaigns</a>
+    </div>
   </div>
   <p style="color:#6b7280;font-size:13px;margin-bottom:0;">
-    Edit any template below, then <strong>Preview</strong> to see the finished email (with sample data) — handy for showing stakeholders.
-    The 3-step cold sequence uses the <em>“Sequence Step 1/2/3 — … (NL bike)”</em> templates here; editing them changes what the sequence sends.
+    Build professional emails with the <strong>drag-and-drop visual editor</strong> (Montserrat 14, brand signature),
+    or edit raw HTML below. <strong>Preview</strong> shows the finished email with sample data.
   </p>
 </section>
 
@@ -71,7 +74,8 @@
         <td>{{ '✓' if t.is_active else '—' }}</td>
         <td style="white-space:nowrap;">
           <a href="/emails/templates/{{ t.id }}/preview" target="_blank">Preview</a>
-          <a href="/emails/templates?edit={{ t.id }}" style="margin-left:8px;">Edit</a>
+          <a href="/emails/templates/builder?edit={{ t.id }}" style="margin-left:8px;font-weight:600;">✨ Visual edit</a>
+          <a href="/emails/templates?edit={{ t.id }}" style="margin-left:8px;">Code</a>
           <a href="/emails/campaigns/new?template_id={{ t.id }}" style="margin-left:8px;">Use →</a>
           <form method="post" action="/emails/templates/{{ t.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete / hide this template?');">
             <button type="submit" style="margin-left:8px;background:none;border:none;color:#ef4444;cursor:pointer;">Delete</button>

@@ -558,6 +558,9 @@ class EmailTemplate(Base):
     body_text: Mapped[str] = mapped_column(Text, default="")
     # Comma-separated merge fields this template expects (for the UI hint).
     merge_fields: Mapped[str] = mapped_column(Text, default="")
+    # Visual drag-and-drop editor block model (JSON). When present, the visual
+    # editor re-hydrates from this; body_html/body_text are the compiled output.
+    builder_json: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     # Marks a built-in starter template (seeded, not user-created).
     is_starter: Mapped[bool] = mapped_column(Boolean, default=False)
