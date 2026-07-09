@@ -169,8 +169,36 @@ from the older `/queue` prospect outreach.
 | 0015 | **CRM Shared Inbox**: `agents`, `conversations`, `messages`, `canned_replies` + `gmail_accounts.last_poll_at` |
 | 0016 | **CRM WhatsApp**: `whatsapp_templates` (send/receive reuses conversations/messages, channel='whatsapp') |
 | 0017 | **CRM roles + audit**: `agents.password_hash`/`last_login_at`, `audit_logs` |
+| 0018-0025 | KVK owner, helpdesk nav, attachments/notifications, open discovery, dry-run+facts, lead_scores, personalizations, sequences |
+| 0026 | **Directory crawler**: `crawl_jobs` + `prospects.crawl_job_id`/`main_sector` + `email_campaign_recipients.prospect_id` |
+| 0027 | **Crawl-job cities**: `crawl_jobs.cities` (optional city-level targeting) |
 
 Alembic runs on container startup (`alembic upgrade head` in start command).
+
+## Directory crawler (added 2026-07-08, page `/crawler`) — `app/crawler.py`
+Always-on daemon that runs `CrawlJob` rows (sector(s) x country, optional cities).
+Up to `CRAWLER_MAX_CONCURRENT_JOBS` (prod=6) run at once; resumable from
+`queries_done`. Sources are **100% free, NO Google Cloud** (Places account was
+suspended): **OpenStreetMap Overpass** primary (sector→OSM tag, often carries a
+public email tag) + **SearXNG** web-search fallback. Harvested businesses dedupe
+vs prospects + KVK pool → `prospects` (source='crawler'). Cap is per-job
+adjustable (ceiling 50k). Prospects are a campaign audience via
+`_resolve_audience_ids(..., audience_type="prospect")` + `build_recipients(prospect_ids=)`.
+
+## Cold campaign upgrade (added 2026-07-09)
+- **Multi-domain sending** — `app/sending_domains.py`: 3 identities
+  (schildinc.com / schildlabels.com / schildinc.nl). Campaign "New" form has a
+  **Send from** brand picker (`sender_key` → resolves From + Reply-To). Reply-To
+  forcing is now a Schild-domain **allowlist** (can't leak outside), not a single
+  hard address. Resend now honors `campaign.reply_to` + sets List-Unsubscribe.
+  `SEND_VERIFIED_DOMAINS` gates which domains may send (only add once green in Resend).
+- **Templates** — `app/email_library.py` seed v3: larger readable type, one CTA
+  button, localized cold intro + follow-up in **EN/NL/DE** + VIP. Old starters auto-hidden.
+- **Personalization** — `{{opener}}` per-recipient first line, city+language aware,
+  empty-safe (`email_engine._personalized_opener`).
+- **Brand redirects** — host middleware in `main.py` 301s schildlabels.com /
+  schildinc.nl (+www) → schildinc.com (`REDIRECT_HOSTS`/`REDIRECT_TARGET`).
+  Setup steps in `DOMAIN_SETUP.md`.
 
 ---
 

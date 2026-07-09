@@ -17,57 +17,26 @@
       </div>
       {% set path = request.url.path if request else '/' %}
       {% set cold = request.url.query and 'cold=1' in request.url.query %}
-      <nav class="topnav">
-        <details class="nav-group" data-key="dashboard" {% if path == '/' or path.startswith('/setup') %}open{% endif %}>
-          <summary class="nav-section">Dashboard</summary>
-          <a href="/"          {% if path == '/' %}class="active" aria-current="page"{% endif %}>Overview</a>
-          <a href="/setup"     {% if path.startswith('/setup') %}class="active" aria-current="page"{% endif %}>⚙️ Setup</a>
-        </details>
+      {% macro navlink(href, label, active) %}
+      <a href="{{ href }}" class="nav-item{% if active %} active{% endif %}"{% if active %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endmacro %}
+      <nav class="topnav flat-nav">
+        {{ navlink('/', '📊  Overview', path == '/') }}
+        {{ navlink('/database', '🗄️  Cold Database', path.startswith('/database') or path.startswith('/crawler') or path.startswith('/kvk') or path.startswith('/prospects') or cold) }}
+        {{ navlink('/emails', '✉️  Campaigns', path.startswith('/emails') or path.startswith('/sequences')) }}
+        {{ navlink('/customers', '👥  Customers', path.startswith('/customers') or (path.startswith('/contacts') and not cold)) }}
+        {{ navlink('/leads', '📥  Leads', path.startswith('/leads')) }}
 
-        <details class="nav-group" data-key="cold" {% if path.startswith('/kvk') or path.startswith('/prospects') or path.startswith('/crawler') or cold %}open{% endif %}>
-          <summary class="nav-section">Cold Emailing</summary>
-          <a href="/crawler"   {% if path.startswith('/crawler') %}class="active" aria-current="page"{% endif %}>📡 Directory Crawler</a>
-          <a href="/kvk"       {% if path.startswith('/kvk') %}class="active" aria-current="page"{% endif %}>KVK Prospects</a>
-          <a href="/prospects" {% if path.startswith('/prospects') %}class="active" aria-current="page"{% endif %}>Maps Prospects</a>
-          <a href="/contacts?cold=1" {% if cold %}class="active" aria-current="page"{% endif %}>❄️ Cold Pool</a>
+        <details class="nav-group settings-group" data-key="settings" {% if path.startswith('/setup') or path.startswith('/suppression') or path.startswith('/audit') or path.startswith('/logs') or path.startswith('/reports') or path.startswith('/review') or path.startswith('/inbox') or path.startswith('/queue') %}open{% endif %}>
+          <summary class="nav-section">⚙️  Settings &amp; more</summary>
+          <a href="/reports"     class="nav-sub{% if path.startswith('/reports') %} active{% endif %}">Reports</a>
+          <a href="/setup"       class="nav-sub{% if path.startswith('/setup') %} active{% endif %}">Setup &amp; domains</a>
+          <a href="/suppression" class="nav-sub{% if path.startswith('/suppression') %} active{% endif %}">Suppression list</a>
+          <a href="/emails/templates" class="nav-sub{% if path.startswith('/emails/templates') %} active{% endif %}">Email templates</a>
+          <a href="/audit" id="nav-audit" class="nav-sub" style="display:none;{% if path.startswith('/audit') %}font-weight:600;{% endif %}">Audit log</a>
+          <a href="/logs"        class="nav-sub{% if path.startswith('/logs') %} active{% endif %}">Activity logs</a>
         </details>
-
-        <details class="nav-group" data-key="contacts" {% if (path.startswith('/contacts') and not cold) or path.startswith('/customers') or path.startswith('/leads') %}open{% endif %}>
-          <summary class="nav-section">Contacts</summary>
-          <a href="/contacts"  {% if path.startswith('/contacts') and not cold %}class="active" aria-current="page"{% endif %}>All Contacts</a>
-          <a href="/customers" {% if path.startswith('/customers') %}class="active" aria-current="page"{% endif %}>Customers</a>
-          <a href="/leads"     {% if path.startswith('/leads') %}class="active" aria-current="page"{% endif %}>Leads</a>
-        </details>
-
-        <details class="nav-group" data-key="review" {% if path.startswith('/review') %}open{% endif %}>
-          <summary class="nav-section">Review Workflow</summary>
-          <a href="/review"            {% if path == '/review' %}class="active" aria-current="page"{% endif %}>Overview</a>
-          <a href="/review/discovery"  {% if path.startswith('/review/discovery') %}class="active" aria-current="page"{% endif %}>Discovery queue</a>
-          <a href="/review/match"      {% if path.startswith('/review/match') %}class="active" aria-current="page"{% endif %}>Match review</a>
-          <a href="/review/tier"       {% if path.startswith('/review/tier') %}class="active" aria-current="page"{% endif %}>Tier review</a>
-          <a href="/review/ready"      {% if path.startswith('/review/ready') %}class="active" aria-current="page"{% endif %}>Outreach-ready</a>
-        </details>
-
-        <details class="nav-group" data-key="campaigns" {% if path.startswith('/emails') or path.startswith('/sequences') %}open{% endif %}>
-          <summary class="nav-section">Campaigns</summary>
-          <a href="/emails"    {% if path == '/emails' or path.startswith('/emails/campaigns') %}class="active" aria-current="page"{% endif %}>Email Campaigns</a>
-          <a href="/emails/templates" {% if path.startswith('/emails/templates') %}class="active" aria-current="page"{% endif %}>Templates</a>
-          <a href="/sequences" {% if path.startswith('/sequences') %}class="active" aria-current="page"{% endif %}>Sequences</a>
-        </details>
-
-        <details class="nav-group" data-key="helpdesk" {% if path.startswith('/inbox') %}open{% endif %}>
-          <summary class="nav-section">Helpdesk</summary>
-          <a href="/inbox"     {% if path.startswith('/inbox') %}class="active" aria-current="page"{% endif %}>Inbox <span id="inbox-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:2px;"></span></a>
-        </details>
-
-        <details class="nav-group" data-key="admin" {% if path.startswith('/reports') or path.startswith('/audit') or path.startswith('/suppression') or path.startswith('/queue') or path.startswith('/logs') %}open{% endif %}>
-          <summary class="nav-section">Insights &amp; Admin</summary>
-          <a href="/reports"     {% if path.startswith('/reports') %}class="active" aria-current="page"{% endif %}>Reports</a>
-          <a href="/audit" id="nav-audit" style="display:none;" {% if path.startswith('/audit') %}class="active" aria-current="page"{% endif %}>Audit</a>
-          <a href="/suppression" {% if path.startswith('/suppression') %}class="active" aria-current="page"{% endif %}>Suppression</a>
-          <a href="/queue"       {% if path.startswith('/queue') %}class="active" aria-current="page"{% endif %}>Queue (legacy)</a>
-          <a href="/logs"        {% if path.startswith('/logs') %}class="active" aria-current="page"{% endif %}>Logs</a>
-        </details>
+        <span id="inbox-badge" style="display:none;"></span>
       </nav>
       <div class="topnav" style="margin-top:8px;font-size:12px;color:#6b7280;">
         <span id="who">Owner</span>
@@ -111,17 +80,6 @@
         setInterval(function(){ fetch('/api/me').then(r=>r.json()).then(applyCounts).catch(function(){}); }, 20000);
       }
 
-      // Remember which nav dropdowns are open/closed across pages.
-      (function () {
-        document.querySelectorAll('details.nav-group').forEach(function (d) {
-          var key = 'nav:' + (d.getAttribute('data-key') || '');
-          var saved = localStorage.getItem(key);
-          if (saved !== null) d.open = (saved === '1');
-          d.addEventListener('toggle', function () {
-            localStorage.setItem(key, d.open ? '1' : '0');
-          });
-        });
-      })();
     </script>
   </body>
 </html>

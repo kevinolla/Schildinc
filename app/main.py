@@ -381,6 +381,8 @@ def build_prospect_query(
     tier_filter: str = "",
     discovery_filter: str = "all",
     source_filter: str = "",
+    sector: str = "",
+    country: str = "",
     include_relationships: bool = True,
 ):
     query = select(Prospect)
@@ -400,6 +402,10 @@ def build_prospect_query(
                 Prospect.kvk_number.ilike(like_term),
             )
         )
+    if sector:
+        query = query.where(Prospect.main_sector == sector)
+    if country:
+        query = query.where(func.upper(Prospect.country_code) == country.upper())
     if match_filter:
         query = query.where(Prospect.match_status == MatchStatus(match_filter))
     if review_filter:
@@ -442,6 +448,8 @@ def exportable_prospects(
     tier_filter: str = "",
     discovery_filter: str = "all",
     source_filter: str = "",
+    sector: str = "",
+    country: str = "",
     selected_ids: list[int] | None = None,
     require_email: bool = True,
     exclude_existing_customers: bool = False,
@@ -451,6 +459,8 @@ def exportable_prospects(
     else:
         query = build_prospect_query(
             search=search,
+            sector=sector,
+            country=country,
             match_filter=match_filter,
             review_filter=review_filter,
             tier_filter=tier_filter,
@@ -471,7 +481,9 @@ def export_prospects_csv_text(prospects: list[Prospect]) -> str:
     writer.writerow(
         [
             "company_name",
+            "sector",
             "email",
+            "email_confidence",
             "website",
             "website_domain",
             "phone",
@@ -480,19 +492,19 @@ def export_prospects_csv_text(prospects: list[Prospect]) -> str:
             "linkedin_url",
             "city",
             "country_code",
-            "bike_shop_tier",
-            "outreach_priority",
+            "source",
             "match_status",
             "review_status",
             "kvk_number",
-            "kvk_establishment_number",
         ]
     )
     for prospect in prospects:
         writer.writerow(
             [
                 prospect.company_name,
+                prospect.main_sector,
                 prospect.email,
+                prospect.email_confidence,
                 prospect.website,
                 prospect.website_domain,
                 prospect.phone,
@@ -501,12 +513,10 @@ def export_prospects_csv_text(prospects: list[Prospect]) -> str:
                 prospect.linkedin_url,
                 prospect.city,
                 prospect.country_code,
-                prospect.bike_shop_tier,
-                prospect.outreach_priority,
+                prospect.source,
                 prospect.match_status.value,
                 prospect.review_status.value,
                 prospect.kvk_number,
-                prospect.kvk_establishment_number,
             ]
         )
     return output.getvalue()
@@ -542,8 +552,18 @@ def _build_kvk_import_message(summary, queued_count: int) -> str:
 
 
 def dashboard_context(db: Session) -> dict:
+    _cold = Prospect.source.in_(["crawler", "google_places", "google_maps_csv"])
     return {
+        # Cold-database funnel (the new primary flow)
+        "cold_total": db.scalar(select(func.count(Prospect.id)).where(_cold)) or 0,
+        "cold_with_email": db.scalar(select(func.count(Prospect.id)).where(_cold, Prospect.email != "")) or 0,
+        "cold_sectors": db.scalar(select(func.count(func.distinct(Prospect.main_sector))).where(_cold, Prospect.main_sector != "")) or 0,
+        "crawler_running": db.scalar(select(func.count(CrawlJob.id)).where(CrawlJob.status == "running")) or 0,
+        "campaigns_sending": db.scalar(select(func.count(EmailCampaign.id)).where(EmailCampaign.status == "sending")) or 0,
+        "emails_sent_today": sent_today(db),
+        "gmail_daily_limit": settings.gmail_daily_limit,
         "customer_count": db.scalar(select(func.count(Customer.id))) or 0,
+        "lead_count": db.scalar(select(func.count(FacebookLead.id))) or 0,
         "prospect_count": db.scalar(select(func.count(Prospect.id))) or 0,
         "existing_match_count": db.scalar(select(func.count(Prospect.id)).where(Prospect.match_status == MatchStatus.existing_customer)) or 0,
         "new_prospect_count": db.scalar(select(func.count(Prospect.id)).where(Prospect.match_status == MatchStatus.new_prospect)) or 0,
@@ -1374,6 +1394,151 @@ async def import_invoices(
     summary = upsert_invoices_from_dataframe(db, df)
     db.commit()
     return RedirectResponse(f"/customers?invoice_inserted={summary.inserted}&invoice_updated={summary.updated}", status_code=303)
+
+
+@app.get("/database", response_class=HTMLResponse)
+def cold_database_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    sector: str = "",
+    country: str = "",
+    source_filter: str = "crawler",
+    has_email: str = "1",
+    search: str = "",
+    page: int = 1,
+    flash: str = "",
+) -> HTMLResponse:
+    """Unified Cold Database — browse, segment by sector, download, and email.
+
+    Scoped to crawler + Maps prospects (both carry main_sector). KVK is
+    sector-less today (backfill is a tracked follow-up) so it stays on /kvk.
+    """
+    PAGE_SIZE = 50
+    discovery = "has_email" if has_email == "1" else "all"
+    q = build_prospect_query(
+        search=search, sector=sector, country=country,
+        source_filter=source_filter, discovery_filter=discovery,
+        include_relationships=False,
+    )
+    # Default view = the crawlable cold pool (crawler+maps), not KVK.
+    if not source_filter:
+        q = q.where(Prospect.source.in_(["crawler", "google_places", "google_maps_csv"]))
+    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    page = max(1, page)
+    rows = db.scalars(q.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
+
+    # Sector distribution for the chips + download center (crawler+maps pool).
+    dist_rows = db.execute(
+        select(
+            Prospect.main_sector,
+            func.count(Prospect.id),
+            func.count(Prospect.id).filter(Prospect.email != ""),
+            func.count(func.distinct(Prospect.country_code)),
+        )
+        .where(Prospect.source.in_(["crawler", "google_places", "google_maps_csv"]))
+        .group_by(Prospect.main_sector)
+        .order_by(func.count(Prospect.id).desc())
+    ).all()
+    sectors = [
+        {
+            "name": r[0] or "(unclassified)",
+            "key": r[0] or "",
+            "total": r[1],
+            "with_email": r[2],
+            "countries": r[3],
+        }
+        for r in dist_rows
+    ]
+    grand_total = sum(s["total"] for s in sectors)
+    grand_email = sum(s["with_email"] for s in sectors)
+
+    templates_list = db.scalars(
+        select(EmailTemplate).where(EmailTemplate.is_active.is_(True))
+        .order_by(EmailTemplate.category, EmailTemplate.name)
+    ).all()
+
+    return templates.TemplateResponse(
+        request,
+        "database.html",
+        {
+            "request": request,
+            "app_name": settings.app_name,
+            "rows": rows,
+            "total": total,
+            "page": page,
+            "page_size": PAGE_SIZE,
+            "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE),
+            "sectors": sectors,
+            "grand_total": grand_total,
+            "grand_email": grand_email,
+            "sel_sector": sector,
+            "sel_country": country,
+            "sel_source": source_filter,
+            "sel_has_email": has_email,
+            "search": search,
+            "templates_list": templates_list,
+            "sending_identities": sending_domains.all_identities(),
+            "flash": flash,
+        },
+    )
+
+
+def _cold_database_csv(
+    db: Session, *, sector: str, country: str, source_filter: str, has_email: str
+) -> PlainTextResponse:
+    """Shared cold-database CSV export, sliced by sector/country/source.
+
+    Defaults to crawler-sourced businesses with an email — the cold-outreach
+    list. Filename reflects the active slice so re-downloads are self-describing.
+    """
+    # An empty source means the whole cold pool (crawler + maps), not KVK.
+    if source_filter:
+        prospects = exportable_prospects(
+            db, sector=sector, country=country, source_filter=source_filter,
+            require_email=(has_email == "1"), exclude_existing_customers=False,
+        )
+    else:
+        q = build_prospect_query(
+            sector=sector, country=country, discovery_filter=("has_email" if has_email == "1" else "all"),
+            include_relationships=False,
+        ).where(Prospect.source.in_(["crawler", "google_places", "google_maps_csv"]))
+        prospects = db.scalars(q).all()
+    csv_text = export_prospects_csv_text(prospects)
+    parts = ["schild"]
+    parts.append("".join(c for c in sector.lower() if c.isalnum()) if sector else "all-sectors")
+    if country:
+        parts.append(country.lower())
+    parts.append(date.today().isoformat())
+    fname = "-".join(parts) + ".csv"
+    return PlainTextResponse(
+        csv_text, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.get("/database/export.csv")
+def database_export_csv(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    sector: str = "",
+    country: str = "",
+    source_filter: str = "",
+    has_email: str = "1",
+) -> PlainTextResponse:
+    return _cold_database_csv(db, sector=sector, country=country, source_filter=source_filter, has_email=has_email)
+
+
+@app.get("/prospects/export.csv")
+def prospects_export_csv(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    sector: str = "",
+    country: str = "",
+    source_filter: str = "crawler",
+    has_email: str = "1",
+) -> PlainTextResponse:
+    return _cold_database_csv(db, sector=sector, country=country, source_filter=source_filter, has_email=has_email)
 
 
 @app.get("/prospects", response_class=HTMLResponse)
@@ -3292,6 +3457,8 @@ def campaign_new_form(
     ids: str = "",
     template_id: int = 0,
     crawl_job_id: int = 0,
+    sector: str = "",
+    country: str = "",
 ) -> HTMLResponse:
     template_rows = db.scalars(
         select(EmailTemplate)
@@ -3321,6 +3488,8 @@ def campaign_new_form(
             "sectors": sectors,
             "crawl_jobs": crawl_jobs,
             "preset_crawl_job_id": crawl_job_id,
+            "preset_sector": sector,
+            "preset_country": country,
             "sending_identities": sending_domains.all_identities(),
             "default_sender_alias": settings.gmail_send_as,
             "default_sender_name": settings.gmail_sender_name,

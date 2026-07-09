@@ -241,7 +241,47 @@ body {
   .topnav { flex-direction: row; flex-wrap: wrap; padding: 8px 12px; }
   .topnav a { padding: 6px 10px; font-size: 13px; }
   .page-shell { grid-column: 1; grid-row: 2; padding: 16px; }
+  .flat-nav { flex-direction: row !important; flex-wrap: wrap; }
 }
+
+/* ── Flat nav (simplified, 5 primary items + Settings) ─────────────────────── */
+.flat-nav .nav-item {
+  color: var(--text-2);
+  font-weight: 500;
+  font-size: 14px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  display: block;
+  border-left: 3px solid transparent;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+/* Emoji icons live in the label text now — kill the old SVG-mask pseudo icon. */
+.flat-nav .nav-item::before,
+.flat-nav .nav-sub::before,
+.settings-group > summary::before { content: none !important; display: none !important; }
+.flat-nav .nav-item:hover { background: var(--sidebar-hover); color: var(--text); }
+.flat-nav .nav-item.active {
+  background: var(--sidebar-active);
+  color: var(--brand);
+  font-weight: 600;
+  border-left-color: var(--brand);
+}
+.settings-group { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.settings-group > summary.nav-section {
+  cursor: pointer; list-style: none; text-transform: none;
+  font-size: 12.5px; letter-spacing: 0; color: var(--text-muted);
+  padding: 8px 12px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between;
+}
+.settings-group > summary::-webkit-details-marker { display: none; }
+.settings-group > summary::after { content: "›"; color: var(--text-muted); transition: transform .15s ease; }
+.settings-group[open] > summary::after { transform: rotate(90deg); }
+.settings-group > summary:hover { background: var(--sidebar-hover); }
+.flat-nav .nav-sub {
+  display: block; color: var(--text-2); font-size: 13px; font-weight: 500;
+  padding: 7px 12px 7px 22px; border-radius: 8px; text-decoration: none;
+}
+.flat-nav .nav-sub:hover { background: var(--sidebar-hover); color: var(--text); }
+.flat-nav .nav-sub.active { color: var(--brand); font-weight: 600; }
 
 /* ── Page Header ────────────────────────────────────────────────────────── */
 .page-header,

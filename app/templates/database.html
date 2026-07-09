@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h2>Cold Database</h2>
+    <p class="page-subtitle">
+      {{ "{:,}".format(grand_total) }} businesses · {{ "{:,}".format(grand_email) }} with email · {{ sectors|length }} sectors ·
+      everything the crawler captures is saved here and downloadable by sector
+    </p>
+  </div>
+  <div class="page-actions">
+    <a href="/crawler" class="btn btn-secondary btn-sm">📡 Collect more leads</a>
+    <a href="/database/export.csv?sector={{ sel_sector }}&country={{ sel_country }}&source={{ sel_source }}&has_email={{ sel_has_email }}" class="btn btn-primary btn-sm">⬇ Download current view</a>
+  </div>
+</div>
+
+{% if flash %}<div class="flash flash-success">{{ flash }}</div>{% endif %}
+
+<!-- Sector chips: click = filter, ⬇ = download just that sector -->
+<div class="card" style="margin-bottom:1rem;">
+  <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">Segment by sector — click to filter, ⬇ to download that sector's emails</div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;">
+    <a href="/database" class="sector-chip{% if not sel_sector %} on{% endif %}">All sectors <span class="c">{{ "{:,}".format(grand_total) }}</span></a>
+    {% for s in sectors %}
+    <span class="sector-chip{% if sel_sector == s.key %} on{% endif %}" style="display:inline-flex;align-items:center;gap:0;">
+      <a href="/database?sector={{ s.key }}&country={{ sel_country }}&has_email={{ sel_has_email }}" style="text-decoration:none;color:inherit;">
+        {{ s.name }} <span class="c">{{ "{:,}".format(s.with_email) }}</span>
+      </a>
+      {% if s.key %}<a href="/database/export.csv?sector={{ s.key }}&country={{ sel_country }}&has_email=1" title="Download {{ s.name }} emails" style="margin-left:6px;text-decoration:none;">⬇</a>{% endif %}
+    </span>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="filter-bar">
+  <form method="get" action="/database" class="filter-form" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <input type="text" name="search" placeholder="Company, city, domain…" value="{{ search }}" class="search-input">
+    <select name="country">
+      <option value="">All countries</option>
+      {% for cc in ["NL","DE","FR","BE","GB","US"] %}<option value="{{ cc }}" {% if sel_country==cc %}selected{% endif %}>{{ cc }}</option>{% endfor %}
+    </select>
+    <select name="source_filter">
+      <option value="crawler" {% if sel_source=='crawler' %}selected{% endif %}>Crawler</option>
+      <option value="maps" {% if sel_source=='maps' %}selected{% endif %}>Google Maps</option>
+      <option value="" {% if sel_source=='' %}selected{% endif %}>All sources</option>
+    </select>
+    <select name="has_email">
+      <option value="1" {% if sel_has_email=='1' %}selected{% endif %}>Has email</option>
+      <option value="0" {% if sel_has_email=='0' %}selected{% endif %}>All (incl. no email)</option>
+    </select>
+    <input type="hidden" name="sector" value="{{ sel_sector }}">
+    <button class="btn btn-secondary btn-sm">Apply</button>
+    {% if sel_sector or sel_country or search %}<a href="/database" class="btn btn-ghost btn-sm">Clear</a>{% endif %}
+  </form>
+</div>
+
+<!-- One-click: email this filtered slice -->
+{% if sel_sector %}
+<div class="card" style="margin-bottom:1rem;background:#faf9f6;border:1px solid #e7e1d6;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+    <div>
+      <strong>✉ Email the {{ sel_sector }} sector{% if sel_country %} in {{ sel_country }}{% endif %}</strong>
+      <span style="color:#6b7280;font-size:13px;"> — {{ "{:,}".format(total) }} businesses will be loaded into a campaign (existing customers auto-excluded, sent at your daily cap).</span>
+    </div>
+    <a href="/emails/campaigns/new?audience=prospect&sector={{ sel_sector }}&country={{ sel_country }}" class="btn btn-primary btn-sm">Start cold campaign →</a>
+  </div>
+</div>
+{% endif %}
+
+<!-- Table -->
+<div class="card" style="padding:0;overflow-x:auto;">
+  <table class="data-table" style="width:100%;">
+    <thead>
+      <tr>
+        <th>Company / City</th><th>Sector</th><th>Email</th><th>Phone</th><th>Website</th><th>Source</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in rows %}
+      <tr>
+        <td><strong>{{ p.company_name }}</strong><br><span style="color:#9ca3af;font-size:12px;">{{ p.city }}{% if p.country_code %} · {{ p.country_code }}{% endif %}</span></td>
+        <td>{% if p.main_sector %}<span class="badge">{{ p.main_sector }}</span>{% else %}<span style="color:#c0392b;font-size:12px;">unclassified</span>{% endif %}</td>
+        <td>{% if p.email %}{{ p.email }} {% if p.email_confidence >= 90 %}<span title="high confidence" style="color:#16a34a;">●</span>{% elif p.email_confidence >= 60 %}<span title="medium" style="color:#d97706;">◐</span>{% endif %}{% else %}<span style="color:#9ca3af;">—</span>{% endif %}</td>
+        <td style="color:#6b7280;font-size:13px;">{{ p.phone or '—' }}</td>
+        <td>{% if p.website %}<a href="{{ p.website }}" target="_blank" rel="noopener" title="{{ p.website }}">🌐</a>{% else %}—{% endif %}</td>
+        <td><span style="font-size:12px;color:#6b7280;">{{ 'Crawler' if p.source=='crawler' else ('Maps' if 'google' in p.source else p.source) }}</span></td>
+        <td>{% if p.match_status.value == 'existing_customer' %}<span style="color:#b45309;font-size:12px;">customer</span>{% else %}<span style="color:#6b7280;font-size:12px;">new</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" style="text-align:center;padding:2.5rem;color:#6b7280;">
+        No businesses match. <a href="/crawler">Run a crawl job</a> to fill the database.
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+{% if pages > 1 %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;">
+  <span style="color:#6b7280;">Showing {{ ((page-1)*page_size)+1 }}–{{ [page*page_size, total]|min }} of {{ "{:,}".format(total) }}</span>
+  <span>
+    {% set qs = "sector=" ~ sel_sector ~ "&country=" ~ sel_country ~ "&source_filter=" ~ sel_source ~ "&has_email=" ~ sel_has_email ~ "&search=" ~ search %}
+    {% if page > 1 %}<a class="btn btn-ghost btn-sm" href="/database?{{ qs }}&page={{ page-1 }}">‹ Prev</a>{% endif %}
+    <span style="margin:0 8px;">Page {{ page }} / {{ pages }}</span>
+    {% if page < pages %}<a class="btn btn-ghost btn-sm" href="/database?{{ qs }}&page={{ page+1 }}">Next ›</a>{% endif %}
+  </span>
+</div>
+{% endif %}
+
+<!-- Download center -->
+<div class="card" style="margin-top:1.5rem;">
+  <h3 style="margin-top:0;font-size:15px;">📥 Download center — grab any sector any time</h3>
+  <table class="data-table" style="width:100%;">
+    <thead><tr><th>Sector</th><th>In database</th><th>With email</th><th>Countries</th><th>Download</th></tr></thead>
+    <tbody>
+      {% for s in sectors %}
+      <tr>
+        <td><strong>{{ s.name }}</strong></td>
+        <td>{{ "{:,}".format(s.total) }}</td>
+        <td>{{ "{:,}".format(s.with_email) }}</td>
+        <td style="color:#6b7280;">{{ s.countries }}</td>
+        <td>
+          {% if s.key %}
+          <a class="btn btn-secondary btn-sm" href="/database/export.csv?sector={{ s.key }}&has_email=1">Emails CSV</a>
+          <a class="btn btn-ghost btn-sm" href="/database/export.csv?sector={{ s.key }}&has_email=0">All CSV</a>
+          {% else %}<span style="color:#c0392b;font-size:12px;">⚠ needs classifying</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      <tr style="border-top:2px solid #e5e7eb;font-weight:600;">
+        <td>All sectors</td><td>{{ "{:,}".format(grand_total) }}</td><td>{{ "{:,}".format(grand_email) }}</td><td>—</td>
+        <td><a class="btn btn-primary btn-sm" href="/database/export.csv?has_email=1">Download everything</a></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<style>
+.sector-chip { display:inline-flex;align-items:center;gap:4px;padding:5px 11px;border:1px solid #d1d5db;border-radius:999px;font-size:13px;color:#374151;background:#fff;text-decoration:none;}
+.sector-chip.on { border-color:#101010;background:#101010;color:#e4c977;}
+.sector-chip .c { font-size:11px;color:#9ca3af;font-weight:600;}
+.sector-chip.on .c { color:#c9a84c;}
+.badge { display:inline-block;padding:2px 8px;border-radius:6px;background:#eef2f7;font-size:12px;color:#374151;}
+</style>
+
+{% endblock %}

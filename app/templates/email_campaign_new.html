@@ -108,13 +108,13 @@
           <select name="sector" style="width:100%;">
             <option value="">Any sector</option>
             {% for s in ["Bike","Candles","Woodwork","Furniture","SteelWork","Music","Fashion","Liquor & Bottles","Service","Art"] %}
-            <option value="{{ s }}">{{ s }}</option>
+            <option value="{{ s }}" {% if preset_sector == s %}selected{% endif %}>{{ s }}</option>
             {% endfor %}
           </select>
         </div>
         <div>
           <label style="font-size:13px;color:#6b7280;">Country code (optional)</label>
-          <input name="country" placeholder="NL / DE / FR" style="width:100%;">
+          <input name="country" value="{{ preset_country }}" placeholder="NL / DE / FR" style="width:100%;">
         </div>
       </div>
       <p style="color:#6b7280;font-size:12px;margin:6px 0 0 0;">Only crawled businesses with an email and not matched to an existing customer are included.</p>
