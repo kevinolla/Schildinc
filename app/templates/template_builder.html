@@ -68,6 +68,7 @@
 <script src="/static/template_builder.js"></script>
 <script>
   SchildBuilder.init({
+    assetBase: "{{ app_base_url }}",
     builder: {% if editing and editing.builder_json %}{{ editing.builder_json | safe }}{% else %}[]{% endif %}
   });
 </script>

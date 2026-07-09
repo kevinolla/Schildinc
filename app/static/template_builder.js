@@ -16,6 +16,9 @@
   var MUTED = "#8a7f76";
   var ACCENT = "#101010";
   var GOLD = "#C9A84C";
+  // Absolute base URL for hosted assets (email images must be absolute).
+  var ASSET_BASE = "";
+  function signatureBanner() { return ASSET_BASE + "/static/email/signature-ruben.png"; }
 
   // Merge tags offered in the inserter (kept in sync with email_engine).
   var MERGE_TAGS = [
@@ -139,14 +142,20 @@
       label: "Signature", icon: "✒",
       make: function () {
         return {
+          // Default = the hosted brand banner (Ruben). Clear banner_url to fall
+          // back to the editable HTML signature (clickable contact rows).
+          banner_url: signatureBanner(),
+          website: "schildinc.com",
           name: "Ruben", role: "Owner",
           photo_url: "", logo_url: "",
           phone_eu: "+31 36 2010101", phone_us: "+1 831 661 8635", phone_uk: "+44 20 8129 6161",
-          email: "info@schildinc.com", website: "schildinc.com",
+          email: "info@schildinc.com",
           address: "Noorderduinloo 1, Almere Netherlands"
         };
       },
       fields: [
+        { k: "banner_url", t: "text", label: "Banner image URL (default = brand signature; clear to use editable rows below)" },
+        { k: "website", t: "text", label: "Website (banner links here)" },
         { k: "name", t: "text", label: "Name" },
         { k: "role", t: "text", label: "Role" },
         { k: "photo_url", t: "text", label: "Photo URL (square, https://…)" },
@@ -155,10 +164,19 @@
         { k: "phone_us", t: "text", label: "Phone — USA" },
         { k: "phone_uk", t: "text", label: "Phone — UK" },
         { k: "email", t: "text", label: "Email" },
-        { k: "website", t: "text", label: "Website" },
         { k: "address", t: "text", label: "Address" }
       ],
-      html: function (p) { return row(signatureHtml(p), "10px 0 0"); },
+      html: function (p) {
+        // Banner mode: one hosted image, linked to the site, with a text
+        // fallback (alt) when images are blocked. Most faithful to the design.
+        if ((p.banner_url || "").trim()) {
+          var site = "https://" + (p.website || "schildinc.com").replace(/^https?:\/\//, "");
+          var img = '<img src="' + esc(p.banner_url) + '" alt="' + esc(p.name) + ' — ' + esc(p.role) +
+            ', Schild Inc · ' + esc(p.email) + '" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;">';
+          return row('<a href="' + esc(site) + '" style="text-decoration:none;">' + img + "</a>", "12px 0 0");
+        }
+        return row(signatureHtml(p), "10px 0 0");
+      },
       text: function (p) {
         return "\n--\n" + p.name + " · " + p.role + " · Schild Inc\n" +
           "Europe " + p.phone_eu + " | USA " + p.phone_us + " | UK " + p.phone_uk + "\n" +
@@ -399,6 +417,7 @@
 
   // ---- Boot ------------------------------------------------------------------
   function init(cfg) {
+    ASSET_BASE = (cfg.assetBase || "").replace(/\/$/, "");
     canvas = document.getElementById("tb-canvas");
     inspector = document.getElementById("tb-inspector");
     var palette = document.getElementById("tb-palette");
