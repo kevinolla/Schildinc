@@ -100,12 +100,24 @@ class SendResult:
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
-def _forced_reply_to() -> str:
-    """The Reply-To that EVERY provider must use, ignoring caller input.
+def _forced_reply_to(caller_reply_to: str = "") -> str:
+    """The Reply-To to put on the wire — allowlist-guarded, not hard-forced.
 
-    Resolves to ``settings.reply_to_email`` (default ``sales@schildinc.com``),
-    falling back to the hard constant only if that is somehow empty/blank.
+    Multi-domain sending means a schildlabels.com campaign should reply to a
+    schildlabels.com address, not always sales@schildinc.com. So we HONOR the
+    caller's Reply-To *iff* it is on a Schild-owned sending domain; anything
+    else (blank, or a non-Schild address that a mis-built campaign might leak)
+    falls back to ``settings.reply_to_email`` / the hard default. The anti-leak
+    guarantee is preserved — replies can only ever go to a Schild domain.
     """
+    candidate = (caller_reply_to or "").strip()
+    if candidate:
+        try:
+            from app.sending_domains import is_allowed_reply_to
+            if is_allowed_reply_to(candidate):
+                return candidate
+        except Exception:  # noqa: BLE001 - never let the guard break a send
+            pass
     value = (getattr(settings, "reply_to_email", "") or "").strip()
     return value or _DEFAULT_REPLY_TO
 
@@ -176,6 +188,8 @@ def _send_resend(
     body_text: str,
     from_alias: str,
     from_name: str,
+    reply_to: str = "",
+    list_unsubscribe: str = "",
 ) -> SendResult:
     """Send via the Resend HTTP API. Needs ``settings.resend_api_key``."""
     api_key = (getattr(settings, "resend_api_key", "") or "").strip()
@@ -187,7 +201,7 @@ def _send_resend(
             transient=False,
         )
 
-    reply_to = _forced_reply_to()
+    reply_to = _forced_reply_to(reply_to)
     from_value = _from_header(from_alias, from_name)
     if not from_value:
         return SendResult(
@@ -209,6 +223,14 @@ def _send_resend(
         }
         if body_html:
             payload["html"] = body_html
+        # RFC 8058 one-click unsubscribe header (was previously Gmail-only).
+        # Gives inbox providers a native "Unsubscribe" button -> big
+        # deliverability + trust win for cold outreach.
+        if list_unsubscribe:
+            payload["headers"] = {
+                "List-Unsubscribe": f"<{list_unsubscribe}>",
+                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            }
 
         resp = httpx.post(
             "https://api.resend.com/emails",
@@ -256,6 +278,7 @@ def _send_smtp_generic(
     body_text: str,
     from_alias: str,
     from_name: str,
+    reply_to: str = "",
 ) -> SendResult:
     """Shared SMTP send used by the generic / brevo / gmail_smtp providers.
 
@@ -270,7 +293,7 @@ def _send_smtp_generic(
             transient=False,
         )
 
-    reply_to = _forced_reply_to()
+    reply_to = _forced_reply_to(reply_to)
     from_value = _from_header(from_alias, from_name)
     if not from_value:
         return SendResult(
@@ -340,6 +363,7 @@ def _send_brevo(
     body_text: str,
     from_alias: str,
     from_name: str,
+    reply_to: str = "",
 ) -> SendResult:
     """Send via Brevo's SMTP relay (smtp-relay.brevo.com:587)."""
     user = (getattr(settings, "brevo_smtp_user", "") or "").strip()
@@ -367,6 +391,7 @@ def _send_brevo(
         body_text=body_text,
         from_alias=from_alias,
         from_name=from_name,
+        reply_to=reply_to,
     )
 
 
@@ -378,6 +403,7 @@ def _send_smtp(
     body_text: str,
     from_alias: str,
     from_name: str,
+    reply_to: str = "",
 ) -> SendResult:
     """Send via a generic SMTP server configured by SMTP_* settings."""
     host = (getattr(settings, "smtp_host", "") or "").strip()
@@ -406,6 +432,7 @@ def _send_smtp(
         body_text=body_text,
         from_alias=from_alias,
         from_name=from_name,
+        reply_to=reply_to,
     )
 
 
@@ -417,6 +444,7 @@ def _send_gmail_smtp(
     body_text: str,
     from_alias: str,
     from_name: str,
+    reply_to: str = "",
 ) -> SendResult:
     """Send via smtp.gmail.com using an App Password.
 
@@ -451,6 +479,7 @@ def _send_gmail_smtp(
         body_text=body_text,
         from_alias=from_alias or user,
         from_name=from_name,
+        reply_to=reply_to,
     )
 
 
@@ -612,6 +641,8 @@ def send(
             body_text=text,
             from_alias=from_alias,
             from_name=from_name,
+            reply_to=reply_to,
+            list_unsubscribe=list_unsubscribe,
         )
 
     if provider == "brevo":
@@ -622,6 +653,7 @@ def send(
             body_text=text,
             from_alias=from_alias,
             from_name=from_name,
+            reply_to=reply_to,
         )
 
     if provider == "smtp":
@@ -632,6 +664,7 @@ def send(
             body_text=text,
             from_alias=from_alias,
             from_name=from_name,
+            reply_to=reply_to,
         )
 
     if provider == "gmail_smtp":
@@ -642,6 +675,7 @@ def send(
             body_text=text,
             from_alias=from_alias,
             from_name=from_name,
+            reply_to=reply_to,
         )
 
     if provider == "gmail":

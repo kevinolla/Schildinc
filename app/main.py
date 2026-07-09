@@ -54,6 +54,7 @@ from app import whatsapp as whatsapp_module
 from app import instagram as instagram_module
 from app import enrichment_open as enrichment_open_module
 from app import crawler as crawler_module
+from app import sending_domains
 from app.tiering import score_kvk_company_tier, apply_bike_tier
 from app import auth as auth_module
 from app.auth import require_admin_role
@@ -160,6 +161,30 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+
+# Brand-domain redirect (DOMAIN_SETUP.md, Option 3). If schildlabels.com /
+# schildinc.nl web traffic is pointed at this app, 301 it to schildinc.com.
+# No-op for the Railway host + any Host not in REDIRECT_HOSTS, so it's safe.
+_REDIRECT_HOSTS = {
+    h.strip().lower() for h in (settings.redirect_hosts or "").split(",") if h.strip()
+}
+
+
+@app.middleware("http")
+async def _brand_redirect(request: Request, call_next):
+    if _REDIRECT_HOSTS:
+        host = (request.headers.get("host") or "").split(":")[0].lower()
+        # Match the bare domain and its www. variant.
+        bare = host[4:] if host.startswith("www.") else host
+        if bare in _REDIRECT_HOSTS:
+            target = settings.redirect_target.rstrip("/") + request.url.path
+            if request.url.query:
+                target += "?" + request.url.query
+            return RedirectResponse(target, status_code=301)
+    return await call_next(request)
+
+
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 security = HTTPBasic(auto_error=False)
@@ -3229,18 +3254,20 @@ def email_template_preview(
     tpl = db.get(EmailTemplate, tpl_id)
     if tpl is None:
         raise HTTPException(status_code=404, detail="Template not found")
-    sample = {
-        "company_name": "Voorbeeld Fietsen Amsterdam",
-        "city": "Amsterdam", "country": "NL", "website": "voorbeeldfietsen.nl",
-        # Personalization slots — filled so stakeholders see the layered version.
-        "first_line": "Mooie winkel — en jullie Gazelle-collectie ziet er sterk uit.",
-        "angle_block": "Veel van onze klanten zetten de labels juist op hun A-merk fietsen.",
-        "cta_block": "Zal ik vrijblijvend een gratis ontwerp met jullie logo maken?",
-    }
+    # Match the sample's language/city to the template so the {{opener}} preview
+    # renders in the same language as the body (Deutsch→DE, Nederlands→NL, …).
+    _n = (tpl.name or "").lower()
+    if "deutsch" in _n:
+        sample = {"company_name": "Beispiel Fahrrad Berlin", "city": "Berlin", "country": "DE", "website": "beispiel-fahrrad.de"}
+    elif "nederlands" in _n:
+        sample = {"company_name": "Voorbeeld Fietsen Amsterdam", "city": "Amsterdam", "country": "NL", "website": "voorbeeldfietsen.nl"}
+    else:
+        sample = {"company_name": "Example Cycles London", "city": "London", "country": "GB", "website": "examplecycles.co.uk"}
     import json as _json
     preview_campaign = EmailCampaign(
         subject=tpl.subject, body_html=tpl.body_html, body_text=tpl.body_text,
         sender_name=settings.gmail_sender_name, reply_to=settings.reply_to_email,
+        sender_alias=settings.gmail_send_as,
     )
     preview_recipient = EmailCampaignRecipient(
         company_name=sample["company_name"], contact_name="",
@@ -3294,6 +3321,7 @@ def campaign_new_form(
             "sectors": sectors,
             "crawl_jobs": crawl_jobs,
             "preset_crawl_job_id": crawl_job_id,
+            "sending_identities": sending_domains.all_identities(),
             "default_sender_alias": settings.gmail_send_as,
             "default_sender_name": settings.gmail_sender_name,
             "default_reply_to": settings.reply_to_email,
@@ -3309,6 +3337,9 @@ def campaign_create(
     template_id: int = Form(...),
     audience_type: str = Form("kvk"),
     lead_temperature: str = Form("cold"),
+    sender_key: str = Form(""),
+    sender_name_override: str = Form(""),
+    # Legacy free-text fields (kept for API back-compat / quick-send buttons).
     sender_alias: str = Form(""),
     sender_name: str = Form(""),
     reply_to: str = Form(""),
@@ -3323,6 +3354,13 @@ def campaign_create(
     if tpl is None:
         return RedirectResponse(f"/emails?flash={quote_plus('Pick a template first')}", status_code=303)
 
+    # Resolve the sending identity: the domain picker (sender_key) wins; fall
+    # back to legacy free-text fields, then the default identity.
+    ident = sending_domains.get(sender_key) or sending_domains.default_identity()
+    resolved_alias = sender_alias.strip() or ident.from_email
+    resolved_name = sender_name_override.strip() or sender_name.strip() or ident.from_name
+    resolved_reply = reply_to.strip() or ident.reply_to
+
     campaign = EmailCampaign(
         name=name.strip() or "Untitled campaign",
         template_id=tpl.id,
@@ -3336,9 +3374,9 @@ def campaign_create(
         # cannot send real mail) until the operator turns it off. Override with
         # CAMPAIGN_DRY_RUN_DEFAULT=false to restore the old behaviour.
         dry_run=settings.campaign_dry_run_default,
-        sender_alias=sender_alias.strip() or settings.gmail_send_as,
-        sender_name=sender_name.strip() or settings.gmail_sender_name,
-        reply_to=reply_to.strip() or settings.reply_to_email,
+        sender_alias=resolved_alias,
+        sender_name=resolved_name,
+        reply_to=resolved_reply,
         created_by=user,
     )
     db.add(campaign)

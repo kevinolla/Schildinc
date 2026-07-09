@@ -105,6 +105,29 @@ def inject_tracking(html_body: str, token: str) -> str:
     return rewritten + pixel
 
 
+def _personalized_opener(values: dict) -> str:
+    """A short, natural, per-recipient first line — no LLM, city-aware.
+
+    Rule-based and empty-safe: with a known city it references it in the
+    recipient's likely language (NL/DE/EN by country); with no city it returns
+    "" so the template's own opening paragraph carries the email. Kept light so
+    it reads like a person, never a mail-merge.
+    """
+    city = (values.get("city") or "").strip()
+    if not city:
+        return ""
+    country = (values.get("country") or "").strip().upper()
+    company = (values.get("company_name") or "your business").strip()
+    # country is ISO-2 (customers) or a full name (leads) — match both.
+    nl = country in {"NL", "NETHERLAND", "NETHERLANDS", "BE", "BELGIUM", "BELGIE", "BELGIË"}
+    de = country in {"DE", "GERMANY", "DEUTSCHLAND", "AT", "AUSTRIA", "ÖSTERREICH", "CH", "SWITZERLAND"}
+    if nl:
+        return f"Ik kwam {company} tegen in {city} en wilde even kort iets laten weten."
+    if de:
+        return f"Ich bin auf {company} in {city} gestoßen und wollte mich kurz melden."
+    return f"I came across {company} in {city} and wanted to reach out briefly."
+
+
 def render_for_recipient(
     campaign: EmailCampaign, recipient: EmailCampaignRecipient
 ) -> tuple[str, str, str]:
@@ -127,6 +150,12 @@ def render_for_recipient(
     # Owner's first name if we know it ("Hi Jan,"); otherwise address the shop
     # as a team ("Hi Het Fietshuys Amstelveen team,"). Never the email local-part.
     values["greeting_name"] = first_name or (f"{company} team" if company else "there")
+
+    # Per-recipient personalized opener ({{opener}}). Only override when the
+    # recipient hasn't already been given a richer one (e.g. from a future
+    # personalization pipeline); empty-safe so templates read fine without it.
+    if not (values.get("opener") or "").strip():
+        values["opener"] = _personalized_opener(values)
 
     # Signature + legal footer (brand-safe, compliant cold outreach).
     values.setdefault("sender_title", settings.sender_title)
@@ -411,6 +440,7 @@ def send_campaign_batch(session: Session, campaign: EmailCampaign, *, limit: int
                 result = email_providers.send(
                     recipient.to_email, subject, html_body, text_body,
                     from_name=sender_name, from_alias=sender_alias,
+                    reply_to=reply_to,
                     list_unsubscribe=unsubscribe_url_for(recipient.tracking_token),
                     session=session,
                 )
