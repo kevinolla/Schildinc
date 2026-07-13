@@ -383,6 +383,12 @@ class KvkCompany(Base):
     approved_for_outreach: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     notes: Mapped[str] = mapped_column(Text, default="")
 
+    # Sector classification (migration 0029) — mirrors facebook_leads/prospects
+    # so KVK can be sliced by sector in the cold database + audience exports.
+    main_sector: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="", index=True)
+    sub_sector: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    classifier_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
