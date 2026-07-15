@@ -137,11 +137,19 @@ async def lifespan(app: FastAPI):
         try:
             seed_starter_templates(seed_session)
             seed_inbox_defaults(seed_session, admin_email=settings.reply_to_email)
-            # Seed the 3 baseline sequence templates + default sequence (harmless
-            # data; the sequence engine stays OFF until its flag is set).
+            # Sequence templates only exist when the sequence engine is enabled —
+            # otherwise they clutter the template picker (we want just the 3 cold
+            # formats). When OFF, retire any previously-seeded sequence starters.
             try:
-                from app.sequence_library import seed_sequence_templates
-                seed_sequence_templates(seed_session)
+                if settings.sequence_engine_enabled:
+                    from app.sequence_library import seed_sequence_templates
+                    seed_sequence_templates(seed_session)
+                else:
+                    seed_session.execute(
+                        EmailTemplate.__table__.update()
+                        .where(EmailTemplate.name.like("Sequence Step %"))
+                        .values(is_active=False)
+                    )
                 seed_session.commit()
             except Exception as exc:  # noqa: BLE001
                 print(f"[lifespan] sequence seed skipped: {exc}")
