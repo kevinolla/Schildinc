@@ -15,9 +15,7 @@ from sqlalchemy import create_engine, text
 from app.lead_classifier import classify_sector
 
 CLASSIFIER_VERSION = 1
-DB_URL = os.environ.get("AUDIENCE_DB_URL") or (
-    "postgresql+psycopg://postgres:LrTsgCYOvlJPvbcWgpqWUGycnyYUjYLq"
-    "@switchyard.proxy.rlwy.net:13263/railway")
+DB_URL = os.environ.get("AUDIENCE_DB_URL", "")
 
 engine = create_engine(DB_URL)
 updated = 0

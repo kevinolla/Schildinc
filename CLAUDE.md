@@ -327,14 +327,24 @@ Starts immediately + at every login. Logs at `~/Library/Logs/schild-kvk-agent.lo
 
 ## Production DB access (read-only debug)
 
+The connection string is a SECRET — do NOT hardcode it. Get it from Railway
+(`railway variables` / the Postgres service `DATABASE_URL`) and pass it via env:
+
 ```python
+import os
 from sqlalchemy import create_engine, text
-e = create_engine('postgresql+psycopg://postgres:LrTsgCYOvlJPvbcWgpqWUGycnyYUjYLq@switchyard.proxy.rlwy.net:13263/railway')
+e = create_engine(os.environ["AUDIENCE_DB_URL"])  # set from Railway; never commit it
 with e.connect() as c:
+    c.execute(text("SET default_transaction_read_only = on"))  # read-only guard
     print(c.execute(text("SELECT main_sector, COUNT(*) FROM facebook_leads GROUP BY 1 ORDER BY 2 DESC")).fetchall())
 ```
 
-**Don't commit this connection string** — rotates if Railway regenerates DB creds.
+The audience/export scripts (`scripts/build_audiences.py`, `clean_trengo.py`,
+`build_cold_dataset.py`, `backfill_kvk_sector.py`) all read `AUDIENCE_DB_URL`
+from the environment.
+
+> ⚠️ The old plaintext connection string was previously committed to this repo's
+> history — **rotate the Postgres password in Railway** and it becomes useless.
 
 ---
 
