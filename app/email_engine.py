@@ -105,6 +105,50 @@ def inject_tracking(html_body: str, token: str) -> str:
     return rewritten + pixel
 
 
+def _sector_phrases(country: str, sector: str) -> dict[str, str]:
+    """Sector- and language-aware phrases so one template reads naturally for a
+    bike shop, woodworker, furniture maker or steel workshop — no LLM, no buzz.
+
+    Language follows the recipient's country (send the NL template to NL, etc.).
+    {{product_line}} = a natural noun phrase for what they make;
+    {{craft_word}}   = how to address the trade (kept human, not corporate).
+    """
+    country = (country or "").strip().upper()
+    nl = country in {"NL", "NETHERLAND", "NETHERLANDS", "BE", "BELGIUM", "BELGIE", "BELGIË"}
+    de = country in {"DE", "GERMANY", "DEUTSCHLAND", "AT", "AUSTRIA", "CH", "SWITZERLAND"}
+    lang = "nl" if nl else ("de" if de else "en")
+    s = (sector or "").strip().lower()
+    if "bike" in s or "fiets" in s or "fahrrad" in s:
+        key = "bike"
+    elif "wood" in s or "hout" in s or "holz" in s or "carpenter" in s or "joiner" in s:
+        key = "wood"
+    elif "furn" in s or "meubel" in s or "möbel" in s or "moebel" in s or "interior" in s:
+        key = "furniture"
+    elif "steel" in s or "metal" in s or "staal" in s or "stahl" in s or "product_manufacturer" in s:
+        key = "steel"
+    else:
+        key = "default"
+    # product_line is always used as the object of a preposition (on / op / auf,
+    # fits / past / passt) so number and (German) DATIVE case are baked in here.
+    table = {
+        "bike":      {"en": "the bikes leaving your workshop", "nl": "de fietsen die uw werkplaats verlaten", "de": "Ihren Fahrrädern"},
+        "wood":      {"en": "your woodwork", "nl": "uw houtwerk", "de": "Ihren Holzarbeiten"},
+        "furniture": {"en": "your furniture", "nl": "uw meubels", "de": "Ihren Möbeln"},
+        "steel":     {"en": "your steel and metalwork", "nl": "uw staal- en metaalwerk", "de": "Ihren Stahl- und Metallarbeiten"},
+        "default":   {"en": "the products leaving your workshop", "nl": "de producten die uw werkplaats verlaten", "de": "Ihren Produkten"},
+    }
+    # craft_word is used after "with a lot of / met veel / mit vielen" — German
+    # dative plural (-n) forms so "mit vielen Möbelmachern" is correct.
+    craft = {
+        "bike":      {"en": "bike builders", "nl": "fietsenmakers", "de": "Fahrradbauern"},
+        "wood":      {"en": "woodworkers", "nl": "houtbewerkers", "de": "Holzhandwerkern"},
+        "furniture": {"en": "furniture makers", "nl": "meubelmakers", "de": "Möbelmachern"},
+        "steel":     {"en": "metal workshops", "nl": "metaalbedrijven", "de": "Metallbetrieben"},
+        "default":   {"en": "makers", "nl": "makers", "de": "Herstellern"},
+    }
+    return {"product_line": table[key][lang], "craft_word": craft[key][lang]}
+
+
 def _personalized_opener(values: dict) -> str:
     """A short, natural, per-recipient first line — no LLM, city-aware.
 
@@ -157,6 +201,12 @@ def render_for_recipient(
     if not (values.get("opener") or "").strip():
         values["opener"] = _personalized_opener(values)
 
+    # Sector-adaptive phrases ({{product_line}}, {{craft_word}}) so one template
+    # fits bike / woodwork / furniture / steel naturally. Empty-safe defaults.
+    _sp = _sector_phrases(values.get("country", ""), values.get("sector", ""))
+    values.setdefault("product_line", _sp["product_line"])
+    values.setdefault("craft_word", _sp["craft_word"])
+
     # Signature + legal footer (brand-safe, compliant cold outreach).
     values.setdefault("sender_title", settings.sender_title)
     values.setdefault("company_legal_name", settings.company_legal_name)
@@ -184,6 +234,7 @@ def _kvk_merge(company: KvkCompany) -> dict[str, str]:
         "city": company.primary_city or "",
         "country": company.country_code or "",
         "website": company.website or "",
+        "sector": company.main_sector or "",
     }
 
 
@@ -194,6 +245,7 @@ def _lead_merge(lead: FacebookLead) -> dict[str, str]:
         "city": "",
         "country": lead.country or "",
         "website": "",
+        "sector": lead.main_sector or "",
     }
 
 
@@ -204,6 +256,7 @@ def _customer_merge(cust: Customer) -> dict[str, str]:
         "city": cust.city or "",
         "country": cust.country_code or "",
         "website": cust.website or "",
+        "sector": cust.main_sector or "",
     }
 
 
@@ -214,6 +267,7 @@ def _prospect_merge(p: Prospect) -> dict[str, str]:
         "city": p.city or "",
         "country": p.country_code or "",
         "website": p.website or "",
+        "sector": p.main_sector or "",
     }
 
 
