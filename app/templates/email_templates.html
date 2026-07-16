@@ -60,31 +60,48 @@
   </form>
 </section>
 
-<!-- List -->
-<section class="card table-card">
-  <h2>All templates</h2>
-  <table>
-    <thead><tr><th>Name</th><th>Category</th><th>Subject</th><th>Active</th><th></th></tr></thead>
-    <tbody>
-      {% for t in templates_list %}
-      <tr>
-        <td>{{ t.name }}{% if t.is_starter %} <span style="font-size:11px;color:#946f16;">starter</span>{% endif %}</td>
-        <td>{{ t.category }}</td>
-        <td style="color:#6b7280;">{{ t.subject }}</td>
-        <td>{{ '✓' if t.is_active else '—' }}</td>
-        <td style="white-space:nowrap;">
-          <a href="/emails/templates/{{ t.id }}/preview" target="_blank">Preview</a>
-          <a href="/emails/templates/builder?edit={{ t.id }}" style="margin-left:8px;font-weight:600;">✨ Visual edit</a>
-          <a href="/emails/templates?edit={{ t.id }}" style="margin-left:8px;">Code</a>
-          <a href="/emails/campaigns/new?template_id={{ t.id }}" style="margin-left:8px;">Use →</a>
-          <form method="post" action="/emails/templates/{{ t.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete / hide this template?');">
-            <button type="submit" style="margin-left:8px;background:none;border:none;color:#ef4444;cursor:pointer;">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<!-- Gallery -->
+<section>
+  <h2 style="margin:8px 4px 12px;font-size:17px;">Your templates</h2>
+  <div class="tg-grid">
+    {% for t in templates_list if t.is_active %}
+    <div class="tg-card">
+      <div class="tg-cat">{{ t.category }}{% if t.is_starter %} · starter{% endif %}</div>
+      <div class="tg-name">{{ t.name }}</div>
+      <div class="tg-subj">{{ t.subject }}</div>
+      <div class="tg-actions">
+        <a href="/emails/templates/{{ t.id }}/preview" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">👁 Preview</a>
+        <a href="/emails/templates/builder?edit={{ t.id }}" class="btn btn-secondary btn-sm">✨ Edit</a>
+        <a href="/emails/campaigns/new?template_id={{ t.id }}" class="btn btn-primary btn-sm">Use →</a>
+      </div>
+      <div class="tg-more">
+        <a href="/emails/templates?edit={{ t.id }}">code</a> ·
+        <form method="post" action="/emails/templates/{{ t.id }}/delete" style="display:inline;" onsubmit="return confirm('Hide this template?');">
+          <button type="submit" class="tg-del">hide</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% set hidden = templates_list | rejectattr('is_active') | list %}
+  {% if hidden %}
+  <details style="margin-top:14px;"><summary style="font-size:12.5px;color:#9ca3af;cursor:pointer;">{{ hidden|length }} hidden / retired templates</summary>
+    <div style="font-size:12.5px;color:#9ca3af;margin-top:6px;">{% for t in hidden %}{{ t.name }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+  </details>
+  {% endif %}
 </section>
+
+<style>
+.tg-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }
+.tg-card { background:var(--surface,#fff); border:1px solid var(--border,#e5e7eb); border-radius:12px; padding:16px; display:flex; flex-direction:column; }
+.tg-card:hover { border-color:#cbd5e1; }
+.tg-cat { font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:#946f16; font-weight:600; }
+.tg-name { font-weight:600; font-size:15px; margin:6px 0 4px; }
+.tg-subj { font-size:12.5px; color:#6b7280; line-height:1.5; flex:1; min-height:3em; }
+.tg-actions { display:flex; gap:6px; margin-top:12px; flex-wrap:wrap; }
+.tg-more { margin-top:8px; font-size:11.5px; color:#9ca3af; }
+.tg-more a { color:#9ca3af; }
+.tg-del { background:none; border:none; color:#c0392b; cursor:pointer; font-size:11.5px; padding:0; }
+</style>
 
 {% endblock %}

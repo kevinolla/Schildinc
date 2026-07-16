@@ -61,16 +61,14 @@ def _identity(key: str, default_domain: str, default_from: str,
     )
 
 
-# Ordered — the first entry is the default selection in the UI. createlabel.com
+# Ordered — the first entry is the default selection in the UI. schildlabel.com
 # is the primary COLD-outreach domain (keeps cold sending off the main brand
 # domains so their reputation stays clean). Replies route to a monitored inbox.
 IDENTITIES: list[SendingIdentity] = [
-    _identity("createlabel_com", "createlabel.com",
-              "ruben@createlabel.com", "Ruben – Schild Inc", "ruben@createlabel.com"),
+    _identity("schildlabel_com", "schildlabel.com",
+              "ruben@schildlabel.com", "Ruben – Schild Inc", "ruben@schildlabel.com"),
     _identity("schildinc_com", "schildinc.com",
               "sales@schildinc.com", "Schild Inc", "sales@schildinc.com"),
-    _identity("schildlabels_com", "schildlabels.com",
-              "sales@schildlabels.com", "Schild Labels", "sales@schildlabels.com"),
     _identity("schildinc_nl", "schildinc.nl",
               "verkoop@schildinc.nl", "Schild Inc", "verkoop@schildinc.nl"),
 ]

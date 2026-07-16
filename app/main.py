@@ -3488,6 +3488,26 @@ def email_template_preview(
 # ── Campaign builder ────────────────────────────────────────────────────────
 
 
+@app.get("/api/emails/audience-count")
+def api_audience_count(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+    audience_type: str = "prospect",
+    sector: str = "",
+    country: str = "",
+    crawl_job_id: int = 0,
+    tier: str = "",
+    limit: int = 5000,
+) -> JSONResponse:
+    """Live recipient count for the campaign builder (email-bearing, non-client)."""
+    audience = _resolve_audience_ids(
+        db, audience_type, sector=sector, country=country,
+        crawl_job_id=crawl_job_id, tier=tier, limit=limit,
+    )
+    ids = next(iter(audience.values()), []) if audience else []
+    return JSONResponse({"count": len(ids), "capped": len(ids) >= limit})
+
+
 @app.get("/emails/campaigns/new", response_class=HTMLResponse)
 def campaign_new_form(
     request: Request,

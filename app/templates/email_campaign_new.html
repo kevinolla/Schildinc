@@ -1,172 +1,197 @@
 {% extends "base.html" %}
 {% block content %}
 
-<section class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2 style="margin:0;">New Campaign</h2>
-    <a href="/emails" style="text-decoration:none;color:#6b7280;">← Back</a>
+<div class="page-header">
+  <div><h2>New cold campaign</h2>
+    <p class="page-subtitle">Pick a template, choose who to email, and send from your cold domain. Nothing goes out until you preview and confirm.</p>
   </div>
-</section>
+  <a href="/emails" class="btn btn-ghost btn-sm">← Campaigns</a>
+</div>
 
-{% if not gmail.connected %}
-<section class="card" style="background:#fef3c7;border:1px solid #e6d7a8;">
-  Gmail is not connected yet. You can build the campaign now, but <a href="/emails/gmail/connect">connect Gmail</a> before sending.
-</section>
-{% endif %}
+<form method="post" action="/emails/campaigns/create" id="camp-form">
+  {% if preset_ids %}<input type="hidden" name="ids_csv" value="{{ preset_ids }}">{% endif %}
+  <input type="hidden" name="lead_temperature" value="cold">
 
-<section class="card">
-  <form method="post" action="/emails/campaigns/create">
-    <h3 style="margin-top:0;">1. Basics</h3>
-    <input name="name" placeholder="Campaign name (e.g. NL Bike Cold — June)" required style="width:100%;">
+  <div class="cb-layout">
+    <div class="cb-main">
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;">
-      <div>
-        <label style="font-size:13px;color:#6b7280;">Template</label>
-        <select name="template_id" required style="width:100%;">
-          <option value="">— pick a template —</option>
+      <!-- 1. Template -->
+      <section class="card cb-step">
+        <div class="cb-step-h"><span class="cb-num">1</span><h3>Choose a template</h3>
+          <span class="cb-hint">Same template adapts to each sector automatically.</span></div>
+        <div class="tpl-grid">
           {% for t in templates_list %}
-          <option value="{{ t.id }}" {% if preset_template_id and preset_template_id==t.id %}selected{% endif %}>{{ t.category }} · {{ t.name }}</option>
+          <label class="tpl-card" data-id="{{ t.id }}">
+            <input type="radio" name="template_id" value="{{ t.id }}" required {% if preset_template_id and preset_template_id==t.id %}checked{% endif %}>
+            <div class="tpl-card-body">
+              <div class="tpl-name">{{ t.name }}</div>
+              <div class="tpl-subj">{{ t.subject }}</div>
+              <span class="tpl-cat">{{ t.category }}</span>
+              <a class="tpl-prev" href="/emails/templates/{{ t.id }}/preview" target="_blank" rel="noopener" onclick="event.stopPropagation()">Preview ↗</a>
+            </div>
+          </label>
           {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label style="font-size:13px;color:#6b7280;">Lead temperature</label>
-        <select name="lead_temperature" style="width:100%;">
-          <option value="cold">Cold</option>
-          <option value="warm">Warm</option>
-        </select>
-      </div>
+        </div>
+        <div style="margin-top:10px;font-size:12.5px;color:#6b7280;">
+          Want to tweak the wording? <a href="/emails/templates">Open the template editor</a> — changes apply to new campaigns.
+        </div>
+      </section>
+
+      <!-- 2. Audience -->
+      <section class="card cb-step">
+        <div class="cb-step-h"><span class="cb-num">2</span><h3>Who to email</h3></div>
+        <div class="cb-fields">
+          <label class="cb-field"><span>Source</span>
+            <select name="audience_type" id="audience_type" onchange="onAudChange()">
+              <option value="prospect" {% if audience=='prospect' %}selected{% endif %}>Crawled businesses (cold database)</option>
+              <option value="kvk" {% if audience=='kvk' %}selected{% endif %}>KVK companies</option>
+              <option value="lead" {% if audience=='lead' %}selected{% endif %}>Inbound leads</option>
+              <option value="customer" {% if audience=='customer' %}selected{% endif %}>Existing customers</option>
+            </select>
+          </label>
+          <label class="cb-field" id="f_sector"><span>Sector</span>
+            <select name="sector" id="sel_sector" onchange="refreshCount()">
+              <option value="">All sectors</option>
+              {% for s in ["Bike","Woodwork","Furniture","SteelWork","Candles","Music","Fashion","Liquor & Bottles","Service","Art"] %}
+              <option value="{{ s }}" {% if preset_sector == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="cb-field" id="f_country"><span>Country</span>
+            <input name="country" id="sel_country" value="{{ preset_country }}" placeholder="NL / DE / FR" oninput="debouncedCount()">
+          </label>
+          <label class="cb-field" id="f_tier" style="display:none;"><span>KVK tier</span>
+            <select name="tier" id="sel_tier" onchange="refreshCount()">
+              <option value="">Any tier</option>{% for t in tiers %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="cb-field" id="f_job" style="display:none;"><span>Crawl job</span>
+            <select name="crawl_job_id" id="sel_job" onchange="refreshCount()">
+              <option value="0">Any job</option>
+              {% for j in crawl_jobs %}<option value="{{ j.id }}" {% if preset_crawl_job_id == j.id %}selected{% endif %}>{{ j.name }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="cb-field"><span>Max recipients</span>
+            <input name="limit" id="sel_limit" type="number" value="500" min="1" max="5000" onchange="refreshCount()">
+          </label>
+        </div>
+        <div class="cb-count" id="cb-count">Counting…</div>
+        <p style="font-size:12px;color:#9ca3af;margin:8px 0 0;">Existing customers and unsubscribes are always excluded automatically.</p>
+      </section>
+
+      <!-- 3. Send from -->
+      <section class="card cb-step">
+        <div class="cb-step-h"><span class="cb-num">3</span><h3>Send from</h3>
+          <span class="cb-hint">Replies come back to the same address.</span></div>
+        <div class="dom-grid">
+          {% for ident in sending_identities %}
+          <label class="dom-card">
+            <input type="radio" name="sender_key" value="{{ ident.key }}" {% if loop.first %}checked{% endif %}>
+            <div><strong>{{ ident.from_name }}</strong>
+              {% if ident.verified is defined and not ident.verified %}<span class="dom-badge">verify in Resend</span>{% else %}<span class="dom-ok">✓ verified</span>{% endif %}
+              <div class="dom-email">{{ ident.from_email }}</div>
+              <div class="dom-reply">↩ {{ ident.reply_to }}</div>
+            </div>
+          </label>
+          {% endfor %}
+        </div>
+        <details style="margin-top:10px;"><summary style="font-size:12.5px;color:#6b7280;cursor:pointer;">Advanced: override the From name</summary>
+          <input name="sender_name_override" placeholder="Leave blank to use the brand default" style="width:100%;margin-top:6px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;"></details>
+      </section>
     </div>
 
-    <h3>2. Audience</h3>
-    {% if preset_ids %}
-    <p style="color:#6b7280;font-size:13px;">Pre-selected {{ preset_ids.split(',')|length }} record(s) from your last page.</p>
-    <input type="hidden" name="ids_csv" value="{{ preset_ids }}">
-    {% endif %}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-      <div>
-        <label style="font-size:13px;color:#6b7280;">Source</label>
-        <select name="audience_type" id="audience_type" style="width:100%;" onchange="toggleAud()">
-          <option value="kvk" {% if audience=='kvk' %}selected{% endif %}>KVK companies (prospect pool)</option>
-          <option value="prospect" {% if audience=='prospect' %}selected{% endif %}>Crawled businesses (directory crawler)</option>
-          <option value="lead" {% if audience=='lead' %}selected{% endif %}>Facebook / web leads</option>
-          <option value="customer" {% if audience=='customer' %}selected{% endif %}>Existing customers</option>
-        </select>
+    <!-- Sticky summary -->
+    <aside class="cb-side">
+      <div class="card cb-summary">
+        <div class="cb-sum-title">Ready to build</div>
+        <input name="name" placeholder="Campaign name" required class="cb-name" value="{% if preset_sector %}{{ preset_sector }} {{ preset_country }} — cold{% endif %}">
+        <ul class="cb-sum-list">
+          <li>To <strong id="sum-count">…</strong> recipients</li>
+          <li id="sum-src">from the cold database</li>
+          <li id="sum-from">from your cold domain</li>
+        </ul>
+        <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;font-size:15px;">Build campaign →</button>
+        <p class="cb-safe">Safe: it's built in dry-run. You'll preview real emails and send a test before anything goes out.</p>
       </div>
-      <div>
-        <label style="font-size:13px;color:#6b7280;">Max recipients</label>
-        <input name="limit" type="number" value="500" min="1" max="5000" style="width:100%;">
-      </div>
-    </div>
-
-    <div id="aud_kvk" class="aud-block" style="margin-top:10px;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div>
-          <label style="font-size:13px;color:#6b7280;">KVK tier (optional)</label>
-          <select name="tier" style="width:100%;">
-            <option value="">Any tier</option>
-            {% for t in tiers %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
-          </select>
-        </div>
-        <div>
-          <label style="font-size:13px;color:#6b7280;">Country code (optional)</label>
-          <input name="country" placeholder="NL / DE / FR" style="width:100%;">
-        </div>
-      </div>
-      <p style="color:#6b7280;font-size:12px;margin:6px 0 0 0;">Only KVK records with an email and not already a client are included.</p>
-    </div>
-
-    <div id="aud_lead" class="aud-block" style="margin-top:10px;display:none;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div>
-          <label style="font-size:13px;color:#6b7280;">Sector (optional)</label>
-          <select name="sector" style="width:100%;">
-            <option value="">Any sector</option>
-            {% for s in sectors %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
-          </select>
-        </div>
-        <div>
-          <label style="font-size:13px;color:#6b7280;">Country (optional)</label>
-          <input name="country" placeholder="NETHERLAND / GERMANY ..." style="width:100%;">
-        </div>
-      </div>
-    </div>
-
-    <div id="aud_prospect" class="aud-block" style="margin-top:10px;display:none;">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
-        <div>
-          <label style="font-size:13px;color:#6b7280;">Crawl job (optional)</label>
-          <select name="crawl_job_id" style="width:100%;">
-            <option value="0">Any job</option>
-            {% for j in crawl_jobs %}
-            <option value="{{ j.id }}" {% if preset_crawl_job_id == j.id %}selected{% endif %}>{{ j.name }} ({{ j.email_count }} emails)</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label style="font-size:13px;color:#6b7280;">Sector (optional)</label>
-          <select name="sector" style="width:100%;">
-            <option value="">Any sector</option>
-            {% for s in ["Bike","Candles","Woodwork","Furniture","SteelWork","Music","Fashion","Liquor & Bottles","Service","Art"] %}
-            <option value="{{ s }}" {% if preset_sector == s %}selected{% endif %}>{{ s }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label style="font-size:13px;color:#6b7280;">Country code (optional)</label>
-          <input name="country" value="{{ preset_country }}" placeholder="NL / DE / FR" style="width:100%;">
-        </div>
-      </div>
-      <p style="color:#6b7280;font-size:12px;margin:6px 0 0 0;">Only crawled businesses with an email and not matched to an existing customer are included.</p>
-    </div>
-
-    <h3>3. Send from</h3>
-    <p style="color:#6b7280;font-size:13px;margin:0 0 8px 0;">Which brand mailbox should this campaign come from? Replies go back to the same address.</p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
-      {% for ident in sending_identities %}
-      <label class="domain-card" data-key="{{ ident.key }}" style="display:block;border:2px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer;">
-        <input type="radio" name="sender_key" value="{{ ident.key }}" {% if loop.first %}checked{% endif %} style="margin-right:8px;">
-        <strong>{{ ident.from_name }}</strong>
-        {% if ident.verified is defined and not ident.verified %}<span style="font-size:11px;color:#b45309;background:#fef3c7;border-radius:6px;padding:1px 6px;margin-left:4px;">verify in Resend</span>{% endif %}
-        <div style="font-size:12.5px;color:#6b7280;margin-top:4px;">{{ ident.from_email }}</div>
-        <div style="font-size:11.5px;color:#9ca3af;margin-top:2px;">↩ replies to {{ ident.reply_to }}</div>
-      </label>
-      {% endfor %}
-    </div>
-    <details style="margin-top:10px;">
-      <summary style="font-size:12.5px;color:#6b7280;cursor:pointer;">Advanced: override From name for this campaign</summary>
-      <input name="sender_name_override" placeholder="From name (leave blank to use the brand default above)" style="width:100%;margin-top:6px;">
-    </details>
-
-    <div style="margin-top:20px;padding-top:16px;border-top:1px solid #eee;">
-      <button type="submit" style="padding:13px 26px;background:#101010;color:#e4c977;border:none;border-radius:8px;font-weight:600;font-size:15px;cursor:pointer;">Build campaign →</button>
-      <span style="color:#6b7280;font-size:13px;margin-left:12px;">Nothing sends yet — you'll preview real emails &amp; send a test first.</span>
-    </div>
-  </form>
-</section>
+    </aside>
+  </div>
+</form>
 
 <style>
-.domain-card:has(input:checked) { border-color:#101010 !important; background:#faf9f6; }
+.cb-layout { display:grid; grid-template-columns:1fr 320px; gap:18px; align-items:start; }
+.cb-step { margin-bottom:16px; }
+.cb-step-h { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+.cb-step-h h3 { margin:0; font-size:16px; }
+.cb-num { width:26px;height:26px;border-radius:50%;background:#101010;color:#e4c977;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0; }
+.cb-hint { font-size:12px;color:#9ca3af; }
+.tpl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }
+.tpl-card { position:relative; display:block; border:2px solid #e5e7eb; border-radius:10px; cursor:pointer; transition:border-color .12s,background .12s; }
+.tpl-card input { position:absolute; opacity:0; }
+.tpl-card:hover { border-color:#cbd5e1; }
+.tpl-card:has(input:checked) { border-color:#101010; background:#faf9f6; }
+.tpl-card-body { padding:12px 14px; }
+.tpl-name { font-weight:600; font-size:14px; }
+.tpl-subj { font-size:12px; color:#6b7280; margin-top:4px; line-height:1.4; height:2.6em; overflow:hidden; }
+.tpl-cat { display:inline-block; font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:#946f16; background:#f6efdc; border-radius:5px; padding:1px 7px; margin-top:8px; }
+.tpl-prev { float:right; font-size:12px; margin-top:8px; text-decoration:none; }
+.cb-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.cb-field { display:block; }
+.cb-field > span { display:block; font-size:12px; color:#6b7280; margin-bottom:4px; }
+.cb-field select, .cb-field input { width:100%; padding:9px 11px; border:1px solid #d1d5db; border-radius:8px; font-size:14px; }
+.cb-count { margin-top:14px; font-size:15px; font-weight:600; color:#101010; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:10px 14px; }
+.cb-count.zero { background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
+.dom-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; }
+.dom-card { display:flex; gap:8px; border:2px solid #e5e7eb; border-radius:10px; padding:12px 14px; cursor:pointer; }
+.dom-card:has(input:checked) { border-color:#101010; background:#faf9f6; }
+.dom-badge { font-size:10.5px;color:#b45309;background:#fef3c7;border-radius:5px;padding:1px 6px; }
+.dom-ok { font-size:10.5px;color:#15803d; }
+.dom-email { font-size:12.5px;color:#6b7280;margin-top:4px; }
+.dom-reply { font-size:11.5px;color:#9ca3af;margin-top:2px; }
+.cb-side { position:sticky; top:16px; }
+.cb-summary { border:1px solid #e7e1d6; }
+.cb-sum-title { font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#9ca3af;font-weight:600; }
+.cb-name { width:100%; margin:10px 0 14px; padding:10px 12px; border:1px solid #d1d5db; border-radius:8px; font-size:15px; font-weight:600; }
+.cb-sum-list { list-style:none; padding:0; margin:0 0 16px; font-size:13.5px; color:#374151; }
+.cb-sum-list li { padding:5px 0; border-bottom:1px solid #f1f1ee; }
+.cb-safe { font-size:11.5px; color:#9ca3af; margin:10px 0 0; line-height:1.5; }
+@media (max-width:900px){ .cb-layout{ grid-template-columns:1fr; } .cb-side{ position:static; } .cb-fields{ grid-template-columns:1fr; } }
 </style>
 
 <script>
-function toggleAud() {
+var SRC_LABEL = { prospect:'the cold database', kvk:'KVK companies', lead:'inbound leads', customer:'existing customers' };
+function onAudChange(){
   var v = document.getElementById('audience_type').value;
-  var vis = {
-    aud_kvk: v === 'kvk',
-    aud_lead: v === 'lead' || v === 'customer',
-    aud_prospect: v === 'prospect',
-  };
-  for (var id in vis) {
-    var block = document.getElementById(id);
-    if (!block) continue;
-    block.style.display = vis[id] ? 'block' : 'none';
-    // Disable hidden inputs so duplicate field names (country/sector) never
-    // submit from an inactive block.
-    block.querySelectorAll('input,select').forEach(function (el) { el.disabled = !vis[id]; });
-  }
+  document.getElementById('f_tier').style.display = (v==='kvk')?'block':'none';
+  document.getElementById('f_job').style.display  = (v==='prospect')?'block':'none';
+  document.getElementById('f_sector').style.display = (v==='kvk')?'none':'block';
+  document.getElementById('sum-src').textContent = 'from ' + SRC_LABEL[v];
+  refreshCount();
 }
-toggleAud();
+var _t;
+function debouncedCount(){ clearTimeout(_t); _t=setTimeout(refreshCount, 400); }
+function refreshCount(){
+  var v=document.getElementById('audience_type').value;
+  var p=new URLSearchParams({audience_type:v,
+    sector:(document.getElementById('sel_sector')||{}).value||'',
+    country:document.getElementById('sel_country').value||'',
+    crawl_job_id:(document.getElementById('sel_job')||{}).value||'0',
+    tier:(document.getElementById('sel_tier')||{}).value||'',
+    limit:document.getElementById('sel_limit').value||'500'});
+  var box=document.getElementById('cb-count'); box.textContent='Counting…'; box.classList.remove('zero');
+  fetch('/api/emails/audience-count?'+p).then(r=>r.json()).then(function(d){
+    document.getElementById('sum-count').textContent=d.count.toLocaleString();
+    if(d.count===0){ box.classList.add('zero'); box.textContent='No matching recipients — adjust the filters above.'; }
+    else box.textContent='≈ '+d.count.toLocaleString()+' businesses will be emailed'+(d.capped?' (capped at your max)':'');
+  }).catch(function(){ box.textContent='Count unavailable'; });
+}
+document.querySelectorAll('input[name="sender_key"]').forEach(function(r){
+  r.addEventListener('change', function(){
+    var card=r.closest('.dom-card'); var em=card.querySelector('.dom-email').textContent;
+    document.getElementById('sum-from').textContent='from '+em;
+  });
+});
+onAudChange();
+var chk=document.querySelector('input[name="sender_key"]:checked');
+if(chk) document.getElementById('sum-from').textContent='from '+chk.closest('.dom-card').querySelector('.dom-email').textContent;
 </script>
 
 {% endblock %}

@@ -52,7 +52,7 @@ class Settings:
     # Brand domains that should 301-redirect to the primary site when their web
     # traffic is pointed at this app (see DOMAIN_SETUP.md, Option 3). Empty-safe:
     # if a request's Host isn't listed, nothing happens.
-    redirect_hosts: str = os.getenv("REDIRECT_HOSTS", "schildlabels.com,schildinc.nl,createlabel.com")
+    redirect_hosts: str = os.getenv("REDIRECT_HOSTS", "schildlabel.com,schildlabels.com,schildinc.nl")
     redirect_target: str = os.getenv("REDIRECT_TARGET", "https://schildinc.com")
     mail_from: str = os.getenv("MAIL_FROM", "noreply@schildinc.com")
     reply_to_email: str = os.getenv("REPLY_TO_EMAIL", "sales@schildinc.com")
